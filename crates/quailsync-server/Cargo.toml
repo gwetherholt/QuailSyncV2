@@ -1,0 +1,15 @@
+[package]
+name = "quailsync-server"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "quailsync-server"
+path = "src/main.rs"
+
+[dependencies]
+quailsync-common.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+axum.workspace = true

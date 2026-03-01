@@ -1,0 +1,14 @@
+[package]
+name = "quailsync-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "quailsync-cli"
+path = "src/main.rs"
+
+[dependencies]
+quailsync-common.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
