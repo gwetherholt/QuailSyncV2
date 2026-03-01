@@ -11,8 +11,9 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
+use colored::Colorize;
 use quailsync_common::{
-    BrooderReading, Species, SystemMetrics, TelemetryPayload,
+    Alert, AlertConfig, BrooderReading, Severity, Species, SystemMetrics, TelemetryPayload,
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -25,6 +26,7 @@ use serde::{Deserialize, Serialize};
 struct AppState {
     db: Arc<Mutex<Connection>>,
     agent_connected: Arc<AtomicBool>,
+    alert_config: AlertConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -58,6 +60,13 @@ fn init_db(conn: &Connection) {
             confidence      REAL    NOT NULL,
             timestamp       TEXT    NOT NULL,
             received_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS alerts (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            severity        TEXT    NOT NULL,
+            message         TEXT    NOT NULL,
+            timestamp       TEXT    NOT NULL DEFAULT (datetime('now'))
         );",
     )
     .expect("failed to create tables");
@@ -109,6 +118,94 @@ fn store_payload(conn: &Connection, payload: &TelemetryPayload) {
     }
 }
 
+fn store_alert(conn: &Connection, severity: &Severity, message: &str) {
+    let sev_str = match severity {
+        Severity::Warning => "warning",
+        Severity::Critical => "critical",
+    };
+    conn.execute(
+        "INSERT INTO alerts (severity, message) VALUES (?1, ?2)",
+        (sev_str, message),
+    )
+    .ok();
+}
+
+// ---------------------------------------------------------------------------
+// Alert engine
+// ---------------------------------------------------------------------------
+
+fn check_brooder_alerts(conn: &Connection, reading: &BrooderReading, config: &AlertConfig) {
+    let temp = reading.temperature_celsius;
+    let hum = reading.humidity_percent;
+
+    // Temperature checks
+    if temp < config.brooder_temp_min {
+        let delta = config.brooder_temp_min - temp;
+        let severity = if delta > 3.0 {
+            Severity::Critical
+        } else {
+            Severity::Warning
+        };
+        let msg = format!(
+            "Temperature LOW: {:.1}°F (min {:.1}°F, {:.1}°F below)",
+            temp, config.brooder_temp_min, delta,
+        );
+        print_alert(&severity, &msg);
+        store_alert(conn, &severity, &msg);
+    } else if temp > config.brooder_temp_max {
+        let delta = temp - config.brooder_temp_max;
+        let severity = if delta > 3.0 {
+            Severity::Critical
+        } else {
+            Severity::Warning
+        };
+        let msg = format!(
+            "Temperature HIGH: {:.1}°F (max {:.1}°F, {:.1}°F above)",
+            temp, config.brooder_temp_max, delta,
+        );
+        print_alert(&severity, &msg);
+        store_alert(conn, &severity, &msg);
+    }
+
+    // Humidity checks
+    if hum < config.humidity_min {
+        let msg = format!(
+            "Humidity LOW: {:.1}% (min {:.1}%)",
+            hum, config.humidity_min,
+        );
+        let severity = Severity::Warning;
+        print_alert(&severity, &msg);
+        store_alert(conn, &severity, &msg);
+    } else if hum > config.humidity_max {
+        let msg = format!(
+            "Humidity HIGH: {:.1}% (max {:.1}%)",
+            hum, config.humidity_max,
+        );
+        let severity = Severity::Warning;
+        print_alert(&severity, &msg);
+        store_alert(conn, &severity, &msg);
+    }
+}
+
+fn print_alert(severity: &Severity, message: &str) {
+    match severity {
+        Severity::Warning => {
+            eprintln!(
+                "{} {}",
+                "[WARN]".yellow().bold(),
+                message.yellow(),
+            );
+        }
+        Severity::Critical => {
+            eprintln!(
+                "{} {}",
+                "[CRIT]".red().bold(),
+                message.red().bold(),
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // WebSocket
 // ---------------------------------------------------------------------------
@@ -128,6 +225,9 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                     print_payload(&payload);
                     let conn = state.db.lock().unwrap();
                     store_payload(&conn, &payload);
+                    if let TelemetryPayload::Brooder(ref reading) = payload {
+                        check_brooder_alerts(&conn, reading, &state.alert_config);
+                    }
                 }
                 Err(e) => eprintln!("[ws] bad payload: {e}"),
             },
@@ -191,9 +291,7 @@ async fn brooder_latest(State(state): State<AppState>) -> impl IntoResponse {
             Ok(BrooderReading {
                 temperature_celsius: row.get(0)?,
                 humidity_percent: row.get(1)?,
-                timestamp: ts
-                    .parse::<DateTime<Utc>>()
-                    .unwrap_or_default(),
+                timestamp: ts.parse::<DateTime<Utc>>().unwrap_or_default(),
             })
         },
     );
@@ -229,9 +327,7 @@ async fn brooder_history(
             Ok(BrooderReading {
                 temperature_celsius: row.get(0)?,
                 humidity_percent: row.get(1)?,
-                timestamp: ts
-                    .parse::<DateTime<Utc>>()
-                    .unwrap_or_default(),
+                timestamp: ts.parse::<DateTime<Utc>>().unwrap_or_default(),
             })
         })
         .unwrap()
@@ -307,6 +403,41 @@ async fn status(State(state): State<AppState>) -> Json<StatusSummary> {
     })
 }
 
+async fn alerts(
+    State(state): State<AppState>,
+    Query(params): Query<HistoryParams>,
+) -> Json<Vec<Alert>> {
+    let minutes = params.minutes.unwrap_or(60);
+    let conn = state.db.lock().unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT severity, message, timestamp FROM alerts
+             WHERE timestamp >= datetime('now', ?1)
+             ORDER BY id DESC",
+        )
+        .unwrap();
+
+    let cutoff = format!("-{minutes} minutes");
+    let alerts: Vec<Alert> = stmt
+        .query_map([&cutoff], |row| {
+            let sev_str: String = row.get(0)?;
+            let severity = match sev_str.as_str() {
+                "critical" => Severity::Critical,
+                _ => Severity::Warning,
+            };
+            Ok(Alert {
+                severity,
+                message: row.get(1)?,
+                timestamp: row.get(2)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Json(alerts)
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -317,9 +448,19 @@ async fn main() {
     init_db(&conn);
     println!("[db] SQLite initialized (quailsync.db)");
 
+    let alert_config = AlertConfig::default();
+    println!(
+        "[alerts] thresholds: temp {:.0}-{:.0}°F, humidity {:.0}-{:.0}%",
+        alert_config.brooder_temp_min,
+        alert_config.brooder_temp_max,
+        alert_config.humidity_min,
+        alert_config.humidity_max,
+    );
+
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         agent_connected: Arc::new(AtomicBool::new(false)),
+        alert_config,
     };
 
     let app = Router::new()
@@ -329,6 +470,7 @@ async fn main() {
         .route("/api/brooder/history", get(brooder_history))
         .route("/api/system/latest", get(system_latest))
         .route("/api/status", get(status))
+        .route("/api/alerts", get(alerts))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")

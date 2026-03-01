@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use quailsync_common::{BrooderReading, SystemMetrics};
+use quailsync_common::{Alert, BrooderReading, Severity, SystemMetrics};
 use serde::Deserialize;
 
 #[derive(Parser)]
@@ -26,6 +26,12 @@ enum Commands {
     },
     /// Show system metrics
     System,
+    /// Show recent alerts
+    Alerts {
+        /// Show alerts from the last N minutes
+        #[arg(long, default_value = "60")]
+        minutes: u64,
+    },
 }
 
 #[derive(Deserialize)]
@@ -198,6 +204,39 @@ async fn cmd_system(base: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn cmd_alerts(base: &str, minutes: u64) -> anyhow::Result<()> {
+    let url = format!("{base}/api/alerts?minutes={minutes}");
+    let resp = reqwest::get(&url).await?;
+    let alerts: Vec<Alert> = resp.json().await?;
+
+    if alerts.is_empty() {
+        println!("{}", format!("No alerts in the last {minutes} minutes.").dimmed());
+        return Ok(());
+    }
+
+    println!(
+        "{}",
+        format!("Alerts — Last {minutes} Minutes ({} total)", alerts.len())
+            .bold()
+            .underline()
+    );
+    println!();
+
+    for alert in &alerts {
+        let sev_tag = match alert.severity {
+            Severity::Critical => "[CRIT]".red().bold(),
+            Severity::Warning => "[WARN]".yellow().bold(),
+        };
+        let msg = match alert.severity {
+            Severity::Critical => alert.message.red().to_string(),
+            Severity::Warning => alert.message.yellow().to_string(),
+        };
+        println!("  {} {} {}", alert.timestamp.dimmed(), sev_tag, msg);
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -210,6 +249,7 @@ async fn main() {
             history: Some(mins),
         } => cmd_brood_history(base, mins).await,
         Commands::System => cmd_system(base).await,
+        Commands::Alerts { minutes } => cmd_alerts(base, minutes).await,
     };
 
     if let Err(e) = result {

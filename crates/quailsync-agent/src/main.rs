@@ -6,11 +6,32 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 fn mock_brooder_reading() -> TelemetryPayload {
     let mut rng = rand::rng();
+
+    // ~10% chance of out-of-range reading
+    let (temp, humidity) = if rng.random_range(0..10) == 0 {
+        // Generate abnormal values — could be high or low
+        let temp = if rng.random_bool(0.5) {
+            rng.random_range(85.0..=92.0) // too cold
+        } else {
+            rng.random_range(103.0..=110.0) // too hot
+        };
+        let humidity = if rng.random_bool(0.5) {
+            rng.random_range(20.0..=35.0) // too dry
+        } else {
+            rng.random_range(65.0..=80.0) // too humid
+        };
+        (temp, humidity)
+    } else {
+        // Normal range: 95-100°F, 40-60%
+        (
+            rng.random_range(95.0..=100.0),
+            rng.random_range(40.0..=60.0),
+        )
+    };
+
     TelemetryPayload::Brooder(BrooderReading {
-        // 95-100°F
-        temperature_celsius: rng.random_range(95.0..=100.0),
-        // 40-60%
-        humidity_percent: rng.random_range(40.0..=60.0),
+        temperature_celsius: temp,
+        humidity_percent: humidity,
         timestamp: Utc::now(),
     })
 }

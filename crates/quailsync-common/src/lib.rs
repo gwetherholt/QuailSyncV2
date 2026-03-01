@@ -43,3 +43,38 @@ pub enum TelemetryPayload {
     Brooder(BrooderReading),
     Detection(DetectionEvent),
 }
+
+/// Configurable thresholds for brooder alerts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlertConfig {
+    pub brooder_temp_min: f64,
+    pub brooder_temp_max: f64,
+    pub humidity_min: f64,
+    pub humidity_max: f64,
+}
+
+impl Default for AlertConfig {
+    fn default() -> Self {
+        Self {
+            brooder_temp_min: 95.0,
+            brooder_temp_max: 100.0,
+            humidity_min: 40.0,
+            humidity_max: 60.0,
+        }
+    }
+}
+
+/// Severity level for an alert.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Severity {
+    Warning,
+    Critical,
+}
+
+/// An alert generated when a reading is out of range.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Alert {
+    pub severity: Severity,
+    pub message: String,
+    pub timestamp: String,
+}
