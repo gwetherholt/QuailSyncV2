@@ -12,3 +12,7 @@ quailsync-common.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 clap.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+colored.workspace = true
+anyhow.workspace = true
