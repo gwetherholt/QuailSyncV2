@@ -22,3 +22,4 @@ chrono = { version = "0.4", features = ["serde"] }
 tokio-tungstenite = "0.26"
 futures-util = "0.3"
 rand = "0.9"
+rusqlite = { version = "0.34", features = ["bundled"] }
