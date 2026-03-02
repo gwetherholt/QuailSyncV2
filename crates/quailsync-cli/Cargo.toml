@@ -15,4 +15,5 @@ clap.workspace = true
 tokio.workspace = true
 reqwest.workspace = true
 colored.workspace = true
+chrono.workspace = true
 anyhow.workspace = true

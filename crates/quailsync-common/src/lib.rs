@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 /// System-level resource metrics collected from an agent node.
@@ -77,4 +77,121 @@ pub struct Alert {
     pub severity: Severity,
     pub message: String,
     pub timestamp: String,
+}
+
+// =========================================================================
+// Flock & Lineage types
+// =========================================================================
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Sex {
+    Male,
+    Female,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BirdStatus {
+    Active,
+    Culled,
+    Deceased,
+    Sold,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClutchStatus {
+    Incubating,
+    Hatched,
+    Failed,
+}
+
+// --- Model structs (server responses, include id) ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bloodline {
+    pub id: i64,
+    pub name: String,
+    pub source: String,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bird {
+    pub id: i64,
+    pub band_color: Option<String>,
+    pub sex: Sex,
+    pub bloodline_id: i64,
+    pub hatch_date: NaiveDate,
+    pub mother_id: Option<i64>,
+    pub father_id: Option<i64>,
+    pub generation: u32,
+    pub status: BirdStatus,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BreedingPair {
+    pub id: i64,
+    pub male_id: i64,
+    pub female_id: i64,
+    pub start_date: NaiveDate,
+    pub end_date: Option<NaiveDate>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Clutch {
+    pub id: i64,
+    pub breeding_pair_id: Option<i64>,
+    pub bloodline_id: Option<i64>,
+    pub eggs_set: u32,
+    pub eggs_fertile: Option<u32>,
+    pub eggs_hatched: Option<u32>,
+    pub set_date: NaiveDate,
+    pub expected_hatch_date: NaiveDate,
+    pub status: ClutchStatus,
+    pub notes: Option<String>,
+}
+
+// --- Create structs (POST bodies, no id) ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateBloodline {
+    pub name: String,
+    pub source: String,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateBird {
+    pub band_color: Option<String>,
+    pub sex: Sex,
+    pub bloodline_id: i64,
+    pub hatch_date: NaiveDate,
+    pub mother_id: Option<i64>,
+    pub father_id: Option<i64>,
+    pub generation: u32,
+    pub status: BirdStatus,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateBreedingPair {
+    pub male_id: i64,
+    pub female_id: i64,
+    pub start_date: NaiveDate,
+    pub end_date: Option<NaiveDate>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateClutch {
+    pub breeding_pair_id: Option<i64>,
+    pub bloodline_id: Option<i64>,
+    pub eggs_set: u32,
+    pub eggs_fertile: Option<u32>,
+    pub eggs_hatched: Option<u32>,
+    pub set_date: NaiveDate,
+    pub status: ClutchStatus,
+    pub notes: Option<String>,
 }

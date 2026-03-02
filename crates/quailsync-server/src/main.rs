@@ -10,12 +10,14 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use colored::Colorize;
 use quailsync_common::{
-    Alert, AlertConfig, BrooderReading, Severity, Species, SystemMetrics, TelemetryPayload,
+    Alert, AlertConfig, Bird, BirdStatus, Bloodline, BreedingPair, BrooderReading, Clutch,
+    ClutchStatus, CreateBird, CreateBloodline, CreateBreedingPair, CreateClutch, Sex, Severity,
+    Species, SystemMetrics, TelemetryPayload,
 };
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -67,6 +69,48 @@ fn init_db(conn: &Connection) {
             severity        TEXT    NOT NULL,
             message         TEXT    NOT NULL,
             timestamp       TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS bloodlines (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            name            TEXT    NOT NULL,
+            source          TEXT    NOT NULL,
+            notes           TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS birds (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            band_color      TEXT,
+            sex             TEXT    NOT NULL,
+            bloodline_id    INTEGER NOT NULL REFERENCES bloodlines(id),
+            hatch_date      TEXT    NOT NULL,
+            mother_id       INTEGER REFERENCES birds(id),
+            father_id       INTEGER REFERENCES birds(id),
+            generation      INTEGER NOT NULL DEFAULT 1,
+            status          TEXT    NOT NULL DEFAULT 'Active',
+            notes           TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS breeding_pairs (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            male_id         INTEGER NOT NULL REFERENCES birds(id),
+            female_id       INTEGER NOT NULL REFERENCES birds(id),
+            start_date      TEXT    NOT NULL,
+            end_date        TEXT,
+            notes           TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS clutches (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            breeding_pair_id    INTEGER REFERENCES breeding_pairs(id),
+            bloodline_id        INTEGER REFERENCES bloodlines(id),
+            eggs_set            INTEGER NOT NULL,
+            eggs_fertile        INTEGER,
+            eggs_hatched        INTEGER,
+            set_date            TEXT    NOT NULL,
+            expected_hatch_date TEXT    NOT NULL,
+            status              TEXT    NOT NULL DEFAULT 'Incubating',
+            notes               TEXT
         );",
     )
     .expect("failed to create tables");
@@ -439,6 +483,379 @@ async fn alerts(
 }
 
 // ---------------------------------------------------------------------------
+// Flock & Lineage endpoints
+// ---------------------------------------------------------------------------
+
+fn sex_to_str(s: &Sex) -> &'static str {
+    match s {
+        Sex::Male => "Male",
+        Sex::Female => "Female",
+        Sex::Unknown => "Unknown",
+    }
+}
+
+fn str_to_sex(s: &str) -> Sex {
+    match s {
+        "Male" => Sex::Male,
+        "Female" => Sex::Female,
+        _ => Sex::Unknown,
+    }
+}
+
+fn bird_status_to_str(s: &BirdStatus) -> &'static str {
+    match s {
+        BirdStatus::Active => "Active",
+        BirdStatus::Culled => "Culled",
+        BirdStatus::Deceased => "Deceased",
+        BirdStatus::Sold => "Sold",
+    }
+}
+
+fn str_to_bird_status(s: &str) -> BirdStatus {
+    match s {
+        "Culled" => BirdStatus::Culled,
+        "Deceased" => BirdStatus::Deceased,
+        "Sold" => BirdStatus::Sold,
+        _ => BirdStatus::Active,
+    }
+}
+
+fn clutch_status_to_str(s: &ClutchStatus) -> &'static str {
+    match s {
+        ClutchStatus::Incubating => "Incubating",
+        ClutchStatus::Hatched => "Hatched",
+        ClutchStatus::Failed => "Failed",
+    }
+}
+
+fn str_to_clutch_status(s: &str) -> ClutchStatus {
+    match s {
+        "Hatched" => ClutchStatus::Hatched,
+        "Failed" => ClutchStatus::Failed,
+        _ => ClutchStatus::Incubating,
+    }
+}
+
+// --- Bloodlines ---
+
+async fn create_bloodline(
+    State(state): State<AppState>,
+    Json(body): Json<CreateBloodline>,
+) -> impl IntoResponse {
+    let conn = state.db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO bloodlines (name, source, notes) VALUES (?1, ?2, ?3)",
+        params![body.name, body.source, body.notes],
+    )
+    .unwrap();
+    let id = conn.last_insert_rowid();
+    (
+        StatusCode::CREATED,
+        Json(Bloodline {
+            id,
+            name: body.name,
+            source: body.source,
+            notes: body.notes,
+        }),
+    )
+}
+
+async fn list_bloodlines(State(state): State<AppState>) -> Json<Vec<Bloodline>> {
+    let conn = state.db.lock().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT id, name, source, notes FROM bloodlines ORDER BY id")
+        .unwrap();
+    let rows: Vec<Bloodline> = stmt
+        .query_map([], |row| {
+            Ok(Bloodline {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                source: row.get(2)?,
+                notes: row.get(3)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+    Json(rows)
+}
+
+// --- Birds ---
+
+async fn create_bird(
+    State(state): State<AppState>,
+    Json(body): Json<CreateBird>,
+) -> impl IntoResponse {
+    let conn = state.db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO birds (band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            body.band_color,
+            sex_to_str(&body.sex),
+            body.bloodline_id,
+            body.hatch_date.to_string(),
+            body.mother_id,
+            body.father_id,
+            body.generation,
+            bird_status_to_str(&body.status),
+            body.notes,
+        ],
+    )
+    .unwrap();
+    let id = conn.last_insert_rowid();
+    (
+        StatusCode::CREATED,
+        Json(Bird {
+            id,
+            band_color: body.band_color,
+            sex: body.sex,
+            bloodline_id: body.bloodline_id,
+            hatch_date: body.hatch_date,
+            mother_id: body.mother_id,
+            father_id: body.father_id,
+            generation: body.generation,
+            status: body.status,
+            notes: body.notes,
+        }),
+    )
+}
+
+async fn list_birds(State(state): State<AppState>) -> Json<Vec<Bird>> {
+    let conn = state.db.lock().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes FROM birds ORDER BY id")
+        .unwrap();
+    let rows: Vec<Bird> = stmt
+        .query_map([], |row| {
+            let sex_str: String = row.get(2)?;
+            let hatch_str: String = row.get(4)?;
+            let status_str: String = row.get(8)?;
+            Ok(Bird {
+                id: row.get(0)?,
+                band_color: row.get(1)?,
+                sex: str_to_sex(&sex_str),
+                bloodline_id: row.get(3)?,
+                hatch_date: NaiveDate::parse_from_str(&hatch_str, "%Y-%m-%d").unwrap_or_default(),
+                mother_id: row.get(5)?,
+                father_id: row.get(6)?,
+                generation: row.get(7)?,
+                status: str_to_bird_status(&status_str),
+                notes: row.get(9)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+    Json(rows)
+}
+
+// --- Breeding Pairs ---
+
+async fn create_breeding_pair(
+    State(state): State<AppState>,
+    Json(body): Json<CreateBreedingPair>,
+) -> impl IntoResponse {
+    let conn = state.db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO breeding_pairs (male_id, female_id, start_date, end_date, notes)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            body.male_id,
+            body.female_id,
+            body.start_date.to_string(),
+            body.end_date.map(|d| d.to_string()),
+            body.notes,
+        ],
+    )
+    .unwrap();
+    let id = conn.last_insert_rowid();
+    (
+        StatusCode::CREATED,
+        Json(BreedingPair {
+            id,
+            male_id: body.male_id,
+            female_id: body.female_id,
+            start_date: body.start_date,
+            end_date: body.end_date,
+            notes: body.notes,
+        }),
+    )
+}
+
+async fn list_breeding_pairs(State(state): State<AppState>) -> Json<Vec<BreedingPair>> {
+    let conn = state.db.lock().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT id, male_id, female_id, start_date, end_date, notes FROM breeding_pairs ORDER BY id")
+        .unwrap();
+    let rows: Vec<BreedingPair> = stmt
+        .query_map([], |row| {
+            let start_str: String = row.get(3)?;
+            let end_str: Option<String> = row.get(4)?;
+            Ok(BreedingPair {
+                id: row.get(0)?,
+                male_id: row.get(1)?,
+                female_id: row.get(2)?,
+                start_date: NaiveDate::parse_from_str(&start_str, "%Y-%m-%d").unwrap_or_default(),
+                end_date: end_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok()),
+                notes: row.get(5)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+    Json(rows)
+}
+
+// --- Clutches ---
+
+async fn create_clutch(
+    State(state): State<AppState>,
+    Json(body): Json<CreateClutch>,
+) -> impl IntoResponse {
+    let expected = body.set_date + chrono::Duration::days(17);
+    let conn = state.db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO clutches (breeding_pair_id, bloodline_id, eggs_set, eggs_fertile, eggs_hatched, set_date, expected_hatch_date, status, notes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            body.breeding_pair_id,
+            body.bloodline_id,
+            body.eggs_set,
+            body.eggs_fertile,
+            body.eggs_hatched,
+            body.set_date.to_string(),
+            expected.to_string(),
+            clutch_status_to_str(&body.status),
+            body.notes,
+        ],
+    )
+    .unwrap();
+    let id = conn.last_insert_rowid();
+    (
+        StatusCode::CREATED,
+        Json(Clutch {
+            id,
+            breeding_pair_id: body.breeding_pair_id,
+            bloodline_id: body.bloodline_id,
+            eggs_set: body.eggs_set,
+            eggs_fertile: body.eggs_fertile,
+            eggs_hatched: body.eggs_hatched,
+            set_date: body.set_date,
+            expected_hatch_date: expected,
+            status: body.status,
+            notes: body.notes,
+        }),
+    )
+}
+
+async fn list_clutches(State(state): State<AppState>) -> Json<Vec<Clutch>> {
+    let conn = state.db.lock().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT id, breeding_pair_id, bloodline_id, eggs_set, eggs_fertile, eggs_hatched, set_date, expected_hatch_date, status, notes FROM clutches ORDER BY id")
+        .unwrap();
+    let rows: Vec<Clutch> = stmt
+        .query_map([], |row| {
+            let set_str: String = row.get(6)?;
+            let exp_str: String = row.get(7)?;
+            let status_str: String = row.get(8)?;
+            Ok(Clutch {
+                id: row.get(0)?,
+                breeding_pair_id: row.get(1)?,
+                bloodline_id: row.get(2)?,
+                eggs_set: row.get(3)?,
+                eggs_fertile: row.get(4)?,
+                eggs_hatched: row.get(5)?,
+                set_date: NaiveDate::parse_from_str(&set_str, "%Y-%m-%d").unwrap_or_default(),
+                expected_hatch_date: NaiveDate::parse_from_str(&exp_str, "%Y-%m-%d").unwrap_or_default(),
+                status: str_to_clutch_status(&status_str),
+                notes: row.get(9)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+    Json(rows)
+}
+
+// --- Flock Summary ---
+
+#[derive(Serialize)]
+struct FlockSummary {
+    total_birds: i64,
+    active_birds: i64,
+    males: i64,
+    females: i64,
+    bloodlines: Vec<BloodlineCount>,
+}
+
+#[derive(Serialize)]
+struct BloodlineCount {
+    name: String,
+    count: i64,
+}
+
+async fn flock_summary(State(state): State<AppState>) -> Json<FlockSummary> {
+    let conn = state.db.lock().unwrap();
+
+    let total_birds: i64 = conn
+        .query_row("SELECT COUNT(*) FROM birds", [], |row| row.get(0))
+        .unwrap_or(0);
+
+    let active_birds: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM birds WHERE status = 'Active'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    let males: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM birds WHERE sex = 'Male' AND status = 'Active'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    let females: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM birds WHERE sex = 'Female' AND status = 'Active'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT b.name, COUNT(*)
+             FROM birds bi JOIN bloodlines b ON bi.bloodline_id = b.id
+             WHERE bi.status = 'Active'
+             GROUP BY b.name ORDER BY COUNT(*) DESC",
+        )
+        .unwrap();
+
+    let bloodlines: Vec<BloodlineCount> = stmt
+        .query_map([], |row| {
+            Ok(BloodlineCount {
+                name: row.get(0)?,
+                count: row.get(1)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Json(FlockSummary {
+        total_birds,
+        active_birds,
+        males,
+        females,
+        bloodlines,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -471,6 +888,11 @@ async fn main() {
         .route("/api/system/latest", get(system_latest))
         .route("/api/status", get(status))
         .route("/api/alerts", get(alerts))
+        .route("/api/bloodlines", get(list_bloodlines).post(create_bloodline))
+        .route("/api/birds", get(list_birds).post(create_bird))
+        .route("/api/breeding-pairs", get(list_breeding_pairs).post(create_breeding_pair))
+        .route("/api/clutches", get(list_clutches).post(create_clutch))
+        .route("/api/flock/summary", get(flock_summary))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")

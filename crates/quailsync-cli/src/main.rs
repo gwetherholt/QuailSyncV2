@@ -1,6 +1,10 @@
+use chrono::Local;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use quailsync_common::{Alert, BrooderReading, Severity, SystemMetrics};
+use quailsync_common::{
+    Alert, BirdStatus, Bloodline, BrooderReading, CreateBird, CreateBloodline, Sex, Severity,
+    SystemMetrics,
+};
 use serde::Deserialize;
 
 #[derive(Parser)]
@@ -32,6 +36,67 @@ enum Commands {
         #[arg(long, default_value = "60")]
         minutes: u64,
     },
+    /// Manage bloodlines
+    Bloodline {
+        #[command(subcommand)]
+        action: BloodlineAction,
+    },
+    /// Manage birds
+    Bird {
+        #[command(subcommand)]
+        action: BirdAction,
+    },
+    /// Flock overview
+    Flock {
+        #[command(subcommand)]
+        action: FlockAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum BloodlineAction {
+    /// Add a new bloodline
+    Add {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        source: String,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// List all bloodlines
+    List,
+}
+
+#[derive(Subcommand)]
+enum BirdAction {
+    /// Add a new bird
+    Add {
+        #[arg(long)]
+        band: Option<String>,
+        #[arg(long)]
+        sex: String,
+        #[arg(long)]
+        bloodline: i64,
+        #[arg(long)]
+        hatch_date: Option<String>,
+        #[arg(long)]
+        mother: Option<i64>,
+        #[arg(long)]
+        father: Option<i64>,
+        #[arg(long, default_value = "1")]
+        generation: u32,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// List all birds
+    List,
+}
+
+#[derive(Subcommand)]
+enum FlockAction {
+    /// Show flock summary
+    Summary,
 }
 
 #[derive(Deserialize)]
@@ -237,6 +302,162 @@ async fn cmd_alerts(base: &str, minutes: u64) -> anyhow::Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Flock & Lineage commands
+// ---------------------------------------------------------------------------
+
+async fn cmd_bloodline_add(base: &str, name: String, source: String, notes: Option<String>) -> anyhow::Result<()> {
+    let body = CreateBloodline { name, source, notes };
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/bloodlines"))
+        .json(&body)
+        .send()
+        .await?;
+    let bl: Bloodline = resp.json().await?;
+    println!("{} bloodline #{} \"{}\"", "Created".green().bold(), bl.id, bl.name);
+    Ok(())
+}
+
+async fn cmd_bloodline_list(base: &str) -> anyhow::Result<()> {
+    let resp = reqwest::get(format!("{base}/api/bloodlines")).await?;
+    let list: Vec<Bloodline> = resp.json().await?;
+    if list.is_empty() {
+        println!("{}", "No bloodlines yet.".dimmed());
+        return Ok(());
+    }
+    println!("{}", "Bloodlines".bold().underline());
+    println!();
+    println!("  {:<5} {:<20} {:<20} {}", "ID".bold(), "Name".bold(), "Source".bold(), "Notes".bold());
+    println!("  {}", "-".repeat(60));
+    for bl in &list {
+        println!(
+            "  {:<5} {:<20} {:<20} {}",
+            bl.id,
+            bl.name,
+            bl.source,
+            bl.notes.as_deref().unwrap_or(""),
+        );
+    }
+    Ok(())
+}
+
+fn parse_sex(s: &str) -> Sex {
+    match s.to_lowercase().as_str() {
+        "male" | "m" => Sex::Male,
+        "female" | "f" => Sex::Female,
+        _ => Sex::Unknown,
+    }
+}
+
+async fn cmd_bird_add(
+    base: &str,
+    band: Option<String>,
+    sex: String,
+    bloodline: i64,
+    hatch_date: Option<String>,
+    mother: Option<i64>,
+    father: Option<i64>,
+    generation: u32,
+    notes: Option<String>,
+) -> anyhow::Result<()> {
+    let hatch = match hatch_date {
+        Some(s) => chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")?,
+        None => Local::now().date_naive(),
+    };
+    let body = CreateBird {
+        band_color: band,
+        sex: parse_sex(&sex),
+        bloodline_id: bloodline,
+        hatch_date: hatch,
+        mother_id: mother,
+        father_id: father,
+        generation,
+        status: BirdStatus::Active,
+        notes,
+    };
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/birds"))
+        .json(&body)
+        .send()
+        .await?;
+    let bird: quailsync_common::Bird = resp.json().await?;
+    println!(
+        "{} bird #{} ({:?}, bloodline #{})",
+        "Created".green().bold(),
+        bird.id,
+        bird.sex,
+        bird.bloodline_id,
+    );
+    Ok(())
+}
+
+async fn cmd_bird_list(base: &str) -> anyhow::Result<()> {
+    let resp = reqwest::get(format!("{base}/api/birds")).await?;
+    let list: Vec<quailsync_common::Bird> = resp.json().await?;
+    if list.is_empty() {
+        println!("{}", "No birds yet.".dimmed());
+        return Ok(());
+    }
+    println!("{}", "Birds".bold().underline());
+    println!();
+    println!(
+        "  {:<5} {:<10} {:<8} {:<10} {:<12} {:<8} {}",
+        "ID".bold(), "Band".bold(), "Sex".bold(), "Bloodline".bold(),
+        "Hatch Date".bold(), "Gen".bold(), "Status".bold(),
+    );
+    println!("  {}", "-".repeat(70));
+    for b in &list {
+        println!(
+            "  {:<5} {:<10} {:<8} {:<10} {:<12} {:<8} {:?}",
+            b.id,
+            b.band_color.as_deref().unwrap_or("-"),
+            format!("{:?}", b.sex),
+            b.bloodline_id,
+            b.hatch_date,
+            b.generation,
+            b.status,
+        );
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct FlockSummaryResp {
+    total_birds: i64,
+    active_birds: i64,
+    males: i64,
+    females: i64,
+    bloodlines: Vec<BloodlineCountResp>,
+}
+
+#[derive(Deserialize)]
+struct BloodlineCountResp {
+    name: String,
+    count: i64,
+}
+
+async fn cmd_flock_summary(base: &str) -> anyhow::Result<()> {
+    let resp = reqwest::get(format!("{base}/api/flock/summary")).await?;
+    let s: FlockSummaryResp = resp.json().await?;
+
+    println!("{}", "Flock Summary".bold().underline());
+    println!();
+    println!("  Total birds:   {}", s.total_birds);
+    println!("  Active birds:  {}", s.active_birds);
+    println!("  Males:         {}", s.males);
+    println!("  Females:       {}", s.females);
+
+    if !s.bloodlines.is_empty() {
+        println!();
+        println!("  {}", "By Bloodline".bold());
+        for bl in &s.bloodlines {
+            println!("    {:<20} {}", bl.name, bl.count);
+        }
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -250,6 +471,23 @@ async fn main() {
         } => cmd_brood_history(base, mins).await,
         Commands::System => cmd_system(base).await,
         Commands::Alerts { minutes } => cmd_alerts(base, minutes).await,
+        Commands::Bloodline { action } => match action {
+            BloodlineAction::Add { name, source, notes } => {
+                cmd_bloodline_add(base, name, source, notes).await
+            }
+            BloodlineAction::List => cmd_bloodline_list(base).await,
+        },
+        Commands::Bird { action } => match action {
+            BirdAction::Add {
+                band, sex, bloodline, hatch_date, mother, father, generation, notes,
+            } => {
+                cmd_bird_add(base, band, sex, bloodline, hatch_date, mother, father, generation, notes).await
+            }
+            BirdAction::List => cmd_bird_list(base).await,
+        },
+        Commands::Flock { action } => match action {
+            FlockAction::Summary => cmd_flock_summary(base).await,
+        },
     };
 
     if let Err(e) = result {
