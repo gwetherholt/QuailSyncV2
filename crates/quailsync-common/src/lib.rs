@@ -18,6 +18,8 @@ pub struct BrooderReading {
     pub temperature_celsius: f64,
     pub humidity_percent: f64,
     pub timestamp: DateTime<Utc>,
+    #[serde(default)]
+    pub brooder_id: Option<i64>,
 }
 
 /// A species detected by the monitoring system.
@@ -327,6 +329,105 @@ pub struct CullRecommendation {
     pub reason: CullReason,
 }
 
+// =========================================================================
+// Camera feed infrastructure
+// =========================================================================
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CameraStatus {
+    Active,
+    Offline,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LifeStage {
+    Chick,
+    Adolescent,
+    Adult,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CameraFeed {
+    pub id: i64,
+    pub name: String,
+    pub location: String,
+    pub feed_url: String,
+    pub status: CameraStatus,
+    pub brooder_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateCameraFeed {
+    pub name: String,
+    pub location: String,
+    pub feed_url: String,
+    pub status: CameraStatus,
+    pub brooder_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrameCapture {
+    pub id: i64,
+    pub camera_id: i64,
+    pub timestamp: DateTime<Utc>,
+    pub image_path: String,
+    pub life_stage: LifeStage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateFrameCapture {
+    pub camera_id: i64,
+    pub image_path: String,
+    pub life_stage: LifeStage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetectionResult {
+    pub id: i64,
+    pub frame_id: i64,
+    pub label: String,
+    pub confidence: f64,
+    pub bounding_box_x: f64,
+    pub bounding_box_y: f64,
+    pub bounding_box_w: f64,
+    pub bounding_box_h: f64,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateDetectionResult {
+    pub label: String,
+    pub confidence: f64,
+    pub bounding_box_x: f64,
+    pub bounding_box_y: f64,
+    pub bounding_box_w: f64,
+    pub bounding_box_h: f64,
+    pub notes: Option<String>,
+}
+
+// =========================================================================
+// Brooder management
+// =========================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Brooder {
+    pub id: i64,
+    pub name: String,
+    pub bloodline_id: Option<i64>,
+    pub life_stage: LifeStage,
+    pub qr_code: String,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateBrooder {
+    pub name: String,
+    pub bloodline_id: Option<i64>,
+    pub life_stage: LifeStage,
+    pub qr_code: String,
+    pub notes: Option<String>,
+}
+
 /// Inbreeding coefficient for a potential male-female pairing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InbreedingCoefficient {
@@ -371,6 +472,7 @@ mod tests {
             temperature_celsius: 98.6,
             humidity_percent: 55.0,
             timestamp: Utc::now(),
+            brooder_id: Some(1),
         });
         let json = serde_json::to_string(&payload).unwrap();
         let back: TelemetryPayload = serde_json::from_str(&json).unwrap();

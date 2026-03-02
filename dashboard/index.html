@@ -337,6 +337,39 @@
     white-space:nowrap;font-weight:400;
   }
 
+  /* --- Camera cards --- */
+  .camera-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:1rem}
+  .camera-card{
+    background:var(--cream);border-radius:var(--radius);
+    padding:1rem;box-shadow:0 1px 4px rgba(0,0,0,.06);
+  }
+  .camera-card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem}
+  .camera-card-header h4{font-size:.9rem;margin:0}
+  .camera-status-badge{
+    font-size:.7rem;font-weight:600;padding:2px 10px;border-radius:10px;
+  }
+  .camera-status-badge.active{background:var(--safe);color:#fff}
+  .camera-status-badge.offline{background:var(--danger);color:#fff}
+  .camera-meta{font-size:.8rem;color:#777;margin-bottom:.5rem}
+  .camera-meta span{margin-right:1rem}
+  .camera-feed-placeholder{
+    background:var(--beige);border-radius:8px;height:160px;
+    display:flex;align-items:center;justify-content:center;
+    color:#aaa;font-size:.85rem;font-style:italic;
+    border:2px dashed #d0c8c0;margin-bottom:.6rem;
+  }
+  .detection-summary{margin-top:.5rem}
+  .detection-summary-title{font-size:.75rem;color:#999;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.3rem}
+  .detection-bar{
+    display:flex;align-items:center;gap:.5rem;
+    font-size:.8rem;padding:.2rem 0;
+  }
+  .detection-bar-fill{
+    height:6px;border-radius:3px;background:var(--sage);min-width:4px;
+  }
+  .detection-bar-label{min-width:60px;font-weight:600}
+  .detection-bar-count{color:#888;font-size:.75rem}
+
   /* --- Responsive --- */
   @media(max-width:768px){
     .sidebar{width:var(--sidebar-collapsed)}
@@ -370,6 +403,9 @@
     </a>
     <a class="sidebar-item" data-route="#/clutches" onclick="Router.navigate('#/clutches')">
       <span class="icon">&#x1F95A;</span><span class="label">Clutches</span>
+    </a>
+    <a class="sidebar-item" data-route="#/cameras" onclick="Router.navigate('#/cameras')">
+      <span class="icon">&#x1F3A5;</span><span class="label">Cameras</span>
     </a>
   </div>
   <div class="sidebar-footer">
@@ -470,6 +506,9 @@
       } else if(hash === '#/clutches'){
         hdr.textContent = 'Clutch Tracker';
         Router.current = Page.Clutches;
+      } else if(hash === '#/cameras'){
+        hdr.textContent = 'Cameras';
+        Router.current = Page.Cameras;
       } else {
         hdr.textContent = 'Dashboard';
         Router.current = Page.Dashboard;
@@ -486,7 +525,7 @@
   Page.Dashboard = {
     render: function(app){
       app.innerHTML = '<div class="grid">' +
-        '<div class="panel"><div class="panel-header">&#x1F321;&#xFE0F; Brooder</div><div class="panel-body" id="d-brooder"><div class="no-data">Waiting for data...</div></div></div>' +
+        '<div class="panel" style="grid-column:1/-1"><div class="panel-header">&#x1F321;&#xFE0F; Brooders</div><div class="panel-body" id="d-brooder"><div class="no-data">Waiting for data...</div></div></div>' +
         '<div class="panel"><div class="panel-header">&#x1F6A8; Alerts</div><div class="panel-body" id="d-alerts"><div class="no-data">No recent alerts</div></div></div>' +
         '<div class="panel"><div class="panel-header">&#x1F426; Flock Overview</div><div class="panel-body" id="d-flock"><div class="no-data">Loading...</div></div></div>' +
         '<div class="panel"><div class="panel-header">&#x1F48D; Breeding</div><div class="panel-body" id="d-breeding"><div class="no-data">Loading...</div></div></div>' +
@@ -500,23 +539,61 @@
     },
     stop: function(){},
     _pollBrooder: async function(){
-      var history = await API.get('/api/brooder/history?minutes=60');
       var el = document.getElementById('d-brooder');
       if(!el) return;
-      if(!history || history.length===0){ el.innerHTML='<div class="no-data">No brooder readings yet</div>'; return; }
-      var latest=history[0];
-      var temp=latest.temperature_celsius.toFixed(1);
-      var hum=latest.humidity_percent.toFixed(1);
-      var pts=history.slice().reverse().slice(-30);
-      var temps=pts.map(function(p){return p.temperature_celsius});
-      var tMin=Math.min.apply(null,temps), tMax=Math.max.apply(null,temps);
-      var range=tMax-tMin||1;
-      var bars='';
-      temps.forEach(function(t){
-        var h=Math.max(4,((t-tMin)/range)*56);
-        bars+='<div class="spark-bar" style="height:'+h+'px" title="'+t.toFixed(1)+'\u00b0F"></div>';
-      });
-      el.innerHTML='<div class="reading-row"><div><span class="reading-label">Temperature</span><br><span class="reading-value">'+temp+'&deg;F</span></div><div style="text-align:right"><span class="reading-label">Humidity</span><br><span class="reading-value">'+hum+'%</span></div></div><div class="sparkline">'+bars+'</div><div style="text-align:center;font-size:.7rem;color:#aaa;margin-top:.3rem">Last 60 min</div>';
+      var brooders = await API.get('/api/brooders');
+      if(!brooders || brooders.length===0){
+        // Fallback: single brooder view from global readings
+        var history = await API.get('/api/brooder/history?minutes=60');
+        if(!history || history.length===0){ el.innerHTML='<div class="no-data">No brooder readings yet</div>'; return; }
+        var latest=history[0];
+        var temp=latest.temperature_celsius.toFixed(1);
+        var hum=latest.humidity_percent.toFixed(1);
+        var pts=history.slice().reverse().slice(-30);
+        var temps=pts.map(function(p){return p.temperature_celsius});
+        var tMin=Math.min.apply(null,temps), tMax=Math.max.apply(null,temps);
+        var range=tMax-tMin||1;
+        var bars='';
+        temps.forEach(function(t){
+          var h=Math.max(4,((t-tMin)/range)*56);
+          bars+='<div class="spark-bar" style="height:'+h+'px" title="'+t.toFixed(1)+'\u00b0F"></div>';
+        });
+        el.innerHTML='<div class="reading-row"><div><span class="reading-label">Temperature</span><br><span class="reading-value">'+temp+'&deg;F</span></div><div style="text-align:right"><span class="reading-label">Humidity</span><br><span class="reading-value">'+hum+'%</span></div></div><div class="sparkline">'+bars+'</div><div style="text-align:center;font-size:.7rem;color:#aaa;margin-top:.3rem">Last 60 min</div>';
+        return;
+      }
+      // Multi-brooder card view
+      var html='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:.75rem">';
+      for(var i=0;i<brooders.length;i++){
+        var b=brooders[i];
+        var status = await API.get('/api/brooders/'+b.id+'/status');
+        var readings = await API.get('/api/brooders/'+b.id+'/readings?minutes=60');
+        var stageCls = b.life_stage==='Chick'?'background:#e8c8c8;color:#8b4513' : b.life_stage==='Adolescent'?'background:#d2dcc3;color:#2e5c1e' : 'background:#c8d8e8;color:#2e4a5c';
+        var alertBorder = (status && status.has_alert) ? 'border-left:4px solid var(--danger)' : 'border-left:4px solid var(--safe)';
+        var tempStr = status && status.latest_temp!=null ? status.latest_temp.toFixed(1)+'&deg;F' : '--';
+        var humStr = status && status.latest_humidity!=null ? status.latest_humidity.toFixed(1)+'%' : '--';
+        var alertHtml = (status && status.has_alert) ? '<div style="font-size:.7rem;color:var(--danger);margin-top:.3rem">'+status.alert_message+'</div>' : '';
+        // Sparkline from readings
+        var sparkHtml='';
+        if(readings && readings.length>0){
+          var pts=readings.slice().reverse().slice(-20);
+          var temps=pts.map(function(p){return p.temperature_celsius});
+          var tMin=Math.min.apply(null,temps),tMax=Math.max.apply(null,temps);
+          var range=tMax-tMin||1;
+          temps.forEach(function(t){
+            var h=Math.max(3,((t-tMin)/range)*32);
+            sparkHtml+='<div class="spark-bar" style="height:'+h+'px" title="'+t.toFixed(1)+'\u00b0F"></div>';
+          });
+        }
+        var blStr = b.bloodline_id ? 'Bloodline #'+b.bloodline_id : '';
+        html+='<div style="background:var(--cream);border-radius:var(--radius);padding:.75rem;'+alertBorder+'">';
+        html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem"><strong>'+b.name+'</strong><span style="font-size:.65rem;padding:2px 6px;border-radius:8px;'+stageCls+'">'+b.life_stage+'</span></div>';
+        if(blStr) html+='<div style="font-size:.7rem;color:#888;margin-bottom:.3rem">'+blStr+'</div>';
+        html+='<div class="reading-row" style="margin-bottom:.3rem"><div><span class="reading-label">Temp</span><br><span class="reading-value" style="font-size:1.1rem">'+tempStr+'</span></div><div style="text-align:right"><span class="reading-label">Hum</span><br><span class="reading-value" style="font-size:1.1rem">'+humStr+'</span></div></div>';
+        if(sparkHtml) html+='<div class="sparkline" style="height:36px">'+sparkHtml+'</div>';
+        html+=alertHtml+'</div>';
+      }
+      html+='</div>';
+      el.innerHTML=html;
     },
     _pollAlerts: async function(){
       var data = await API.get('/api/alerts?minutes=120');
@@ -946,6 +1023,117 @@
         set_date: setDate,
         status: 'Incubating',
         notes: notes
+      });
+      this.closeModal();
+      this._load();
+    }
+  };
+
+  // ===== Cameras Page =====
+  Page.Cameras = {
+    _cameras: [],
+    _summaries: {},
+    _lastFrames: {},
+    render: function(app){
+      app.innerHTML =
+        '<div class="page-top"><div class="page-title">&#x1F3A5; Cameras</div><button class="btn-primary" onclick="Page.Cameras.openModal()">+ Add Camera</button></div>' +
+        '<div id="cameras-list"></div>';
+    },
+    start: function(){
+      this._load();
+      addInterval(this._load.bind(this), 30000);
+    },
+    stop: function(){},
+    _load: async function(){
+      var cams = await API.get('/api/cameras');
+      if(cams) this._cameras = cams; else this._cameras = [];
+
+      // Fetch detection summaries and last frame for each camera
+      var self = this;
+      var promises = this._cameras.map(async function(cam){
+        var summary = await API.get('/api/cameras/'+cam.id+'/detections/summary');
+        if(summary) self._summaries[cam.id] = summary; else self._summaries[cam.id] = [];
+        var frames = await API.get('/api/frames?camera_id='+cam.id+'&minutes=1440');
+        if(frames && frames.length>0) self._lastFrames[cam.id] = frames[0];
+        else self._lastFrames[cam.id] = null;
+      });
+      await Promise.all(promises);
+      this._renderList();
+    },
+    _renderList: function(){
+      var el = document.getElementById('cameras-list');
+      if(!el) return;
+      if(this._cameras.length===0){
+        el.innerHTML='<div class="no-data">No cameras registered yet. Use the CLI or button above to add one.</div>';
+        return;
+      }
+      var self = this;
+      var html='<div class="camera-grid">';
+      this._cameras.forEach(function(cam){
+        var statusCls = cam.status==='Active'?'active':'offline';
+        var lastFrame = self._lastFrames[cam.id];
+        var lastTs = lastFrame ? lastFrame.timestamp.replace('T',' ').substring(0,16) : 'No captures';
+        var lastStage = lastFrame ? lastFrame.life_stage : '';
+
+        html+='<div class="camera-card">';
+        html+='<div class="camera-card-header"><h4>'+cam.name+'</h4><span class="camera-status-badge '+statusCls+'">'+cam.status+'</span></div>';
+        html+='<div class="camera-meta"><span>'+cam.location+'</span><span>'+cam.feed_url+'</span></div>';
+
+        // Live feed placeholder
+        html+='<div class="camera-feed-placeholder">Live feed — connect Pi to enable</div>';
+
+        // Last capture info
+        html+='<div class="camera-meta"><span>Last capture: '+lastTs+'</span>';
+        if(lastStage) html+='<span>Stage: '+lastStage+'</span>';
+        html+='</div>';
+
+        // Detection summary
+        var summary = self._summaries[cam.id] || [];
+        if(summary.length>0){
+          var maxCount = Math.max.apply(null, summary.map(function(s){return s.count}));
+          html+='<div class="detection-summary"><div class="detection-summary-title">Recent Detections (last 60 min)</div>';
+          summary.forEach(function(s){
+            var pct = maxCount>0 ? (s.count/maxCount)*100 : 0;
+            html+='<div class="detection-bar">';
+            html+='<span class="detection-bar-label">'+s.label+'</span>';
+            html+='<div style="flex:1;background:var(--beige);border-radius:3px;height:6px"><div class="detection-bar-fill" style="width:'+pct.toFixed(0)+'%"></div></div>';
+            html+='<span class="detection-bar-count">'+s.count+' ('+( s.avg_confidence*100).toFixed(0)+'%)</span>';
+            html+='</div>';
+          });
+          html+='</div>';
+        } else {
+          html+='<div class="no-data" style="padding:.4rem;font-size:.8rem">No detections yet</div>';
+        }
+
+        html+='</div>';
+      });
+      html+='</div>';
+      el.innerHTML=html;
+    },
+    openModal: function(){
+      var html = '<div class="modal-overlay" id="cam-modal-overlay" onclick="if(event.target===this)Page.Cameras.closeModal()">' +
+        '<div class="modal"><h3>Add Camera</h3>' +
+        '<label>Name</label><input id="mc-cam-name" type="text" placeholder="e.g. Brooder Cam">' +
+        '<label>Location</label><input id="mc-cam-loc" type="text" placeholder="e.g. Brooder 1, Pen A">' +
+        '<label>Feed URL</label><input id="mc-cam-url" type="text" placeholder="e.g. http://192.168.1.50:8080/video">' +
+        '<div class="modal-actions"><button class="btn-cancel" onclick="Page.Cameras.closeModal()">Cancel</button><button class="btn-primary" onclick="Page.Cameras.submitCamera()">Add Camera</button></div>' +
+        '</div></div>';
+      document.body.insertAdjacentHTML('beforeend', html);
+    },
+    closeModal: function(){
+      var ov = document.getElementById('cam-modal-overlay');
+      if(ov) ov.remove();
+    },
+    submitCamera: async function(){
+      var name = document.getElementById('mc-cam-name').value.trim();
+      var loc = document.getElementById('mc-cam-loc').value.trim();
+      var url = document.getElementById('mc-cam-url').value.trim();
+      if(!name || !loc || !url){ alert('All fields are required'); return; }
+      await API.post('/api/cameras', {
+        name: name,
+        location: loc,
+        feed_url: url,
+        status: 'Active'
       });
       this.closeModal();
       this._load();

@@ -17,3 +17,4 @@ reqwest.workspace = true
 colored.workspace = true
 chrono.workspace = true
 anyhow.workspace = true
+qrcode.workspace = true

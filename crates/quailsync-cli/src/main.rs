@@ -1,12 +1,14 @@
 use chrono::{Local, NaiveDate};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
+use qrcode::QrCode;
 use quailsync_common::{
-    Alert, Bird, BirdStatus, Bloodline, BreedingGroup, BrooderReading, Clutch, ClutchStatus,
-    CreateBird, CreateBloodline, CreateBreedingGroup, CreateClutch, CreateProcessingRecord,
-    CreateWeightRecord, CullReason, CullRecommendation, InbreedingCoefficient, ProcessingRecord,
-    ProcessingReason, ProcessingStatus, Sex, Severity, SystemMetrics, UpdateClutch,
-    UpdateProcessingRecord, WeightRecord, COTURNIX_BUTCHER_WEIGHT_GRAMS,
+    Alert, Bird, BirdStatus, Bloodline, BreedingGroup, Brooder, BrooderReading, CameraFeed,
+    CameraStatus, Clutch, ClutchStatus, CreateBird, CreateBloodline, CreateBreedingGroup,
+    CreateBrooder, CreateCameraFeed, CreateClutch, CreateProcessingRecord, CreateWeightRecord,
+    CullReason, CullRecommendation, FrameCapture, InbreedingCoefficient, LifeStage,
+    ProcessingRecord, ProcessingReason, ProcessingStatus, Sex, Severity, SystemMetrics,
+    UpdateClutch, UpdateProcessingRecord, WeightRecord, COTURNIX_BUTCHER_WEIGHT_GRAMS,
 };
 use serde::Deserialize;
 
@@ -69,6 +71,16 @@ enum Commands {
         #[command(subcommand)]
         action: ProcessingAction,
     },
+    /// Camera feed management
+    Camera {
+        #[command(subcommand)]
+        action: CameraAction,
+    },
+    /// Manage brooders
+    Brooder {
+        #[command(subcommand)]
+        action: BrooderAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -127,6 +139,55 @@ enum ProcessingAction {
     List,
     /// Show scheduled processing queue
     Queue,
+}
+
+#[derive(Subcommand)]
+enum CameraAction {
+    /// Register a new camera feed
+    Add {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        location: String,
+        #[arg(long)]
+        url: String,
+    },
+    /// List all camera feeds
+    List,
+    /// Show camera status with last frame timestamps
+    Status,
+    /// Point a camera at a brooder
+    Point {
+        #[arg(long)]
+        id: i64,
+        #[arg(long)]
+        brooder: i64,
+    },
+}
+
+#[derive(Subcommand)]
+enum BrooderAction {
+    /// Register a new brooder
+    Add {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        bloodline: Option<i64>,
+        /// Life stage: chick, adolescent, adult
+        #[arg(long, default_value = "chick")]
+        stage: String,
+        #[arg(long)]
+        qr: Option<String>,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// List all brooders
+    List,
+    /// Generate QR code SVG for a brooder
+    Qr {
+        #[arg(long)]
+        id: i64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1392,6 +1453,245 @@ async fn cmd_flock_cull_review(base: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Camera commands
+// ---------------------------------------------------------------------------
+
+async fn cmd_camera_add(base: &str, name: String, location: String, url: String) -> anyhow::Result<()> {
+    let body = CreateCameraFeed {
+        name,
+        location,
+        feed_url: url,
+        status: CameraStatus::Active,
+        brooder_id: None,
+    };
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/cameras"))
+        .json(&body)
+        .send()
+        .await?;
+    let cam: CameraFeed = resp.json().await?;
+    println!(
+        "{} camera #{} \"{}\" at {}",
+        "Registered".green().bold(),
+        cam.id,
+        cam.name,
+        cam.location,
+    );
+    Ok(())
+}
+
+async fn cmd_camera_list(base: &str) -> anyhow::Result<()> {
+    let cameras: Vec<CameraFeed> = reqwest::get(format!("{base}/api/cameras"))
+        .await?
+        .json()
+        .await?;
+
+    if cameras.is_empty() {
+        println!("{}", "No cameras registered.".dimmed());
+        return Ok(());
+    }
+
+    println!("{}", "Camera Feeds".bold().underline());
+    println!();
+    println!(
+        "  {:<5} {:<18} {:<16} {:<36} {}",
+        "ID".bold(),
+        "Name".bold(),
+        "Location".bold(),
+        "URL".bold(),
+        "Status".bold(),
+    );
+    println!("  {}", "-".repeat(85));
+
+    for c in &cameras {
+        let status_str = match c.status {
+            CameraStatus::Active => "Active".green().to_string(),
+            CameraStatus::Offline => "Offline".red().to_string(),
+        };
+        println!(
+            "  {:<5} {:<18} {:<16} {:<36} {}",
+            c.id, c.name, c.location, c.feed_url, status_str,
+        );
+    }
+    Ok(())
+}
+
+async fn cmd_camera_status(base: &str) -> anyhow::Result<()> {
+    let cameras: Vec<CameraFeed> = reqwest::get(format!("{base}/api/cameras"))
+        .await?
+        .json()
+        .await?;
+
+    if cameras.is_empty() {
+        println!("{}", "No cameras registered.".dimmed());
+        return Ok(());
+    }
+
+    println!("{}", "Camera Status".bold().underline());
+    println!();
+
+    for c in &cameras {
+        let dot = match c.status {
+            CameraStatus::Active => "●".green(),
+            CameraStatus::Offline => "●".red(),
+        };
+
+        // Fetch last frame for this camera
+        let frames: Vec<FrameCapture> = reqwest::get(format!(
+            "{base}/api/frames?camera_id={}&minutes=1440",
+            c.id
+        ))
+        .await?
+        .json()
+        .await?;
+
+        let last_frame = if let Some(f) = frames.first() {
+            format!("{} ({:?})", f.timestamp.format("%Y-%m-%d %H:%M"), f.life_stage)
+        } else {
+            "no frames".dimmed().to_string()
+        };
+
+        println!(
+            "  {} #{} {} — {} — last: {}",
+            dot, c.id, c.name, c.location, last_frame,
+        );
+    }
+
+    Ok(())
+}
+
+fn parse_life_stage(s: &str) -> LifeStage {
+    match s.to_lowercase().as_str() {
+        "chick" => LifeStage::Chick,
+        "adolescent" => LifeStage::Adolescent,
+        "adult" => LifeStage::Adult,
+        _ => LifeStage::Chick,
+    }
+}
+
+async fn cmd_brooder_add(
+    base: &str,
+    name: String,
+    bloodline: Option<i64>,
+    stage: String,
+    qr: Option<String>,
+    notes: Option<String>,
+) -> anyhow::Result<()> {
+    let body = CreateBrooder {
+        name,
+        bloodline_id: bloodline,
+        life_stage: parse_life_stage(&stage),
+        qr_code: qr.unwrap_or_default(),
+        notes,
+    };
+    let client = reqwest::Client::new();
+    let resp: Brooder = client
+        .post(format!("{base}/api/brooders"))
+        .json(&body)
+        .send()
+        .await?
+        .json()
+        .await?;
+    println!(
+        "{} Brooder #{} '{}' created ({:?})",
+        "OK".green().bold(),
+        resp.id,
+        resp.name,
+        resp.life_stage,
+    );
+    Ok(())
+}
+
+async fn cmd_brooder_list(base: &str) -> anyhow::Result<()> {
+    let brooders: Vec<Brooder> = reqwest::get(format!("{base}/api/brooders"))
+        .await?
+        .json()
+        .await?;
+
+    if brooders.is_empty() {
+        println!("{}", "No brooders registered.".dimmed());
+        return Ok(());
+    }
+
+    println!("{}", "Brooders".bold().underline());
+    println!();
+    println!(
+        "  {:<5} {:<20} {:<12} {:<14} {}",
+        "ID".bold(),
+        "Name".bold(),
+        "Stage".bold(),
+        "Bloodline".bold(),
+        "QR Code".bold(),
+    );
+    println!("  {}", "-".repeat(65));
+
+    for b in &brooders {
+        let stage_str = format!("{:?}", b.life_stage);
+        let bl = b
+            .bloodline_id
+            .map(|id| format!("#{id}"))
+            .unwrap_or_else(|| "-".to_string());
+        let qr = if b.qr_code.is_empty() {
+            "-".to_string()
+        } else {
+            b.qr_code.clone()
+        };
+        println!(
+            "  {:<5} {:<20} {:<12} {:<14} {}",
+            b.id, b.name, stage_str, bl, qr,
+        );
+    }
+    Ok(())
+}
+
+async fn cmd_brooder_qr(base: &str, id: i64) -> anyhow::Result<()> {
+    let brooder: Brooder = reqwest::get(format!("{base}/api/brooders"))
+        .await?
+        .json::<Vec<Brooder>>()
+        .await?
+        .into_iter()
+        .find(|b| b.id == id)
+        .ok_or_else(|| anyhow::anyhow!("Brooder #{id} not found"))?;
+
+    let data = if brooder.qr_code.is_empty() {
+        format!("brooder-{}", brooder.id)
+    } else {
+        brooder.qr_code.clone()
+    };
+
+    let code = QrCode::new(data.as_bytes())?;
+    let svg = code.render::<qrcode::render::svg::Color>()
+        .min_dimensions(200, 200)
+        .build();
+
+    let filename = format!("brooder-{}-qr.svg", brooder.id);
+    std::fs::write(&filename, &svg)?;
+    println!(
+        "{} QR code saved to {} (data: \"{}\")",
+        "OK".green().bold(),
+        filename.bold(),
+        data,
+    );
+    Ok(())
+}
+
+async fn cmd_camera_point(base: &str, id: i64, brooder: i64) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    client
+        .put(format!("{base}/api/cameras/{id}/brooder"))
+        .json(&serde_json::json!({ "brooder_id": brooder }))
+        .send()
+        .await?;
+    println!(
+        "{} Camera #{} now pointing at Brooder #{}",
+        "OK".green().bold(),
+        id,
+        brooder,
+    );
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -1453,6 +1753,21 @@ async fn main() {
             }
             ProcessingAction::List => cmd_processing_list(base).await,
             ProcessingAction::Queue => cmd_processing_queue(base).await,
+        },
+        Commands::Camera { action } => match action {
+            CameraAction::Add { name, location, url } => {
+                cmd_camera_add(base, name, location, url).await
+            }
+            CameraAction::List => cmd_camera_list(base).await,
+            CameraAction::Status => cmd_camera_status(base).await,
+            CameraAction::Point { id, brooder } => cmd_camera_point(base, id, brooder).await,
+        },
+        Commands::Brooder { action } => match action {
+            BrooderAction::Add { name, bloodline, stage, qr, notes } => {
+                cmd_brooder_add(base, name, bloodline, stage, qr, notes).await
+            }
+            BrooderAction::List => cmd_brooder_list(base).await,
+            BrooderAction::Qr { id } => cmd_brooder_qr(base, id).await,
         },
     };
 

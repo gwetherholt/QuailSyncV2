@@ -33,6 +33,7 @@ fn mock_brooder_reading() -> TelemetryPayload {
         temperature_celsius: temp,
         humidity_percent: humidity,
         timestamp: Utc::now(),
+        brooder_id: None,
     })
 }
 
