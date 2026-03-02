@@ -13,11 +13,13 @@ use axum::{
 use chrono::{DateTime, NaiveDate, Utc};
 use colored::Colorize;
 use quailsync_common::{
-    Alert, AlertConfig, Bird, BirdStatus, Bloodline, BreedingGroup, BreedingPair, BrooderReading,
-    Clutch, ClutchStatus, CreateBird, CreateBloodline, CreateBreedingGroup, CreateBreedingPair,
-    CreateClutch, CreateProcessingRecord, CreateWeightRecord, CullReason, CullRecommendation,
-    InbreedingCoefficient, ProcessingRecord, ProcessingReason, ProcessingStatus, Sex, Severity,
-    Species, SystemMetrics, TelemetryPayload, UpdateBird, UpdateClutch, UpdateProcessingRecord,
+    Alert, AlertConfig, Bird, BirdStatus, Bloodline, BreedingGroup, BreedingPair, Brooder,
+    BrooderReading, CameraFeed, CameraStatus, Clutch, ClutchStatus, CreateBird, CreateBloodline,
+    CreateBreedingGroup, CreateBreedingPair, CreateBrooder, CreateCameraFeed, CreateClutch,
+    CreateDetectionResult, CreateFrameCapture, CreateProcessingRecord, CreateWeightRecord,
+    CullReason, CullRecommendation, DetectionResult, FrameCapture, InbreedingCoefficient,
+    LifeStage, ProcessingRecord, ProcessingReason, ProcessingStatus, Sex, Severity, Species,
+    SystemMetrics, TelemetryPayload, UpdateBird, UpdateClutch, UpdateProcessingRecord,
     WeightRecord, COTURNIX_MIN_BREEDING_WEIGHT_GRAMS, MAX_FEMALES_PER_MALE,
     MIN_FEMALES_PER_MALE,
 };
@@ -50,11 +52,21 @@ pub struct AppState {
 
 pub fn init_db(conn: &Connection) {
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS brooder_readings (
+        "CREATE TABLE IF NOT EXISTS brooders (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            name         TEXT NOT NULL,
+            bloodline_id INTEGER REFERENCES bloodlines(id),
+            life_stage   TEXT NOT NULL DEFAULT 'Chick',
+            qr_code      TEXT NOT NULL DEFAULT '',
+            notes        TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS brooder_readings (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             temperature     REAL    NOT NULL,
             humidity        REAL    NOT NULL,
             timestamp       TEXT    NOT NULL,
+            brooder_id      INTEGER REFERENCES brooders(id),
             received_at     TEXT    NOT NULL DEFAULT (datetime('now'))
         );
 
@@ -157,6 +169,35 @@ pub fn init_db(conn: &Connection) {
             group_id  INTEGER NOT NULL REFERENCES breeding_groups(id),
             female_id INTEGER NOT NULL REFERENCES birds(id),
             PRIMARY KEY (group_id, female_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS camera_feeds (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT NOT NULL,
+            location   TEXT NOT NULL,
+            feed_url   TEXT NOT NULL,
+            status     TEXT NOT NULL DEFAULT 'Active',
+            brooder_id INTEGER REFERENCES brooders(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS frame_captures (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            camera_id  INTEGER NOT NULL REFERENCES camera_feeds(id),
+            timestamp  TEXT    NOT NULL,
+            image_path TEXT    NOT NULL,
+            life_stage TEXT    NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS detection_results (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            frame_id        INTEGER NOT NULL REFERENCES frame_captures(id),
+            label           TEXT    NOT NULL,
+            confidence      REAL    NOT NULL,
+            bounding_box_x  REAL    NOT NULL,
+            bounding_box_y  REAL    NOT NULL,
+            bounding_box_w  REAL    NOT NULL,
+            bounding_box_h  REAL    NOT NULL,
+            notes           TEXT
         );",
     )
     .expect("failed to create tables");
@@ -170,9 +211,9 @@ fn store_payload(conn: &Connection, payload: &TelemetryPayload) {
     match payload {
         TelemetryPayload::Brooder(r) => {
             conn.execute(
-                "INSERT INTO brooder_readings (temperature, humidity, timestamp)
-                 VALUES (?1, ?2, ?3)",
-                (r.temperature_celsius, r.humidity_percent, r.timestamp.to_rfc3339()),
+                "INSERT INTO brooder_readings (temperature, humidity, timestamp, brooder_id)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![r.temperature_celsius, r.humidity_percent, r.timestamp.to_rfc3339(), r.brooder_id],
             )
             .ok();
         }
@@ -363,7 +404,7 @@ async fn health() -> &'static str {
 async fn brooder_latest(State(state): State<AppState>) -> impl IntoResponse {
     let conn = state.db.lock().unwrap();
     let result = conn.query_row(
-        "SELECT temperature, humidity, timestamp FROM brooder_readings
+        "SELECT temperature, humidity, timestamp, brooder_id FROM brooder_readings
          ORDER BY id DESC LIMIT 1",
         [],
         |row| {
@@ -372,6 +413,7 @@ async fn brooder_latest(State(state): State<AppState>) -> impl IntoResponse {
                 temperature_celsius: row.get(0)?,
                 humidity_percent: row.get(1)?,
                 timestamp: ts.parse::<DateTime<Utc>>().unwrap_or_default(),
+                brooder_id: row.get(3)?,
             })
         },
     );
@@ -394,7 +436,7 @@ async fn brooder_history(
     let conn = state.db.lock().unwrap();
     let mut stmt = conn
         .prepare(
-            "SELECT temperature, humidity, timestamp FROM brooder_readings
+            "SELECT temperature, humidity, timestamp, brooder_id FROM brooder_readings
              WHERE received_at >= datetime('now', ?1)
              ORDER BY id DESC",
         )
@@ -408,6 +450,7 @@ async fn brooder_history(
                 temperature_celsius: row.get(0)?,
                 humidity_percent: row.get(1)?,
                 timestamp: ts.parse::<DateTime<Utc>>().unwrap_or_default(),
+                brooder_id: row.get(3)?,
             })
         })
         .unwrap()
@@ -1627,6 +1670,428 @@ async fn cull_recommendations(State(state): State<AppState>) -> Json<Vec<CullRec
 }
 
 // ---------------------------------------------------------------------------
+// Camera feed infrastructure
+// ---------------------------------------------------------------------------
+
+fn camera_status_to_str(s: &CameraStatus) -> &'static str {
+    match s {
+        CameraStatus::Active => "Active",
+        CameraStatus::Offline => "Offline",
+    }
+}
+
+fn str_to_camera_status(s: &str) -> CameraStatus {
+    match s {
+        "Offline" => CameraStatus::Offline,
+        _ => CameraStatus::Active,
+    }
+}
+
+fn life_stage_to_str(s: &LifeStage) -> &'static str {
+    match s {
+        LifeStage::Chick => "Chick",
+        LifeStage::Adolescent => "Adolescent",
+        LifeStage::Adult => "Adult",
+    }
+}
+
+fn str_to_life_stage(s: &str) -> LifeStage {
+    match s {
+        "Chick" => LifeStage::Chick,
+        "Adolescent" => LifeStage::Adolescent,
+        _ => LifeStage::Adult,
+    }
+}
+
+async fn create_camera(
+    State(state): State<AppState>,
+    Json(body): Json<CreateCameraFeed>,
+) -> impl IntoResponse {
+    let conn = state.db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO camera_feeds (name, location, feed_url, status, brooder_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            body.name,
+            body.location,
+            body.feed_url,
+            camera_status_to_str(&body.status),
+            body.brooder_id,
+        ],
+    )
+    .unwrap();
+    let id = conn.last_insert_rowid();
+    (
+        StatusCode::CREATED,
+        Json(CameraFeed {
+            id,
+            name: body.name,
+            location: body.location,
+            feed_url: body.feed_url,
+            status: body.status,
+            brooder_id: body.brooder_id,
+        }),
+    )
+}
+
+async fn list_cameras(State(state): State<AppState>) -> Json<Vec<CameraFeed>> {
+    let conn = state.db.lock().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT id, name, location, feed_url, status, brooder_id FROM camera_feeds ORDER BY id")
+        .unwrap();
+    let rows: Vec<CameraFeed> = stmt
+        .query_map([], |row| {
+            let status_str: String = row.get(4)?;
+            Ok(CameraFeed {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                location: row.get(2)?,
+                feed_url: row.get(3)?,
+                status: str_to_camera_status(&status_str),
+                brooder_id: row.get(5)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+    Json(rows)
+}
+
+async fn create_frame(
+    State(state): State<AppState>,
+    Json(body): Json<CreateFrameCapture>,
+) -> impl IntoResponse {
+    let now = Utc::now();
+    let conn = state.db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO frame_captures (camera_id, timestamp, image_path, life_stage) VALUES (?1, ?2, ?3, ?4)",
+        params![
+            body.camera_id,
+            now.to_rfc3339(),
+            body.image_path,
+            life_stage_to_str(&body.life_stage),
+        ],
+    )
+    .unwrap();
+    let id = conn.last_insert_rowid();
+    (
+        StatusCode::CREATED,
+        Json(FrameCapture {
+            id,
+            camera_id: body.camera_id,
+            timestamp: now,
+            image_path: body.image_path,
+            life_stage: body.life_stage,
+        }),
+    )
+}
+
+async fn create_frame_detections(
+    State(state): State<AppState>,
+    Path(frame_id): Path<i64>,
+    Json(body): Json<Vec<CreateDetectionResult>>,
+) -> impl IntoResponse {
+    let conn = state.db.lock().unwrap();
+    let mut results = Vec::new();
+    for d in body {
+        conn.execute(
+            "INSERT INTO detection_results (frame_id, label, confidence, bounding_box_x, bounding_box_y, bounding_box_w, bounding_box_h, notes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                frame_id,
+                d.label,
+                d.confidence,
+                d.bounding_box_x,
+                d.bounding_box_y,
+                d.bounding_box_w,
+                d.bounding_box_h,
+                d.notes,
+            ],
+        )
+        .unwrap();
+        let id = conn.last_insert_rowid();
+        results.push(DetectionResult {
+            id,
+            frame_id,
+            label: d.label,
+            confidence: d.confidence,
+            bounding_box_x: d.bounding_box_x,
+            bounding_box_y: d.bounding_box_y,
+            bounding_box_w: d.bounding_box_w,
+            bounding_box_h: d.bounding_box_h,
+            notes: d.notes,
+        });
+    }
+    (StatusCode::CREATED, Json(results))
+}
+
+#[derive(Deserialize)]
+struct FrameQueryParams {
+    camera_id: Option<i64>,
+    minutes: Option<u64>,
+}
+
+async fn list_frames(
+    State(state): State<AppState>,
+    Query(params): Query<FrameQueryParams>,
+) -> Json<Vec<FrameCapture>> {
+    let minutes = params.minutes.unwrap_or(60);
+    let conn = state.db.lock().unwrap();
+
+    let (sql, binds): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match params.camera_id {
+        Some(cid) => (
+            "SELECT id, camera_id, timestamp, image_path, life_stage FROM frame_captures
+             WHERE camera_id = ?1 AND timestamp >= datetime('now', ?2)
+             ORDER BY id DESC"
+                .to_string(),
+            vec![
+                Box::new(cid) as Box<dyn rusqlite::types::ToSql>,
+                Box::new(format!("-{minutes} minutes")),
+            ],
+        ),
+        None => (
+            "SELECT id, camera_id, timestamp, image_path, life_stage FROM frame_captures
+             WHERE timestamp >= datetime('now', ?1)
+             ORDER BY id DESC"
+                .to_string(),
+            vec![Box::new(format!("-{minutes} minutes")) as Box<dyn rusqlite::types::ToSql>],
+        ),
+    };
+
+    let mut stmt = conn.prepare(&sql).unwrap();
+    let rows: Vec<FrameCapture> = stmt
+        .query_map(rusqlite::params_from_iter(binds.iter()), |row| {
+            let ts_str: String = row.get(2)?;
+            let stage_str: String = row.get(4)?;
+            Ok(FrameCapture {
+                id: row.get(0)?,
+                camera_id: row.get(1)?,
+                timestamp: ts_str
+                    .parse::<DateTime<Utc>>()
+                    .unwrap_or_default(),
+                image_path: row.get(3)?,
+                life_stage: str_to_life_stage(&stage_str),
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+    Json(rows)
+}
+
+#[derive(Serialize)]
+struct DetectionSummaryEntry {
+    label: String,
+    count: i64,
+    avg_confidence: f64,
+}
+
+async fn camera_detection_summary(
+    State(state): State<AppState>,
+    Path(camera_id): Path<i64>,
+) -> Json<Vec<DetectionSummaryEntry>> {
+    let conn = state.db.lock().unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT dr.label, COUNT(*), AVG(dr.confidence)
+             FROM detection_results dr
+             JOIN frame_captures fc ON fc.id = dr.frame_id
+             WHERE fc.camera_id = ?1
+               AND fc.timestamp >= datetime('now', '-60 minutes')
+             GROUP BY dr.label
+             ORDER BY COUNT(*) DESC",
+        )
+        .unwrap();
+    let rows: Vec<DetectionSummaryEntry> = stmt
+        .query_map(params![camera_id], |row| {
+            Ok(DetectionSummaryEntry {
+                label: row.get(0)?,
+                count: row.get(1)?,
+                avg_confidence: row.get(2)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+    Json(rows)
+}
+
+// ---------------------------------------------------------------------------
+// Brooder management endpoints
+// ---------------------------------------------------------------------------
+
+async fn create_brooder(
+    State(state): State<AppState>,
+    Json(body): Json<CreateBrooder>,
+) -> impl IntoResponse {
+    let conn = state.db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO brooders (name, bloodline_id, life_stage, qr_code, notes) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            body.name,
+            body.bloodline_id,
+            life_stage_to_str(&body.life_stage),
+            body.qr_code,
+            body.notes,
+        ],
+    )
+    .unwrap();
+    let id = conn.last_insert_rowid();
+    (
+        StatusCode::CREATED,
+        Json(Brooder {
+            id,
+            name: body.name,
+            bloodline_id: body.bloodline_id,
+            life_stage: body.life_stage,
+            qr_code: body.qr_code,
+            notes: body.notes,
+        }),
+    )
+}
+
+async fn list_brooders(State(state): State<AppState>) -> Json<Vec<Brooder>> {
+    let conn = state.db.lock().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT id, name, bloodline_id, life_stage, qr_code, notes FROM brooders ORDER BY id")
+        .unwrap();
+    let rows: Vec<Brooder> = stmt
+        .query_map([], |row| {
+            let stage_str: String = row.get(3)?;
+            Ok(Brooder {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                bloodline_id: row.get(2)?,
+                life_stage: str_to_life_stage(&stage_str),
+                qr_code: row.get(4)?,
+                notes: row.get(5)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+    Json(rows)
+}
+
+async fn brooder_readings(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Query(params): Query<HistoryParams>,
+) -> Json<Vec<BrooderReading>> {
+    let minutes = params.minutes.unwrap_or(60);
+    let conn = state.db.lock().unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT temperature, humidity, timestamp, brooder_id FROM brooder_readings
+             WHERE brooder_id = ?1 AND received_at >= datetime('now', ?2)
+             ORDER BY id DESC",
+        )
+        .unwrap();
+
+    let cutoff = format!("-{minutes} minutes");
+    let readings: Vec<BrooderReading> = stmt
+        .query_map(params![id, cutoff], |row| {
+            let ts: String = row.get(2)?;
+            Ok(BrooderReading {
+                temperature_celsius: row.get(0)?,
+                humidity_percent: row.get(1)?,
+                timestamp: ts.parse::<DateTime<Utc>>().unwrap_or_default(),
+                brooder_id: row.get(3)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Json(readings)
+}
+
+#[derive(Serialize)]
+struct BrooderStatus {
+    brooder: Brooder,
+    latest_temp: Option<f64>,
+    latest_humidity: Option<f64>,
+    has_alert: bool,
+    alert_message: Option<String>,
+}
+
+async fn brooder_status(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let conn = state.db.lock().unwrap();
+
+    // Fetch the brooder
+    let brooder = conn.query_row(
+        "SELECT id, name, bloodline_id, life_stage, qr_code, notes FROM brooders WHERE id = ?1",
+        params![id],
+        |row| {
+            let stage_str: String = row.get(3)?;
+            Ok(Brooder {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                bloodline_id: row.get(2)?,
+                life_stage: str_to_life_stage(&stage_str),
+                qr_code: row.get(4)?,
+                notes: row.get(5)?,
+            })
+        },
+    );
+
+    let brooder = match brooder {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::NOT_FOUND, "brooder not found").into_response(),
+    };
+
+    // Latest reading for this brooder
+    let latest = conn.query_row(
+        "SELECT temperature, humidity FROM brooder_readings WHERE brooder_id = ?1 ORDER BY id DESC LIMIT 1",
+        params![id],
+        |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?)),
+    );
+
+    let (latest_temp, latest_humidity, has_alert, alert_message) = match latest {
+        Ok((temp, hum)) => {
+            let config = state.alert_config.clone();
+            let mut alert = false;
+            let mut msg = None;
+            if temp < config.brooder_temp_min || temp > config.brooder_temp_max {
+                alert = true;
+                msg = Some(format!("Temperature {:.1}\u{00b0}F out of range ({:.1}-{:.1})", temp, config.brooder_temp_min, config.brooder_temp_max));
+            } else if hum < config.humidity_min || hum > config.humidity_max {
+                alert = true;
+                msg = Some(format!("Humidity {:.1}% out of range ({:.1}-{:.1})", hum, config.humidity_min, config.humidity_max));
+            }
+            (Some(temp), Some(hum), alert, msg)
+        }
+        Err(_) => (None, None, false, None),
+    };
+
+    Json(BrooderStatus {
+        brooder,
+        latest_temp,
+        latest_humidity,
+        has_alert,
+        alert_message,
+    })
+    .into_response()
+}
+
+async fn update_camera_brooder(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let brooder_id = body.get("brooder_id").and_then(|v| v.as_i64());
+    let conn = state.db.lock().unwrap();
+    conn.execute(
+        "UPDATE camera_feeds SET brooder_id = ?1 WHERE id = ?2",
+        params![brooder_id, id],
+    )
+    .unwrap();
+    StatusCode::OK
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard: embedded static files
 // ---------------------------------------------------------------------------
 
@@ -1685,6 +2150,14 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/flock/summary", get(flock_summary))
         .route("/api/flock/cull-recommendations", get(cull_recommendations))
         .route("/api/breeding/suggest", get(breeding_suggest))
+        .route("/api/brooders", get(list_brooders).post(create_brooder))
+        .route("/api/brooders/{id}/readings", get(brooder_readings))
+        .route("/api/brooders/{id}/status", get(brooder_status))
+        .route("/api/cameras", get(list_cameras).post(create_camera))
+        .route("/api/cameras/{id}/brooder", axum::routing::put(update_camera_brooder))
+        .route("/api/cameras/{id}/detections/summary", get(camera_detection_summary))
+        .route("/api/frames", get(list_frames).post(create_frame))
+        .route("/api/frames/{id}/detections", axum::routing::post(create_frame_detections))
         .fallback(static_handler)
         .with_state(state)
 }
