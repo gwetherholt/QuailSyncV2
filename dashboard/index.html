@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QuailSync Dashboard</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+  :root{
+    --sage:#B7C4A0;
+    --dusty-rose:#D4A0A0;
+    --beige:#F5F0EB;
+    --cream:#FEFCF9;
+    --charcoal:#4A4A4A;
+    --sage-light:#d2dcc3;
+    --rose-light:#e8c8c8;
+    --danger:#c0392b;
+    --warning:#e67e22;
+    --safe:#27ae60;
+    --radius:12px;
+  }
+
+  body{
+    font-family:'Inter',system-ui,-apple-system,sans-serif;
+    background:var(--beige);
+    color:var(--charcoal);
+    line-height:1.5;
+    min-height:100vh;
+  }
+
+  /* --- Header --- */
+  header{
+    background:var(--sage);
+    padding:1rem 2rem;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    box-shadow:0 2px 8px rgba(0,0,0,.08);
+  }
+  header h1{font-size:1.5rem;font-weight:700;letter-spacing:-.02em}
+  .status-dot{
+    width:10px;height:10px;border-radius:50%;display:inline-block;
+    margin-right:6px;vertical-align:middle;
+  }
+  .status-dot.connected{background:var(--safe)}
+  .status-dot.disconnected{background:var(--danger)}
+  #connection-label{font-size:.85rem}
+
+  /* --- Grid --- */
+  .grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(380px,1fr));
+    gap:1.25rem;
+    padding:1.5rem 2rem;
+    max-width:1440px;
+    margin:0 auto;
+  }
+
+  /* --- Panel --- */
+  .panel{
+    background:var(--cream);
+    border-radius:var(--radius);
+    box-shadow:0 1px 4px rgba(0,0,0,.06);
+    overflow:hidden;
+    display:flex;flex-direction:column;
+  }
+  .panel-header{
+    padding:.75rem 1rem;
+    font-weight:600;font-size:.95rem;
+    border-bottom:1px solid var(--beige);
+    display:flex;align-items:center;gap:.5rem;
+  }
+  .panel-body{
+    padding:1rem;
+    flex:1;
+    font-size:.875rem;
+  }
+
+  /* --- Brooder sparkline --- */
+  .sparkline{display:flex;align-items:flex-end;gap:2px;height:60px;margin-top:.5rem}
+  .spark-bar{
+    flex:1;min-width:3px;border-radius:2px 2px 0 0;
+    background:var(--sage);transition:height .3s;
+  }
+  .reading-row{display:flex;justify-content:space-between;margin-bottom:.35rem}
+  .reading-label{color:#777;font-size:.8rem}
+  .reading-value{font-weight:600;font-size:1.1rem}
+
+  /* --- Alerts --- */
+  .alert-item{
+    padding:.5rem .75rem;border-radius:8px;margin-bottom:.4rem;
+    font-size:.8rem;
+  }
+  .alert-item.warning{background:#fef3e2;border-left:3px solid var(--warning)}
+  .alert-item.critical{background:#fce4e4;border-left:3px solid var(--danger)}
+  .alert-time{color:#999;font-size:.7rem;float:right}
+  .no-data{color:#aaa;font-style:italic;text-align:center;padding:1rem}
+
+  /* --- Flock overview --- */
+  .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:.5rem}
+  .stat-box{
+    background:var(--beige);border-radius:8px;padding:.6rem .8rem;text-align:center;
+  }
+  .stat-box .num{font-size:1.4rem;font-weight:700}
+  .stat-box .lbl{font-size:.7rem;color:#888;text-transform:uppercase;letter-spacing:.04em}
+  .bloodline-list{margin-top:.6rem}
+  .bloodline-row{display:flex;justify-content:space-between;padding:.2rem 0;border-bottom:1px solid var(--beige)}
+
+  /* --- Clutch tracker --- */
+  .clutch-card{
+    background:var(--beige);border-radius:8px;padding:.6rem .8rem;margin-bottom:.5rem;
+  }
+  .clutch-label{font-weight:600;font-size:.8rem;margin-bottom:.3rem}
+  .progress-bar{
+    height:8px;border-radius:4px;background:#e0d8d0;overflow:hidden;
+  }
+  .progress-fill{
+    height:100%;border-radius:4px;transition:width .4s;
+  }
+  .progress-fill.early{background:var(--sage)}
+  .progress-fill.mid{background:var(--warning)}
+  .progress-fill.late{background:var(--dusty-rose)}
+  .clutch-info{display:flex;justify-content:space-between;font-size:.7rem;color:#888;margin-top:.2rem}
+
+  /* --- Breeding --- */
+  .pair-row{
+    display:flex;justify-content:space-between;align-items:center;
+    padding:.4rem .6rem;border-radius:8px;margin-bottom:.3rem;
+    font-size:.82rem;
+  }
+  .pair-row.safe-pair{background:#e8f5e9}
+  .pair-row.risky-pair{background:#fce4e4}
+  .coeff{font-weight:600;font-size:.75rem;padding:2px 8px;border-radius:10px}
+  .coeff.safe{background:var(--safe);color:#fff}
+  .coeff.risky{background:var(--danger);color:#fff}
+
+  /* --- System gauges --- */
+  .gauge-row{display:flex;align-items:center;gap:.75rem;margin-bottom:.6rem}
+  .gauge-label{width:55px;font-size:.8rem;color:#777;text-align:right}
+  .gauge-track{flex:1;height:10px;border-radius:5px;background:#e0d8d0;overflow:hidden}
+  .gauge-fill{height:100%;border-radius:5px;transition:width .4s}
+  .gauge-pct{width:40px;font-size:.8rem;font-weight:600;text-align:right}
+
+  /* --- Responsive --- */
+  @media(max-width:480px){
+    .grid{grid-template-columns:1fr;padding:1rem}
+    header{padding:.75rem 1rem}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>&#x1F423; QuailSync</h1>
+  <div>
+    <span id="status-dot" class="status-dot disconnected"></span>
+    <span id="connection-label">Agent disconnected</span>
+  </div>
+</header>
+
+<div class="grid">
+
+  <!-- Brooder Panel -->
+  <div class="panel">
+    <div class="panel-header">&#x1F321;&#xFE0F; Brooder</div>
+    <div class="panel-body" id="brooder-panel">
+      <div class="no-data">Waiting for data...</div>
+    </div>
+  </div>
+
+  <!-- Alerts Panel -->
+  <div class="panel">
+    <div class="panel-header">&#x1F6A8; Alerts</div>
+    <div class="panel-body" id="alerts-panel">
+      <div class="no-data">No recent alerts</div>
+    </div>
+  </div>
+
+  <!-- Flock Overview Panel -->
+  <div class="panel">
+    <div class="panel-header">&#x1F426; Flock Overview</div>
+    <div class="panel-body" id="flock-panel">
+      <div class="no-data">Loading...</div>
+    </div>
+  </div>
+
+  <!-- Clutch Tracker Panel -->
+  <div class="panel">
+    <div class="panel-header">&#x1F95A; Clutch Tracker</div>
+    <div class="panel-body" id="clutch-panel">
+      <div class="no-data">Loading...</div>
+    </div>
+  </div>
+
+  <!-- Breeding Panel -->
+  <div class="panel">
+    <div class="panel-header">&#x1F48D; Breeding</div>
+    <div class="panel-body" id="breeding-panel">
+      <div class="no-data">Loading...</div>
+    </div>
+  </div>
+
+  <!-- System Panel -->
+  <div class="panel">
+    <div class="panel-header">&#x1F5A5;&#xFE0F; System</div>
+    <div class="panel-body" id="system-panel">
+      <div class="no-data">Waiting for data...</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function(){
+  'use strict';
+
+  // ----- helpers -----
+  function $(id){ return document.getElementById(id) }
+  async function api(path){
+    try{
+      const r=await fetch(path);
+      if(!r.ok) return null;
+      return r.json();
+    }catch(e){ return null }
+  }
+
+  // ----- Connection status (every 10s) -----
+  async function pollStatus(){
+    const d=await api('/api/status');
+    const dot=$('status-dot'), lbl=$('connection-label');
+    if(d && d.agent_connected){
+      dot.className='status-dot connected';
+      lbl.textContent='Agent connected';
+    }else{
+      dot.className='status-dot disconnected';
+      lbl.textContent='Agent disconnected';
+    }
+  }
+
+  // ----- Brooder panel (every 30s) -----
+  async function pollBrooder(){
+    const history=await api('/api/brooder/history?minutes=60');
+    const el=$('brooder-panel');
+    if(!history || history.length===0){
+      el.innerHTML='<div class="no-data">No brooder readings yet</div>';
+      return;
+    }
+    const latest=history[0];
+    const temp=latest.temperature_celsius.toFixed(1);
+    const hum=latest.humidity_percent.toFixed(1);
+
+    // sparkline from history (most recent on right)
+    const pts=history.slice().reverse().slice(-30);
+    const temps=pts.map(p=>p.temperature_celsius);
+    const tMin=Math.min(...temps), tMax=Math.max(...temps);
+    const range=tMax-tMin||1;
+
+    let bars='';
+    for(const t of temps){
+      const h=Math.max(4, ((t-tMin)/range)*56);
+      bars+=`<div class="spark-bar" style="height:${h}px" title="${t.toFixed(1)}\u00b0F"></div>`;
+    }
+
+    el.innerHTML=`
+      <div class="reading-row">
+        <div><span class="reading-label">Temperature</span><br><span class="reading-value">${temp}&deg;F</span></div>
+        <div style="text-align:right"><span class="reading-label">Humidity</span><br><span class="reading-value">${hum}%</span></div>
+      </div>
+      <div class="sparkline">${bars}</div>
+      <div style="text-align:center;font-size:.7rem;color:#aaa;margin-top:.3rem">Last 60 min</div>
+    `;
+  }
+
+  // ----- Alerts panel (every 30s) -----
+  async function pollAlerts(){
+    const data=await api('/api/alerts?minutes=120');
+    const el=$('alerts-panel');
+    if(!data || data.length===0){
+      el.innerHTML='<div class="no-data">No recent alerts</div>';
+      return;
+    }
+    let html='';
+    for(const a of data.slice(0,10)){
+      const cls=a.severity==='Critical'?'critical':'warning';
+      const time=a.timestamp?a.timestamp.split(' ').pop()||'':'';
+      html+=`<div class="alert-item ${cls}"><span class="alert-time">${time}</span>${a.message}</div>`;
+    }
+    el.innerHTML=html;
+  }
+
+  // ----- Flock overview (every 60s) -----
+  async function pollFlock(){
+    const d=await api('/api/flock/summary');
+    const el=$('flock-panel');
+    if(!d){
+      el.innerHTML='<div class="no-data">No flock data</div>';
+      return;
+    }
+    let blines='';
+    if(d.bloodlines && d.bloodlines.length>0){
+      for(const b of d.bloodlines){
+        blines+=`<div class="bloodline-row"><span>${b.name}</span><span>${b.count}</span></div>`;
+      }
+    }
+    el.innerHTML=`
+      <div class="stat-grid">
+        <div class="stat-box"><div class="num">${d.total_birds}</div><div class="lbl">Total</div></div>
+        <div class="stat-box"><div class="num">${d.active_birds}</div><div class="lbl">Active</div></div>
+        <div class="stat-box"><div class="num">${d.males}</div><div class="lbl">Males</div></div>
+        <div class="stat-box"><div class="num">${d.females}</div><div class="lbl">Females</div></div>
+      </div>
+      ${blines?`<div class="bloodline-list"><div style="font-size:.75rem;color:#999;margin-top:.5rem;margin-bottom:.25rem">BLOODLINES</div>${blines}</div>`:''}
+    `;
+  }
+
+  // ----- Clutch tracker (every 60s) -----
+  async function pollClutches(){
+    const data=await api('/api/clutches');
+    const el=$('clutch-panel');
+    if(!data || data.length===0){
+      el.innerHTML='<div class="no-data">No clutches yet</div>';
+      return;
+    }
+    const now=new Date();
+    let html='';
+    for(const c of data){
+      if(c.status!=='Incubating') continue;
+      const setD=new Date(c.set_date+'T00:00:00');
+      const hatchD=new Date(c.expected_hatch_date+'T00:00:00');
+      const totalDays=17;
+      const elapsed=Math.max(0,(now-setD)/(86400000));
+      const remaining=Math.max(0,Math.ceil((hatchD-now)/86400000));
+      const pct=Math.min(100,(elapsed/totalDays)*100);
+
+      let cls='early';
+      if(pct>=70) cls='late';
+      else if(pct>=40) cls='mid';
+
+      const eggs=c.eggs_set;
+      const fertile=c.eggs_fertile!=null?c.eggs_fertile:'?';
+
+      html+=`
+        <div class="clutch-card">
+          <div class="clutch-label">Clutch #${c.id} &mdash; ${eggs} eggs (${fertile} fertile)</div>
+          <div class="progress-bar"><div class="progress-fill ${cls}" style="width:${pct.toFixed(0)}%"></div></div>
+          <div class="clutch-info"><span>Day ${Math.floor(elapsed)} of 17</span><span>${remaining} days left</span></div>
+        </div>
+      `;
+    }
+    if(!html) html='<div class="no-data">No incubating clutches</div>';
+    el.innerHTML=html;
+  }
+
+  // ----- Breeding panel (every 60s) -----
+  async function pollBreeding(){
+    const data=await api('/api/breeding/suggest');
+    const el=$('breeding-panel');
+    if(!data || data.length===0){
+      el.innerHTML='<div class="no-data">Need at least 1 male and 1 female</div>';
+      return;
+    }
+    // Show top 5 safest pairs
+    const safest=data.filter(p=>p.safe).slice(0,5);
+    const risky=data.filter(p=>!p.safe).slice(0,3);
+
+    let html='';
+    if(safest.length>0){
+      html+='<div style="font-size:.75rem;color:#999;margin-bottom:.25rem">SAFEST PAIRS</div>';
+      for(const p of safest){
+        html+=`<div class="pair-row safe-pair">
+          <span>Male #${p.male_id} &times; Female #${p.female_id}</span>
+          <span class="coeff safe">${p.coefficient.toFixed(3)}</span>
+        </div>`;
+      }
+    }
+    if(risky.length>0){
+      html+=`<div style="font-size:.75rem;color:#999;margin-top:.5rem;margin-bottom:.25rem">RISKY PAIRS</div>`;
+      for(const p of risky){
+        html+=`<div class="pair-row risky-pair">
+          <span>Male #${p.male_id} &times; Female #${p.female_id}</span>
+          <span class="coeff risky">${p.coefficient.toFixed(3)}</span>
+        </div>`;
+      }
+    }
+    if(!html) html='<div class="no-data">No pairs to display</div>';
+    el.innerHTML=html;
+  }
+
+  // ----- System panel (every 30s) -----
+  function gaugeColor(pct){
+    if(pct>85) return 'var(--danger)';
+    if(pct>60) return 'var(--warning)';
+    return 'var(--sage)';
+  }
+
+  async function pollSystem(){
+    const d=await api('/api/system/latest');
+    const el=$('system-panel');
+    if(!d){
+      el.innerHTML='<div class="no-data">No system metrics yet</div>';
+      return;
+    }
+    const cpu=d.cpu_usage_percent.toFixed(1);
+    const memPct=((d.memory_used_bytes/d.memory_total_bytes)*100).toFixed(1);
+    const diskPct=((d.disk_used_bytes/d.disk_total_bytes)*100).toFixed(1);
+    const memMB=(d.memory_used_bytes/1048576).toFixed(0);
+    const memTotalMB=(d.memory_total_bytes/1048576).toFixed(0);
+    const diskGB=(d.disk_used_bytes/1073741824).toFixed(1);
+    const diskTotalGB=(d.disk_total_bytes/1073741824).toFixed(1);
+
+    const uptimeH=Math.floor(d.uptime_seconds/3600);
+    const uptimeM=Math.floor((d.uptime_seconds%3600)/60);
+
+    el.innerHTML=`
+      <div class="gauge-row">
+        <div class="gauge-label">CPU</div>
+        <div class="gauge-track"><div class="gauge-fill" style="width:${cpu}%;background:${gaugeColor(cpu)}"></div></div>
+        <div class="gauge-pct">${cpu}%</div>
+      </div>
+      <div class="gauge-row">
+        <div class="gauge-label">RAM</div>
+        <div class="gauge-track"><div class="gauge-fill" style="width:${memPct}%;background:${gaugeColor(memPct)}"></div></div>
+        <div class="gauge-pct">${memPct}%</div>
+      </div>
+      <div class="gauge-row">
+        <div class="gauge-label">Disk</div>
+        <div class="gauge-track"><div class="gauge-fill" style="width:${diskPct}%;background:${gaugeColor(diskPct)}"></div></div>
+        <div class="gauge-pct">${diskPct}%</div>
+      </div>
+      <div style="text-align:center;font-size:.75rem;color:#999;margin-top:.4rem">
+        ${memMB}/${memTotalMB} MB &bull; ${diskGB}/${diskTotalGB} GB &bull; Up ${uptimeH}h ${uptimeM}m
+      </div>
+    `;
+  }
+
+  // ----- Boot -----
+  function init(){
+    pollStatus();  pollBrooder();  pollAlerts();
+    pollFlock();   pollClutches(); pollBreeding();  pollSystem();
+
+    setInterval(pollStatus,  10000);
+    setInterval(pollBrooder, 30000);
+    setInterval(pollAlerts,  30000);
+    setInterval(pollSystem,  30000);
+    setInterval(pollFlock,   60000);
+    setInterval(pollClutches,60000);
+    setInterval(pollBreeding,60000);
+  }
+
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',init);
+  else init();
+})();
+</script>
+</body>
+</html>

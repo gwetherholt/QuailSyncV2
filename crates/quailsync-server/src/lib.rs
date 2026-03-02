@@ -5,8 +5,8 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Path, Query, State,
     },
-    http::StatusCode,
-    response::{IntoResponse, Response},
+    http::{header, StatusCode, Uri},
+    response::{Html, IntoResponse, Response},
     routing::get,
     Json, Router,
 };
@@ -17,8 +17,17 @@ use quailsync_common::{
     ClutchStatus, CreateBird, CreateBloodline, CreateBreedingPair, CreateClutch,
     InbreedingCoefficient, Sex, Severity, Species, SystemMetrics, TelemetryPayload, UpdateClutch,
 };
+use rust_embed::Embed;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+
+// ---------------------------------------------------------------------------
+// Embedded dashboard assets
+// ---------------------------------------------------------------------------
+
+#[derive(Embed)]
+#[folder = "../../dashboard/"]
+struct Asset;
 
 // ---------------------------------------------------------------------------
 // App state
@@ -999,6 +1008,36 @@ async fn breeding_suggest(State(state): State<AppState>) -> Json<Vec<InbreedingC
 }
 
 // ---------------------------------------------------------------------------
+// Dashboard: embedded static files
+// ---------------------------------------------------------------------------
+
+async fn static_handler(uri: Uri) -> impl IntoResponse {
+    let path = uri.path().trim_start_matches('/');
+
+    // Serve the requested file, or fall back to index.html for SPA-style routing
+    let path = if path.is_empty() { "index.html" } else { path };
+
+    match Asset::get(path) {
+        Some(content) => {
+            let mime = mime_guess::from_path(path).first_or_octet_stream();
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, mime.as_ref())],
+                content.data.into_owned(),
+            )
+                .into_response()
+        }
+        None => {
+            // Fallback: serve index.html for any non-API path (SPA support)
+            match Asset::get("index.html") {
+                Some(content) => Html(content.data.into_owned()).into_response(),
+                None => (StatusCode::NOT_FOUND, "not found").into_response(),
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Public: build the app
 // ---------------------------------------------------------------------------
 
@@ -1018,5 +1057,6 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/clutches/{id}", axum::routing::put(update_clutch))
         .route("/api/flock/summary", get(flock_summary))
         .route("/api/breeding/suggest", get(breeding_suggest))
+        .fallback(static_handler)
         .with_state(state)
 }

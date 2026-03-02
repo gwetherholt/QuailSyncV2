@@ -16,6 +16,8 @@ axum.workspace = true
 chrono.workspace = true
 rusqlite.workspace = true
 colored.workspace = true
+rust-embed.workspace = true
+mime_guess.workspace = true
 
 [dev-dependencies]
 reqwest.workspace = true
