@@ -13,10 +13,13 @@ use axum::{
 use chrono::{DateTime, NaiveDate, Utc};
 use colored::Colorize;
 use quailsync_common::{
-    Alert, AlertConfig, Bird, BirdStatus, Bloodline, BreedingPair, BrooderReading, Clutch,
-    ClutchStatus, CreateBird, CreateBloodline, CreateBreedingPair, CreateClutch,
-    InbreedingCoefficient, Sex, Severity, Species, SystemMetrics, TelemetryPayload, UpdateBird,
-    UpdateClutch,
+    Alert, AlertConfig, Bird, BirdStatus, Bloodline, BreedingGroup, BreedingPair, BrooderReading,
+    Clutch, ClutchStatus, CreateBird, CreateBloodline, CreateBreedingGroup, CreateBreedingPair,
+    CreateClutch, CreateProcessingRecord, CreateWeightRecord, CullReason, CullRecommendation,
+    InbreedingCoefficient, ProcessingRecord, ProcessingReason, ProcessingStatus, Sex, Severity,
+    Species, SystemMetrics, TelemetryPayload, UpdateBird, UpdateClutch, UpdateProcessingRecord,
+    WeightRecord, COTURNIX_MIN_BREEDING_WEIGHT_GRAMS, MAX_FEMALES_PER_MALE,
+    MIN_FEMALES_PER_MALE,
 };
 use rust_embed::Embed;
 use rusqlite::{params, Connection};
@@ -121,6 +124,39 @@ pub fn init_db(conn: &Connection) {
             expected_hatch_date TEXT    NOT NULL,
             status              TEXT    NOT NULL DEFAULT 'Incubating',
             notes               TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS weight_records (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            bird_id      INTEGER NOT NULL REFERENCES birds(id),
+            weight_grams REAL    NOT NULL,
+            date         TEXT    NOT NULL,
+            notes        TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS processing_records (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            bird_id            INTEGER NOT NULL REFERENCES birds(id),
+            reason             TEXT    NOT NULL,
+            scheduled_date     TEXT    NOT NULL,
+            processed_date     TEXT,
+            final_weight_grams REAL,
+            status             TEXT    NOT NULL DEFAULT 'Scheduled',
+            notes              TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS breeding_groups (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT    NOT NULL,
+            male_id    INTEGER NOT NULL REFERENCES birds(id),
+            start_date TEXT    NOT NULL,
+            notes      TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS breeding_group_members (
+            group_id  INTEGER NOT NULL REFERENCES breeding_groups(id),
+            female_id INTEGER NOT NULL REFERENCES birds(id),
+            PRIMARY KEY (group_id, female_id)
         );",
     )
     .expect("failed to create tables");
@@ -1071,6 +1107,526 @@ async fn breeding_suggest(State(state): State<AppState>) -> Json<Vec<InbreedingC
 }
 
 // ---------------------------------------------------------------------------
+// Weight tracking
+// ---------------------------------------------------------------------------
+
+async fn create_weight(
+    State(state): State<AppState>,
+    Path(bird_id): Path<i64>,
+    Json(body): Json<CreateWeightRecord>,
+) -> impl IntoResponse {
+    let conn = state.db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO weight_records (bird_id, weight_grams, date, notes) VALUES (?1, ?2, ?3, ?4)",
+        params![bird_id, body.weight_grams, body.date.to_string(), body.notes],
+    )
+    .unwrap();
+    let id = conn.last_insert_rowid();
+    (
+        StatusCode::CREATED,
+        Json(WeightRecord {
+            id,
+            bird_id,
+            weight_grams: body.weight_grams,
+            date: body.date,
+            notes: body.notes,
+        }),
+    )
+}
+
+async fn list_weights(
+    State(state): State<AppState>,
+    Path(bird_id): Path<i64>,
+) -> Json<Vec<WeightRecord>> {
+    let conn = state.db.lock().unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, bird_id, weight_grams, date, notes FROM weight_records
+             WHERE bird_id = ?1 ORDER BY date DESC",
+        )
+        .unwrap();
+    let rows: Vec<WeightRecord> = stmt
+        .query_map(params![bird_id], |row| {
+            let date_str: String = row.get(3)?;
+            Ok(WeightRecord {
+                id: row.get(0)?,
+                bird_id: row.get(1)?,
+                weight_grams: row.get(2)?,
+                date: NaiveDate::parse_from_str(&date_str, "%Y-%m-%d").unwrap_or_default(),
+                notes: row.get(4)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+    Json(rows)
+}
+
+// ---------------------------------------------------------------------------
+// Processing queue
+// ---------------------------------------------------------------------------
+
+fn processing_reason_to_str(r: &ProcessingReason) -> &'static str {
+    match r {
+        ProcessingReason::ExcessMale => "ExcessMale",
+        ProcessingReason::LowWeight => "LowWeight",
+        ProcessingReason::PoorGenetics => "PoorGenetics",
+        ProcessingReason::Age => "Age",
+        ProcessingReason::Other => "Other",
+    }
+}
+
+fn str_to_processing_reason(s: &str) -> ProcessingReason {
+    match s {
+        "ExcessMale" => ProcessingReason::ExcessMale,
+        "LowWeight" => ProcessingReason::LowWeight,
+        "PoorGenetics" => ProcessingReason::PoorGenetics,
+        "Age" => ProcessingReason::Age,
+        _ => ProcessingReason::Other,
+    }
+}
+
+fn processing_status_to_str(s: &ProcessingStatus) -> &'static str {
+    match s {
+        ProcessingStatus::Scheduled => "Scheduled",
+        ProcessingStatus::Completed => "Completed",
+        ProcessingStatus::Cancelled => "Cancelled",
+    }
+}
+
+fn str_to_processing_status(s: &str) -> ProcessingStatus {
+    match s {
+        "Completed" => ProcessingStatus::Completed,
+        "Cancelled" => ProcessingStatus::Cancelled,
+        _ => ProcessingStatus::Scheduled,
+    }
+}
+
+fn row_to_processing_record(row: &rusqlite::Row) -> rusqlite::Result<ProcessingRecord> {
+    let reason_str: String = row.get(2)?;
+    let sched_str: String = row.get(3)?;
+    let proc_str: Option<String> = row.get(4)?;
+    let status_str: String = row.get(6)?;
+    Ok(ProcessingRecord {
+        id: row.get(0)?,
+        bird_id: row.get(1)?,
+        reason: str_to_processing_reason(&reason_str),
+        scheduled_date: NaiveDate::parse_from_str(&sched_str, "%Y-%m-%d").unwrap_or_default(),
+        processed_date: proc_str
+            .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok()),
+        final_weight_grams: row.get(5)?,
+        status: str_to_processing_status(&status_str),
+        notes: row.get(7)?,
+    })
+}
+
+async fn create_processing(
+    State(state): State<AppState>,
+    Json(body): Json<CreateProcessingRecord>,
+) -> impl IntoResponse {
+    let conn = state.db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO processing_records (bird_id, reason, scheduled_date, notes) VALUES (?1, ?2, ?3, ?4)",
+        params![
+            body.bird_id,
+            processing_reason_to_str(&body.reason),
+            body.scheduled_date.to_string(),
+            body.notes,
+        ],
+    )
+    .unwrap();
+    let id = conn.last_insert_rowid();
+    (
+        StatusCode::CREATED,
+        Json(ProcessingRecord {
+            id,
+            bird_id: body.bird_id,
+            reason: body.reason,
+            scheduled_date: body.scheduled_date,
+            processed_date: None,
+            final_weight_grams: None,
+            status: ProcessingStatus::Scheduled,
+            notes: body.notes,
+        }),
+    )
+}
+
+async fn update_processing(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<UpdateProcessingRecord>,
+) -> impl IntoResponse {
+    let conn = state.db.lock().unwrap();
+
+    let exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_records WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|c| c > 0)
+        .unwrap_or(false);
+
+    if !exists {
+        return (StatusCode::NOT_FOUND, Json(None::<ProcessingRecord>)).into_response();
+    }
+
+    if let Some(ref d) = body.processed_date {
+        conn.execute(
+            "UPDATE processing_records SET processed_date = ?1 WHERE id = ?2",
+            params![d.to_string(), id],
+        )
+        .unwrap();
+    }
+    if let Some(w) = body.final_weight_grams {
+        conn.execute(
+            "UPDATE processing_records SET final_weight_grams = ?1 WHERE id = ?2",
+            params![w, id],
+        )
+        .unwrap();
+    }
+    if let Some(ref s) = body.status {
+        conn.execute(
+            "UPDATE processing_records SET status = ?1 WHERE id = ?2",
+            params![processing_status_to_str(s), id],
+        )
+        .unwrap();
+    }
+    if let Some(ref n) = body.notes {
+        conn.execute(
+            "UPDATE processing_records SET notes = ?1 WHERE id = ?2",
+            params![n, id],
+        )
+        .unwrap();
+    }
+
+    let rec = conn
+        .query_row(
+            "SELECT id, bird_id, reason, scheduled_date, processed_date, final_weight_grams, status, notes
+             FROM processing_records WHERE id = ?1",
+            params![id],
+            row_to_processing_record,
+        )
+        .unwrap();
+
+    (StatusCode::OK, Json(Some(rec))).into_response()
+}
+
+async fn list_processing(State(state): State<AppState>) -> Json<Vec<ProcessingRecord>> {
+    let conn = state.db.lock().unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, bird_id, reason, scheduled_date, processed_date, final_weight_grams, status, notes
+             FROM processing_records ORDER BY id",
+        )
+        .unwrap();
+    let rows: Vec<ProcessingRecord> = stmt
+        .query_map([], row_to_processing_record)
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+    Json(rows)
+}
+
+async fn list_processing_queue(State(state): State<AppState>) -> Json<Vec<ProcessingRecord>> {
+    let conn = state.db.lock().unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, bird_id, reason, scheduled_date, processed_date, final_weight_grams, status, notes
+             FROM processing_records WHERE status = 'Scheduled' ORDER BY scheduled_date",
+        )
+        .unwrap();
+    let rows: Vec<ProcessingRecord> = stmt
+        .query_map([], row_to_processing_record)
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+    Json(rows)
+}
+
+// ---------------------------------------------------------------------------
+// Breeding groups
+// ---------------------------------------------------------------------------
+
+async fn create_breeding_group(
+    State(state): State<AppState>,
+    Json(body): Json<CreateBreedingGroup>,
+) -> impl IntoResponse {
+    let count = body.female_ids.len();
+    let warning = if count < MIN_FEMALES_PER_MALE || count > MAX_FEMALES_PER_MALE {
+        Some(format!(
+            "Warning: {count} females per male is outside the recommended {MIN_FEMALES_PER_MALE}-{MAX_FEMALES_PER_MALE} range"
+        ))
+    } else {
+        None
+    };
+
+    let conn = state.db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO breeding_groups (name, male_id, start_date, notes) VALUES (?1, ?2, ?3, ?4)",
+        params![body.name, body.male_id, body.start_date.to_string(), body.notes],
+    )
+    .unwrap();
+    let id = conn.last_insert_rowid();
+
+    for fid in &body.female_ids {
+        conn.execute(
+            "INSERT INTO breeding_group_members (group_id, female_id) VALUES (?1, ?2)",
+            params![id, fid],
+        )
+        .unwrap();
+    }
+
+    #[derive(Serialize)]
+    struct BreedingGroupResponse {
+        #[serde(flatten)]
+        group: BreedingGroup,
+        warning: Option<String>,
+    }
+
+    (
+        StatusCode::CREATED,
+        Json(BreedingGroupResponse {
+            group: BreedingGroup {
+                id,
+                name: body.name,
+                male_id: body.male_id,
+                female_ids: body.female_ids,
+                start_date: body.start_date,
+                notes: body.notes,
+            },
+            warning,
+        }),
+    )
+}
+
+async fn list_breeding_groups(State(state): State<AppState>) -> Json<Vec<BreedingGroup>> {
+    let conn = state.db.lock().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT id, name, male_id, start_date, notes FROM breeding_groups ORDER BY id")
+        .unwrap();
+    let groups: Vec<(i64, String, i64, String, Option<String>)> = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get::<_, String>(3)?,
+                row.get(4)?,
+            ))
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let mut result = Vec::new();
+    for (id, name, male_id, start_str, notes) in groups {
+        let mut fstmt = conn
+            .prepare("SELECT female_id FROM breeding_group_members WHERE group_id = ?1")
+            .unwrap();
+        let female_ids: Vec<i64> = fstmt
+            .query_map(params![id], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        result.push(BreedingGroup {
+            id,
+            name,
+            male_id,
+            female_ids,
+            start_date: NaiveDate::parse_from_str(&start_str, "%Y-%m-%d").unwrap_or_default(),
+            notes,
+        });
+    }
+    Json(result)
+}
+
+async fn get_breeding_group(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let conn = state.db.lock().unwrap();
+    let group = conn.query_row(
+        "SELECT id, name, male_id, start_date, notes FROM breeding_groups WHERE id = ?1",
+        params![id],
+        |row| {
+            let start_str: String = row.get(3)?;
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                start_str,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        },
+    );
+
+    match group {
+        Ok((gid, name, male_id, start_str, notes)) => {
+            let mut fstmt = conn
+                .prepare("SELECT female_id FROM breeding_group_members WHERE group_id = ?1")
+                .unwrap();
+            let female_ids: Vec<i64> = fstmt
+                .query_map(params![gid], |row| row.get(0))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect();
+            (
+                StatusCode::OK,
+                Json(Some(BreedingGroup {
+                    id: gid,
+                    name,
+                    male_id,
+                    female_ids,
+                    start_date: NaiveDate::parse_from_str(&start_str, "%Y-%m-%d")
+                        .unwrap_or_default(),
+                    notes,
+                })),
+            )
+                .into_response()
+        }
+        Err(_) => (StatusCode::NOT_FOUND, Json(None::<BreedingGroup>)).into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cull recommendations
+// ---------------------------------------------------------------------------
+
+async fn cull_recommendations(State(state): State<AppState>) -> Json<Vec<CullRecommendation>> {
+    let conn = state.db.lock().unwrap();
+    let mut recs: Vec<CullRecommendation> = Vec::new();
+
+    // 1. Excess males: ideal males = ceil(active_females / MAX_FEMALES_PER_MALE)
+    let active_females: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM birds WHERE sex = 'Female' AND status = 'Active'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    let ideal_males = if active_females > 0 {
+        ((active_females as f64) / (MAX_FEMALES_PER_MALE as f64)).ceil() as i64
+    } else {
+        0
+    };
+
+    let mut male_stmt = conn
+        .prepare(
+            "SELECT id FROM birds WHERE sex = 'Male' AND status = 'Active' ORDER BY id DESC",
+        )
+        .unwrap();
+    let active_male_ids: Vec<i64> = male_stmt
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let surplus = (active_male_ids.len() as i64) - ideal_males;
+    if surplus > 0 {
+        for &mid in active_male_ids.iter().take(surplus as usize) {
+            recs.push(CullRecommendation {
+                bird_id: mid,
+                reason: CullReason::ExcessMale,
+            });
+        }
+    }
+
+    // 2. Low-weight females: latest weight < MIN_BREEDING_WEIGHT
+    let mut fw_stmt = conn
+        .prepare(
+            "SELECT b.id, w.weight_grams FROM birds b
+             JOIN weight_records w ON w.bird_id = b.id
+             WHERE b.sex = 'Female' AND b.status = 'Active'
+               AND w.id = (SELECT w2.id FROM weight_records w2 WHERE w2.bird_id = b.id ORDER BY w2.date DESC LIMIT 1)",
+        )
+        .unwrap();
+    let low_weight: Vec<(i64, f64)> = fw_stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .filter(|(_, w)| *w < COTURNIX_MIN_BREEDING_WEIGHT_GRAMS)
+        .collect();
+
+    for (bid, w) in low_weight {
+        recs.push(CullRecommendation {
+            bird_id: bid,
+            reason: CullReason::LowWeight { weight_grams: w },
+        });
+    }
+
+    // 3. High inbreeding risk: birds with no safe pairing options
+    let mut bird_stmt = conn
+        .prepare(
+            "SELECT id, sex, bloodline_id, mother_id, father_id
+             FROM birds WHERE status = 'Active'",
+        )
+        .unwrap();
+    let all_birds: Vec<BirdRecord> = bird_stmt
+        .query_map([], |row| {
+            let sex_str: String = row.get(1)?;
+            Ok(BirdRecord {
+                id: row.get(0)?,
+                sex: str_to_sex(&sex_str),
+                bloodline_id: row.get(2)?,
+                mother_id: row.get(3)?,
+                father_id: row.get(4)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let males: Vec<&BirdRecord> = all_birds.iter().filter(|b| b.sex == Sex::Male).collect();
+    let females: Vec<&BirdRecord> = all_birds.iter().filter(|b| b.sex == Sex::Female).collect();
+
+    // Check males with no safe female pairing
+    for m in &males {
+        let has_safe = females
+            .iter()
+            .any(|f| compute_relatedness(m, f) < 0.0625);
+        if !has_safe && !females.is_empty() {
+            let worst = females
+                .iter()
+                .map(|f| compute_relatedness(m, f))
+                .fold(0.0_f64, f64::max);
+            if !recs.iter().any(|r| r.bird_id == m.id) {
+                recs.push(CullRecommendation {
+                    bird_id: m.id,
+                    reason: CullReason::HighInbreeding {
+                        coefficient: worst,
+                    },
+                });
+            }
+        }
+    }
+
+    // Check females with no safe male pairing
+    for f in &females {
+        let has_safe = males
+            .iter()
+            .any(|m| compute_relatedness(m, f) < 0.0625);
+        if !has_safe && !males.is_empty() {
+            let worst = males
+                .iter()
+                .map(|m| compute_relatedness(m, f))
+                .fold(0.0_f64, f64::max);
+            if !recs.iter().any(|r| r.bird_id == f.id) {
+                recs.push(CullRecommendation {
+                    bird_id: f.id,
+                    reason: CullReason::HighInbreeding {
+                        coefficient: worst,
+                    },
+                });
+            }
+        }
+    }
+
+    Json(recs)
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard: embedded static files
 // ---------------------------------------------------------------------------
 
@@ -1116,10 +1672,18 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/bloodlines", get(list_bloodlines).post(create_bloodline))
         .route("/api/birds", get(list_birds).post(create_bird))
         .route("/api/birds/{id}", axum::routing::put(update_bird))
+        .route("/api/birds/{id}/weight", axum::routing::post(create_weight))
+        .route("/api/birds/{id}/weights", get(list_weights))
         .route("/api/breeding-pairs", get(list_breeding_pairs).post(create_breeding_pair))
         .route("/api/clutches", get(list_clutches).post(create_clutch))
         .route("/api/clutches/{id}", axum::routing::put(update_clutch))
+        .route("/api/processing", get(list_processing).post(create_processing))
+        .route("/api/processing/queue", get(list_processing_queue))
+        .route("/api/processing/{id}", axum::routing::put(update_processing))
+        .route("/api/breeding-groups", get(list_breeding_groups).post(create_breeding_group))
+        .route("/api/breeding-groups/{id}", get(get_breeding_group))
         .route("/api/flock/summary", get(flock_summary))
+        .route("/api/flock/cull-recommendations", get(cull_recommendations))
         .route("/api/breeding/suggest", get(breeding_suggest))
         .fallback(static_handler)
         .with_state(state)

@@ -2,9 +2,11 @@ use chrono::{Local, NaiveDate};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use quailsync_common::{
-    Alert, Bird, BirdStatus, Bloodline, BrooderReading, Clutch, ClutchStatus, CreateBird,
-    CreateBloodline, CreateClutch, InbreedingCoefficient, Sex, Severity, SystemMetrics,
-    UpdateClutch,
+    Alert, Bird, BirdStatus, Bloodline, BreedingGroup, BrooderReading, Clutch, ClutchStatus,
+    CreateBird, CreateBloodline, CreateBreedingGroup, CreateClutch, CreateProcessingRecord,
+    CreateWeightRecord, CullReason, CullRecommendation, InbreedingCoefficient, ProcessingRecord,
+    ProcessingReason, ProcessingStatus, Sex, Severity, SystemMetrics, UpdateClutch,
+    UpdateProcessingRecord, WeightRecord, COTURNIX_BUTCHER_WEIGHT_GRAMS,
 };
 use serde::Deserialize;
 
@@ -62,12 +64,69 @@ enum Commands {
         #[command(subcommand)]
         action: BreedingAction,
     },
+    /// Processing queue
+    Processing {
+        #[command(subcommand)]
+        action: ProcessingAction,
+    },
 }
 
 #[derive(Subcommand)]
 enum BreedingAction {
     /// Suggest breeding pairs based on inbreeding coefficients
     Suggest,
+    /// Manage breeding groups
+    Group {
+        #[command(subcommand)]
+        action: BreedingGroupAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum BreedingGroupAction {
+    /// Create a breeding group
+    Create {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        male: i64,
+        /// Comma-separated list of female bird IDs
+        #[arg(long)]
+        females: String,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// List all breeding groups
+    List,
+}
+
+#[derive(Subcommand)]
+enum ProcessingAction {
+    /// Schedule a bird for processing
+    Schedule {
+        #[arg(long)]
+        bird: i64,
+        /// Reason: excess-male, low-weight, poor-genetics, age, other
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        date: Option<String>,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// Complete a processing record
+    Complete {
+        #[arg(long)]
+        id: i64,
+        #[arg(long)]
+        weight: Option<f64>,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// List all processing records
+    List,
+    /// Show scheduled processing queue
+    Queue,
 }
 
 #[derive(Subcommand)]
@@ -108,12 +167,28 @@ enum BirdAction {
     },
     /// List all birds
     List,
+    /// Record a bird's weight
+    Weigh {
+        #[arg(long)]
+        id: i64,
+        #[arg(long)]
+        grams: f64,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// Show weight history and growth trend for a bird
+    Growth {
+        #[arg(long)]
+        id: i64,
+    },
 }
 
 #[derive(Subcommand)]
 enum FlockAction {
     /// Show flock summary
     Summary,
+    /// Show cull recommendations
+    CullReview,
 }
 
 #[derive(Subcommand)]
@@ -841,6 +916,482 @@ async fn cmd_breeding_suggest(base: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Weight & Growth commands
+// ---------------------------------------------------------------------------
+
+async fn cmd_bird_weigh(base: &str, id: i64, grams: f64, notes: Option<String>) -> anyhow::Result<()> {
+    let today = Local::now().date_naive();
+    let body = CreateWeightRecord {
+        weight_grams: grams,
+        date: today,
+        notes,
+    };
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/birds/{id}/weight"))
+        .json(&body)
+        .send()
+        .await?;
+    let rec: WeightRecord = resp.json().await?;
+    println!(
+        "{} weight record for bird #{}: {:.1}g on {}",
+        "Recorded".green().bold(),
+        rec.bird_id,
+        rec.weight_grams,
+        rec.date,
+    );
+    Ok(())
+}
+
+async fn cmd_bird_growth(base: &str, id: i64) -> anyhow::Result<()> {
+    let weights: Vec<WeightRecord> = reqwest::get(format!("{base}/api/birds/{id}/weights"))
+        .await?
+        .json()
+        .await?;
+
+    if weights.is_empty() {
+        println!("{}", "No weight records for this bird.".dimmed());
+        return Ok(());
+    }
+
+    println!("{}", format!("Growth History — Bird #{id}").bold().underline());
+    println!();
+    println!(
+        "  {:<12} {:>10} {}",
+        "Date".bold(),
+        "Weight (g)".bold(),
+        "Notes".bold(),
+    );
+    println!("  {}", "-".repeat(50));
+
+    for w in &weights {
+        println!(
+            "  {:<12} {:>10.1} {}",
+            w.date,
+            w.weight_grams,
+            w.notes.as_deref().unwrap_or(""),
+        );
+    }
+
+    // Trend from last 3 readings (weights are date DESC)
+    if weights.len() >= 2 {
+        println!();
+        let latest = weights[0].weight_grams;
+        let previous = weights[1].weight_grams;
+        let diff = latest - previous;
+
+        let trend = if diff > 5.0 {
+            format!("^ Gaining (+{:.1}g)", diff).green().to_string()
+        } else if diff < -5.0 {
+            format!("v Losing ({:.1}g)", diff).red().to_string()
+        } else {
+            format!("- Stable ({:+.1}g)", diff).yellow().to_string()
+        };
+
+        println!("  Trend: {}", trend);
+    }
+
+    // Compare to butcher weight
+    let latest = weights[0].weight_grams;
+    let pct = (latest / COTURNIX_BUTCHER_WEIGHT_GRAMS) * 100.0;
+    println!();
+    if latest >= COTURNIX_BUTCHER_WEIGHT_GRAMS {
+        println!(
+            "  {} Butcher weight reached ({:.1}g / {:.0}g = {:.0}%)",
+            ">>>".green().bold(),
+            latest,
+            COTURNIX_BUTCHER_WEIGHT_GRAMS,
+            pct,
+        );
+    } else {
+        let remaining = COTURNIX_BUTCHER_WEIGHT_GRAMS - latest;
+        println!(
+            "  Butcher weight: {:.1}g / {:.0}g ({:.0}%) — {:.1}g to go",
+            latest, COTURNIX_BUTCHER_WEIGHT_GRAMS, pct, remaining,
+        );
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Processing commands
+// ---------------------------------------------------------------------------
+
+fn parse_processing_reason(s: &str) -> ProcessingReason {
+    match s.to_lowercase().replace('_', "-").as_str() {
+        "excess-male" | "excessmale" => ProcessingReason::ExcessMale,
+        "low-weight" | "lowweight" => ProcessingReason::LowWeight,
+        "poor-genetics" | "poorgenetics" => ProcessingReason::PoorGenetics,
+        "age" => ProcessingReason::Age,
+        _ => ProcessingReason::Other,
+    }
+}
+
+async fn cmd_processing_schedule(
+    base: &str,
+    bird: i64,
+    reason: String,
+    date: Option<String>,
+    notes: Option<String>,
+) -> anyhow::Result<()> {
+    let scheduled_date = match date {
+        Some(s) => NaiveDate::parse_from_str(&s, "%Y-%m-%d")?,
+        None => Local::now().date_naive(),
+    };
+    let body = CreateProcessingRecord {
+        bird_id: bird,
+        reason: parse_processing_reason(&reason),
+        scheduled_date,
+        notes,
+    };
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/processing"))
+        .json(&body)
+        .send()
+        .await?;
+    let rec: ProcessingRecord = resp.json().await?;
+    println!(
+        "{} processing #{} — bird #{}, {:?}, scheduled {}",
+        "Scheduled".green().bold(),
+        rec.id,
+        rec.bird_id,
+        rec.reason,
+        rec.scheduled_date,
+    );
+    Ok(())
+}
+
+async fn cmd_processing_complete(
+    base: &str,
+    id: i64,
+    weight: Option<f64>,
+    notes: Option<String>,
+) -> anyhow::Result<()> {
+    let today = Local::now().date_naive();
+    let body = UpdateProcessingRecord {
+        processed_date: Some(today),
+        final_weight_grams: weight,
+        status: Some(ProcessingStatus::Completed),
+        notes,
+    };
+    let resp = reqwest::Client::new()
+        .put(format!("{base}/api/processing/{id}"))
+        .json(&body)
+        .send()
+        .await?;
+
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        anyhow::bail!("processing record #{id} not found");
+    }
+
+    let rec: ProcessingRecord = resp.json().await?;
+
+    // Also mark the bird as Culled
+    let _ = reqwest::Client::new()
+        .put(format!("{base}/api/birds/{}", rec.bird_id))
+        .json(&quailsync_common::UpdateBird {
+            status: Some(BirdStatus::Culled),
+            notes: None,
+        })
+        .send()
+        .await;
+
+    println!(
+        "{} processing #{} — bird #{} marked Culled{}",
+        "Completed".green().bold(),
+        rec.id,
+        rec.bird_id,
+        weight
+            .map(|w| format!(", final weight {:.1}g", w))
+            .unwrap_or_default(),
+    );
+    Ok(())
+}
+
+async fn cmd_processing_list(base: &str) -> anyhow::Result<()> {
+    let records: Vec<ProcessingRecord> = reqwest::get(format!("{base}/api/processing"))
+        .await?
+        .json()
+        .await?;
+
+    if records.is_empty() {
+        println!("{}", "No processing records.".dimmed());
+        return Ok(());
+    }
+
+    println!("{}", "Processing Records".bold().underline());
+    println!();
+    println!(
+        "  {:<5} {:<7} {:<14} {:<12} {:<12} {:<10} {}",
+        "ID".bold(),
+        "Bird#".bold(),
+        "Reason".bold(),
+        "Scheduled".bold(),
+        "Processed".bold(),
+        "Weight".bold(),
+        "Status".bold(),
+    );
+    println!("  {}", "-".repeat(75));
+
+    for r in &records {
+        println!(
+            "  {:<5} {:<7} {:<14} {:<12} {:<12} {:<10} {:?}",
+            r.id,
+            r.bird_id,
+            format!("{:?}", r.reason),
+            r.scheduled_date,
+            r.processed_date
+                .map(|d| d.to_string())
+                .unwrap_or_else(|| "-".into()),
+            r.final_weight_grams
+                .map(|w| format!("{:.1}g", w))
+                .unwrap_or_else(|| "-".into()),
+            r.status,
+        );
+    }
+    Ok(())
+}
+
+async fn cmd_processing_queue(base: &str) -> anyhow::Result<()> {
+    let records: Vec<ProcessingRecord> = reqwest::get(format!("{base}/api/processing/queue"))
+        .await?
+        .json()
+        .await?;
+
+    if records.is_empty() {
+        println!("{}", "Processing queue is empty.".dimmed());
+        return Ok(());
+    }
+
+    println!("{}", "Processing Queue (Scheduled)".bold().underline());
+    println!();
+    println!(
+        "  {:<5} {:<7} {:<14} {:<12} {}",
+        "ID".bold(),
+        "Bird#".bold(),
+        "Reason".bold(),
+        "Scheduled".bold(),
+        "Notes".bold(),
+    );
+    println!("  {}", "-".repeat(55));
+
+    for r in &records {
+        println!(
+            "  {:<5} {:<7} {:<14} {:<12} {}",
+            r.id,
+            r.bird_id,
+            format!("{:?}", r.reason),
+            r.scheduled_date,
+            r.notes.as_deref().unwrap_or(""),
+        );
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Breeding group commands
+// ---------------------------------------------------------------------------
+
+async fn cmd_breeding_group_create(
+    base: &str,
+    name: String,
+    male: i64,
+    females_str: String,
+    notes: Option<String>,
+) -> anyhow::Result<()> {
+    let female_ids: Vec<i64> = females_str
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+
+    if female_ids.is_empty() {
+        anyhow::bail!("no valid female IDs provided");
+    }
+
+    let today = Local::now().date_naive();
+    let body = CreateBreedingGroup {
+        name,
+        male_id: male,
+        female_ids: female_ids.clone(),
+        start_date: today,
+        notes,
+    };
+
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/breeding-groups"))
+        .json(&body)
+        .send()
+        .await?;
+
+    #[derive(Deserialize)]
+    struct GroupResp {
+        id: i64,
+        name: String,
+        male_id: i64,
+        female_ids: Vec<i64>,
+        warning: Option<String>,
+    }
+
+    let g: GroupResp = resp.json().await?;
+    println!(
+        "{} breeding group #{} \"{}\" — male #{}, {} females {:?}",
+        "Created".green().bold(),
+        g.id,
+        g.name,
+        g.male_id,
+        g.female_ids.len(),
+        g.female_ids,
+    );
+    if let Some(w) = g.warning {
+        println!("  {}", w.yellow());
+    }
+    Ok(())
+}
+
+async fn cmd_breeding_group_list(base: &str) -> anyhow::Result<()> {
+    let groups: Vec<BreedingGroup> = reqwest::get(format!("{base}/api/breeding-groups"))
+        .await?
+        .json()
+        .await?;
+
+    if groups.is_empty() {
+        println!("{}", "No breeding groups.".dimmed());
+        return Ok(());
+    }
+
+    println!("{}", "Breeding Groups".bold().underline());
+    println!();
+    println!(
+        "  {:<5} {:<16} {:<8} {:<20} {:<12} {}",
+        "ID".bold(),
+        "Name".bold(),
+        "Male#".bold(),
+        "Females".bold(),
+        "Start Date".bold(),
+        "Ratio".bold(),
+    );
+    println!("  {}", "-".repeat(70));
+
+    for g in &groups {
+        let females_str = g
+            .female_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let ratio = format!("1:{}", g.female_ids.len());
+        println!(
+            "  {:<5} {:<16} {:<8} {:<20} {:<12} {}",
+            g.id, g.name, g.male_id, females_str, g.start_date, ratio,
+        );
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Cull review command
+// ---------------------------------------------------------------------------
+
+async fn cmd_flock_cull_review(base: &str) -> anyhow::Result<()> {
+    let recs: Vec<CullRecommendation> =
+        reqwest::get(format!("{base}/api/flock/cull-recommendations"))
+            .await?
+            .json()
+            .await?;
+
+    if recs.is_empty() {
+        println!("{}", "No cull recommendations — flock looks good!".green());
+        return Ok(());
+    }
+
+    // Fetch birds and bloodlines for display
+    let birds: Vec<Bird> = reqwest::get(format!("{base}/api/birds"))
+        .await?
+        .json()
+        .await?;
+    let bloodlines: Vec<Bloodline> = reqwest::get(format!("{base}/api/bloodlines"))
+        .await?
+        .json()
+        .await?;
+
+    let bird_label = |id: i64| -> String {
+        birds
+            .iter()
+            .find(|b| b.id == id)
+            .map(|b| {
+                let band = b.band_color.as_deref().unwrap_or("-");
+                let bl_name = bloodlines
+                    .iter()
+                    .find(|bl| bl.id == b.bloodline_id)
+                    .map(|bl| bl.name.as_str())
+                    .unwrap_or("?");
+                format!("#{} ({}, {})", b.id, band, bl_name)
+            })
+            .unwrap_or_else(|| format!("#{id}"))
+    };
+
+    println!("{}", "Cull Recommendations".red().bold().underline());
+    println!();
+
+    // Group by reason type
+    let excess: Vec<&CullRecommendation> = recs
+        .iter()
+        .filter(|r| matches!(r.reason, CullReason::ExcessMale))
+        .collect();
+    let low_weight: Vec<&CullRecommendation> = recs
+        .iter()
+        .filter(|r| matches!(r.reason, CullReason::LowWeight { .. }))
+        .collect();
+    let inbreeding: Vec<&CullRecommendation> = recs
+        .iter()
+        .filter(|r| matches!(r.reason, CullReason::HighInbreeding { .. }))
+        .collect();
+
+    if !excess.is_empty() {
+        println!("  {}", "EXCESS MALES".red().bold());
+        for r in &excess {
+            println!("    {} — surplus male", bird_label(r.bird_id).red());
+        }
+        println!();
+    }
+
+    if !low_weight.is_empty() {
+        println!("  {}", "LOW WEIGHT".red().bold());
+        for r in &low_weight {
+            if let CullReason::LowWeight { weight_grams } = &r.reason {
+                println!(
+                    "    {} — {:.1}g (min 200g)",
+                    bird_label(r.bird_id).red(),
+                    weight_grams,
+                );
+            }
+        }
+        println!();
+    }
+
+    if !inbreeding.is_empty() {
+        println!("  {}", "HIGH INBREEDING RISK".red().bold());
+        for r in &inbreeding {
+            if let CullReason::HighInbreeding { coefficient } = &r.reason {
+                println!(
+                    "    {} — no safe pairings (worst coeff: {:.3})",
+                    bird_label(r.bird_id).red(),
+                    coefficient,
+                );
+            }
+        }
+        println!();
+    }
+
+    println!(
+        "  {} birds flagged for review",
+        recs.len().to_string().red().bold(),
+    );
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -867,9 +1418,12 @@ async fn main() {
                 cmd_bird_add(base, band, sex, bloodline, hatch_date, mother, father, generation, notes).await
             }
             BirdAction::List => cmd_bird_list(base).await,
+            BirdAction::Weigh { id, grams, notes } => cmd_bird_weigh(base, id, grams, notes).await,
+            BirdAction::Growth { id } => cmd_bird_growth(base, id).await,
         },
         Commands::Flock { action } => match action {
             FlockAction::Summary => cmd_flock_summary(base).await,
+            FlockAction::CullReview => cmd_flock_cull_review(base).await,
         },
         Commands::Clutch { action } => match action {
             ClutchAction::Add {
@@ -883,6 +1437,22 @@ async fn main() {
         },
         Commands::Breeding { action } => match action {
             BreedingAction::Suggest => cmd_breeding_suggest(base).await,
+            BreedingAction::Group { action: ga } => match ga {
+                BreedingGroupAction::Create { name, male, females, notes } => {
+                    cmd_breeding_group_create(base, name, male, females, notes).await
+                }
+                BreedingGroupAction::List => cmd_breeding_group_list(base).await,
+            },
+        },
+        Commands::Processing { action } => match action {
+            ProcessingAction::Schedule { bird, reason, date, notes } => {
+                cmd_processing_schedule(base, bird, reason, date, notes).await
+            }
+            ProcessingAction::Complete { id, weight, notes } => {
+                cmd_processing_complete(base, id, weight, notes).await
+            }
+            ProcessingAction::List => cmd_processing_list(base).await,
+            ProcessingAction::Queue => cmd_processing_queue(base).await,
         },
     };
 

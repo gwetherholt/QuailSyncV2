@@ -187,6 +187,27 @@
   }
   .pair-row.safe-pair{background:#e8f5e9}
   .pair-row.risky-pair{background:#fce4e4}
+
+  /* --- Cull Review --- */
+  .cull-section{margin-top:1.5rem}
+  .cull-header{
+    font-size:.95rem;font-weight:700;cursor:pointer;
+    padding:.6rem .8rem;background:var(--cream);border-radius:var(--radius);
+    box-shadow:0 1px 4px rgba(0,0,0,.06);display:flex;align-items:center;gap:.5rem;
+  }
+  .cull-header .badge{
+    background:var(--danger);color:#fff;font-size:.7rem;font-weight:700;
+    padding:2px 8px;border-radius:10px;
+  }
+  .cull-body{margin-top:.5rem}
+  .cull-group-label{
+    font-size:.8rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;
+    color:var(--danger);margin:.6rem 0 .3rem;
+  }
+  .cull-row{
+    padding:.4rem .75rem;border-radius:8px;margin-bottom:.3rem;
+    background:#fce4e4;font-size:.82rem;display:flex;justify-content:space-between;
+  }
   .coeff{font-weight:600;font-size:.75rem;padding:2px 8px;border-radius:10px}
   .coeff.safe{background:var(--safe);color:#fff}
   .coeff.risky{background:var(--danger);color:#fff}
@@ -546,13 +567,16 @@
   Page.Flock = {
     filter: 'all',
     bloodlineFilter: null,
+    _cullRecs: [],
+    _cullOpen: false,
     render: function(app){
       app.innerHTML =
         '<div class="page-top"><div class="page-title">&#x1F426; Flock</div><button class="btn-primary" onclick="Page.Flock.openModal()">+ Add Bird</button></div>' +
         '<div class="filter-bar" id="flock-filters"></div>' +
         '<div class="table-wrap"><table class="data-table"><thead><tr>' +
         '<th>ID</th><th>Band</th><th>Sex</th><th>Bloodline</th><th>Hatch Date</th><th>Gen</th><th>Status</th><th>Parents</th><th>Actions</th>' +
-        '</tr></thead><tbody id="flock-tbody"></tbody></table></div>';
+        '</tr></thead><tbody id="flock-tbody"></tbody></table></div>' +
+        '<div id="cull-review-section"></div>';
     },
     start: function(){
       this.filter = 'all';
@@ -566,8 +590,11 @@
       if(bl) _bloodlines = bl;
       var birds = await API.get('/api/birds');
       if(birds) _birds = birds;
+      var cull = await API.get('/api/flock/cull-recommendations');
+      if(cull) this._cullRecs = cull; else this._cullRecs = [];
       this._renderFilters();
       this._renderTable();
+      this._renderCullReview();
     },
     _renderFilters: function(){
       var el = document.getElementById('flock-filters');
@@ -674,6 +701,59 @@
     closeModal: function(){
       var ov = document.getElementById('bird-modal-overlay');
       if(ov) ov.remove();
+    },
+    toggleCull: function(){
+      this._cullOpen = !this._cullOpen;
+      this._renderCullReview();
+    },
+    _renderCullReview: function(){
+      var el = document.getElementById('cull-review-section');
+      if(!el) return;
+      var recs = this._cullRecs;
+      if(!recs || recs.length===0){ el.innerHTML=''; return; }
+
+      var html='<div class="cull-section">';
+      html+='<div class="cull-header" onclick="Page.Flock.toggleCull()">';
+      html+=(this._cullOpen?'&#9660;':'&#9654;')+' Cull Review <span class="badge">'+recs.length+'</span></div>';
+
+      if(this._cullOpen){
+        html+='<div class="cull-body">';
+        var excess=recs.filter(function(r){return r.reason==='ExcessMale'});
+        var lowW=recs.filter(function(r){return typeof r.reason==='object'&&r.reason.LowWeight!==undefined});
+        var inbr=recs.filter(function(r){return typeof r.reason==='object'&&r.reason.HighInbreeding!==undefined});
+
+        var birdLabel=function(id){
+          var b=null;
+          _birds.forEach(function(bi){if(bi.id===id) b=bi;});
+          if(!b) return '#'+id;
+          var band=b.band_color||'-';
+          var blName='?';
+          _bloodlines.forEach(function(bl){if(bl.id===b.bloodline_id) blName=bl.name;});
+          return '#'+id+' ('+band+', '+blName+')';
+        };
+
+        if(excess.length>0){
+          html+='<div class="cull-group-label">Excess Males</div>';
+          excess.forEach(function(r){ html+='<div class="cull-row"><span>'+birdLabel(r.bird_id)+'</span><span>Surplus male</span></div>'; });
+        }
+        if(lowW.length>0){
+          html+='<div class="cull-group-label">Low Weight</div>';
+          lowW.forEach(function(r){
+            var w=r.reason.LowWeight.weight_grams;
+            html+='<div class="cull-row"><span>'+birdLabel(r.bird_id)+'</span><span>'+w.toFixed(1)+'g (min 200g)</span></div>';
+          });
+        }
+        if(inbr.length>0){
+          html+='<div class="cull-group-label">High Inbreeding Risk</div>';
+          inbr.forEach(function(r){
+            var c=r.reason.HighInbreeding.coefficient;
+            html+='<div class="cull-row"><span>'+birdLabel(r.bird_id)+'</span><span>No safe pairings (coeff: '+c.toFixed(3)+')</span></div>';
+          });
+        }
+        html+='</div>';
+      }
+      html+='</div>';
+      el.innerHTML=html;
     },
     submitBird: async function(){
       var band = document.getElementById('m-band').value.trim() || null;

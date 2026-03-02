@@ -210,6 +210,123 @@ pub struct UpdateClutch {
     pub notes: Option<String>,
 }
 
+// =========================================================================
+// Lifecycle constants
+// =========================================================================
+
+pub const COTURNIX_BUTCHER_WEIGHT_GRAMS: f64 = 250.0;
+pub const COTURNIX_MIN_BREEDING_WEIGHT_GRAMS: f64 = 200.0;
+pub const MIN_FEMALES_PER_MALE: usize = 3;
+pub const MAX_FEMALES_PER_MALE: usize = 5;
+
+// =========================================================================
+// Weight tracking
+// =========================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeightRecord {
+    pub id: i64,
+    pub bird_id: i64,
+    pub weight_grams: f64,
+    pub date: NaiveDate,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateWeightRecord {
+    pub weight_grams: f64,
+    pub date: NaiveDate,
+    pub notes: Option<String>,
+}
+
+// =========================================================================
+// Processing queue
+// =========================================================================
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProcessingReason {
+    ExcessMale,
+    LowWeight,
+    PoorGenetics,
+    Age,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProcessingStatus {
+    Scheduled,
+    Completed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessingRecord {
+    pub id: i64,
+    pub bird_id: i64,
+    pub reason: ProcessingReason,
+    pub scheduled_date: NaiveDate,
+    pub processed_date: Option<NaiveDate>,
+    pub final_weight_grams: Option<f64>,
+    pub status: ProcessingStatus,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateProcessingRecord {
+    pub bird_id: i64,
+    pub reason: ProcessingReason,
+    pub scheduled_date: NaiveDate,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateProcessingRecord {
+    pub processed_date: Option<NaiveDate>,
+    pub final_weight_grams: Option<f64>,
+    pub status: Option<ProcessingStatus>,
+    pub notes: Option<String>,
+}
+
+// =========================================================================
+// Breeding groups
+// =========================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BreedingGroup {
+    pub id: i64,
+    pub name: String,
+    pub male_id: i64,
+    pub female_ids: Vec<i64>,
+    pub start_date: NaiveDate,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateBreedingGroup {
+    pub name: String,
+    pub male_id: i64,
+    pub female_ids: Vec<i64>,
+    pub start_date: NaiveDate,
+    pub notes: Option<String>,
+}
+
+// =========================================================================
+// Cull recommendations
+// =========================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CullReason {
+    ExcessMale,
+    LowWeight { weight_grams: f64 },
+    HighInbreeding { coefficient: f64 },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CullRecommendation {
+    pub bird_id: i64,
+    pub reason: CullReason,
+}
+
 /// Inbreeding coefficient for a potential male-female pairing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InbreedingCoefficient {
