@@ -203,3 +203,12 @@ pub struct UpdateClutch {
     pub status: Option<ClutchStatus>,
     pub notes: Option<String>,
 }
+
+/// Inbreeding coefficient for a potential male-female pairing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InbreedingCoefficient {
+    pub male_id: i64,
+    pub female_id: i64,
+    pub coefficient: f64,
+    pub safe: bool,
+}

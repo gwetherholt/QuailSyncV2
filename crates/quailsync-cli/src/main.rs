@@ -2,8 +2,9 @@ use chrono::{Local, NaiveDate};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use quailsync_common::{
-    Alert, BirdStatus, Bloodline, BrooderReading, Clutch, ClutchStatus, CreateBird,
-    CreateBloodline, CreateClutch, Sex, Severity, SystemMetrics, UpdateClutch,
+    Alert, Bird, BirdStatus, Bloodline, BrooderReading, Clutch, ClutchStatus, CreateBird,
+    CreateBloodline, CreateClutch, InbreedingCoefficient, Sex, Severity, SystemMetrics,
+    UpdateClutch,
 };
 use serde::Deserialize;
 
@@ -56,6 +57,17 @@ enum Commands {
         #[command(subcommand)]
         action: ClutchAction,
     },
+    /// Breeding tools
+    Breeding {
+        #[command(subcommand)]
+        action: BreedingAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum BreedingAction {
+    /// Suggest breeding pairs based on inbreeding coefficients
+    Suggest,
 }
 
 #[derive(Subcommand)]
@@ -735,6 +747,100 @@ async fn cmd_clutch_schedule(base: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Breeding commands
+// ---------------------------------------------------------------------------
+
+async fn cmd_breeding_suggest(base: &str) -> anyhow::Result<()> {
+    let pairs: Vec<InbreedingCoefficient> =
+        reqwest::get(format!("{base}/api/breeding/suggest"))
+            .await?
+            .json()
+            .await?;
+
+    if pairs.is_empty() {
+        println!("{}", "No breeding pairs possible (need active males and females).".dimmed());
+        return Ok(());
+    }
+
+    // Fetch birds + bloodlines for display info
+    let birds: Vec<Bird> = reqwest::get(format!("{base}/api/birds"))
+        .await?
+        .json()
+        .await?;
+    let bloodlines: Vec<Bloodline> = reqwest::get(format!("{base}/api/bloodlines"))
+        .await?
+        .json()
+        .await?;
+
+    let bird_label = |id: i64| -> String {
+        birds
+            .iter()
+            .find(|b| b.id == id)
+            .map(|b| {
+                let band = b.band_color.as_deref().unwrap_or("-");
+                format!("#{} ({})", b.id, band)
+            })
+            .unwrap_or_else(|| format!("#{id}"))
+    };
+
+    let bird_bloodline_name = |id: i64| -> String {
+        birds
+            .iter()
+            .find(|b| b.id == id)
+            .and_then(|b| bloodlines.iter().find(|bl| bl.id == b.bloodline_id))
+            .map(|bl| bl.name.clone())
+            .unwrap_or_else(|| "?".into())
+    };
+
+    println!("{}", "Breeding Pair Suggestions".bold().underline());
+    println!();
+    println!(
+        "  {:<14} {:<16} {:<14} {:<16} {:<8} {}",
+        "Male".bold(),
+        "Bloodline".bold(),
+        "Female".bold(),
+        "Bloodline".bold(),
+        "Coeff".bold(),
+        "Safe".bold(),
+    );
+    println!("  {}", "-".repeat(78));
+
+    for p in &pairs {
+        let male_lbl = bird_label(p.male_id);
+        let male_bl = bird_bloodline_name(p.male_id);
+        let female_lbl = bird_label(p.female_id);
+        let female_bl = bird_bloodline_name(p.female_id);
+        let coeff_str = format!("{:.3}", p.coefficient);
+
+        let line = format!(
+            "  {:<14} {:<16} {:<14} {:<16} {:<8} {}",
+            male_lbl,
+            male_bl,
+            female_lbl,
+            female_bl,
+            coeff_str,
+            if p.safe { "YES" } else { "NO" },
+        );
+
+        if p.safe {
+            println!("{}", line.green());
+        } else {
+            println!("{}", line.red());
+        }
+    }
+
+    let safe_count = pairs.iter().filter(|p| p.safe).count();
+    println!();
+    println!(
+        "  {} safe pairs out of {} total",
+        safe_count.to_string().green().bold(),
+        pairs.len(),
+    );
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -774,6 +880,9 @@ async fn main() {
                 id, fertile, hatched, status, notes,
             } => cmd_clutch_update(base, id, fertile, hatched, status, notes).await,
             ClutchAction::Schedule => cmd_clutch_schedule(base).await,
+        },
+        Commands::Breeding { action } => match action {
+            BreedingAction::Suggest => cmd_breeding_suggest(base).await,
         },
     };
 

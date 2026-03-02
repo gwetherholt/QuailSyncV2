@@ -14,8 +14,8 @@ use chrono::{DateTime, NaiveDate, Utc};
 use colored::Colorize;
 use quailsync_common::{
     Alert, AlertConfig, Bird, BirdStatus, Bloodline, BreedingPair, BrooderReading, Clutch,
-    ClutchStatus, CreateBird, CreateBloodline, CreateBreedingPair, CreateClutch, Sex, Severity,
-    Species, SystemMetrics, TelemetryPayload, UpdateClutch,
+    ClutchStatus, CreateBird, CreateBloodline, CreateBreedingPair, CreateClutch,
+    InbreedingCoefficient, Sex, Severity, Species, SystemMetrics, TelemetryPayload, UpdateClutch,
 };
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -933,6 +933,84 @@ async fn flock_summary(State(state): State<AppState>) -> Json<FlockSummary> {
     })
 }
 
+// --- Breeding Suggestions ---
+
+/// Lightweight bird record for in-memory pairing logic.
+struct BirdRecord {
+    id: i64,
+    sex: Sex,
+    bloodline_id: i64,
+    mother_id: Option<i64>,
+    father_id: Option<i64>,
+}
+
+fn compute_relatedness(m: &BirdRecord, f: &BirdRecord) -> f64 {
+    let share_mother = match (m.mother_id, f.mother_id) {
+        (Some(a), Some(b)) if a == b => true,
+        _ => false,
+    };
+    let share_father = match (m.father_id, f.father_id) {
+        (Some(a), Some(b)) if a == b => true,
+        _ => false,
+    };
+
+    if share_mother && share_father {
+        return 0.5; // full siblings
+    }
+    if share_mother || share_father {
+        return 0.25; // half siblings
+    }
+    if m.bloodline_id == f.bloodline_id {
+        return 0.25; // same bloodline, no known shared parents
+    }
+    0.0 // different bloodlines, no shared parents
+}
+
+async fn breeding_suggest(State(state): State<AppState>) -> Json<Vec<InbreedingCoefficient>> {
+    let conn = state.db.lock().unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, sex, bloodline_id, mother_id, father_id
+             FROM birds WHERE status = 'Active'",
+        )
+        .unwrap();
+
+    let birds: Vec<BirdRecord> = stmt
+        .query_map([], |row| {
+            let sex_str: String = row.get(1)?;
+            Ok(BirdRecord {
+                id: row.get(0)?,
+                sex: str_to_sex(&sex_str),
+                bloodline_id: row.get(2)?,
+                mother_id: row.get(3)?,
+                father_id: row.get(4)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let males: Vec<&BirdRecord> = birds.iter().filter(|b| b.sex == Sex::Male).collect();
+    let females: Vec<&BirdRecord> = birds.iter().filter(|b| b.sex == Sex::Female).collect();
+
+    let mut results: Vec<InbreedingCoefficient> = Vec::new();
+    for m in &males {
+        for f in &females {
+            let coefficient = compute_relatedness(m, f);
+            results.push(InbreedingCoefficient {
+                male_id: m.id,
+                female_id: f.id,
+                coefficient,
+                safe: coefficient < 0.0625,
+            });
+        }
+    }
+
+    results.sort_by(|a, b| a.coefficient.partial_cmp(&b.coefficient).unwrap());
+
+    Json(results)
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -972,6 +1050,7 @@ async fn main() {
         .route("/api/clutches", get(list_clutches).post(create_clutch))
         .route("/api/clutches/{id}", axum::routing::put(update_clutch))
         .route("/api/flock/summary", get(flock_summary))
+        .route("/api/breeding/suggest", get(breeding_suggest))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
