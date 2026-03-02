@@ -16,3 +16,7 @@ axum.workspace = true
 chrono.workspace = true
 rusqlite.workspace = true
 colored.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+tokio = { workspace = true, features = ["full"] }

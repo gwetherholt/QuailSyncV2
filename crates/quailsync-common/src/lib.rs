@@ -212,3 +212,182 @@ pub struct InbreedingCoefficient {
     pub coefficient: f64,
     pub safe: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    // --- TelemetryPayload serde roundtrips ---
+
+    #[test]
+    fn telemetry_system_roundtrip() {
+        let payload = TelemetryPayload::System(SystemMetrics {
+            cpu_usage_percent: 42.5,
+            memory_used_bytes: 1024,
+            memory_total_bytes: 2048,
+            disk_used_bytes: 500,
+            disk_total_bytes: 1000,
+            uptime_seconds: 3600,
+        });
+        let json = serde_json::to_string(&payload).unwrap();
+        let back: TelemetryPayload = serde_json::from_str(&json).unwrap();
+        match back {
+            TelemetryPayload::System(m) => {
+                assert!((m.cpu_usage_percent - 42.5).abs() < f64::EPSILON);
+                assert_eq!(m.memory_used_bytes, 1024);
+                assert_eq!(m.uptime_seconds, 3600);
+            }
+            _ => panic!("expected System variant"),
+        }
+    }
+
+    #[test]
+    fn telemetry_brooder_roundtrip() {
+        let payload = TelemetryPayload::Brooder(BrooderReading {
+            temperature_celsius: 98.6,
+            humidity_percent: 55.0,
+            timestamp: Utc::now(),
+        });
+        let json = serde_json::to_string(&payload).unwrap();
+        let back: TelemetryPayload = serde_json::from_str(&json).unwrap();
+        match back {
+            TelemetryPayload::Brooder(r) => {
+                assert!((r.temperature_celsius - 98.6).abs() < f64::EPSILON);
+                assert!((r.humidity_percent - 55.0).abs() < f64::EPSILON);
+            }
+            _ => panic!("expected Brooder variant"),
+        }
+    }
+
+    #[test]
+    fn telemetry_detection_roundtrip() {
+        let payload = TelemetryPayload::Detection(DetectionEvent {
+            species: Species::CoturnixQuail,
+            confidence: 0.95,
+            timestamp: Utc::now(),
+        });
+        let json = serde_json::to_string(&payload).unwrap();
+        let back: TelemetryPayload = serde_json::from_str(&json).unwrap();
+        match back {
+            TelemetryPayload::Detection(d) => {
+                assert_eq!(d.species, Species::CoturnixQuail);
+                assert!((d.confidence - 0.95).abs() < f64::EPSILON);
+            }
+            _ => panic!("expected Detection variant"),
+        }
+    }
+
+    #[test]
+    fn telemetry_detection_unknown_species_roundtrip() {
+        let payload = TelemetryPayload::Detection(DetectionEvent {
+            species: Species::Unknown("Sparrow".into()),
+            confidence: 0.3,
+            timestamp: Utc::now(),
+        });
+        let json = serde_json::to_string(&payload).unwrap();
+        let back: TelemetryPayload = serde_json::from_str(&json).unwrap();
+        match back {
+            TelemetryPayload::Detection(d) => {
+                assert_eq!(d.species, Species::Unknown("Sparrow".into()));
+            }
+            _ => panic!("expected Detection variant"),
+        }
+    }
+
+    // --- AlertConfig defaults ---
+
+    #[test]
+    fn alert_config_defaults() {
+        let config = AlertConfig::default();
+        assert!((config.brooder_temp_min - 95.0).abs() < f64::EPSILON);
+        assert!((config.brooder_temp_max - 100.0).abs() < f64::EPSILON);
+        assert!((config.humidity_min - 40.0).abs() < f64::EPSILON);
+        assert!((config.humidity_max - 60.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn alert_config_serde_roundtrip() {
+        let config = AlertConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        let back: AlertConfig = serde_json::from_str(&json).unwrap();
+        assert!((back.brooder_temp_min - 95.0).abs() < f64::EPSILON);
+        assert!((back.brooder_temp_max - 100.0).abs() < f64::EPSILON);
+    }
+
+    // --- InbreedingCoefficient safe threshold ---
+
+    #[test]
+    fn inbreeding_safe_when_below_threshold() {
+        let ic = InbreedingCoefficient {
+            male_id: 1,
+            female_id: 2,
+            coefficient: 0.0,
+            safe: 0.0 < 0.0625,
+        };
+        assert!(ic.safe);
+    }
+
+    #[test]
+    fn inbreeding_unsafe_at_threshold() {
+        let ic = InbreedingCoefficient {
+            male_id: 1,
+            female_id: 2,
+            coefficient: 0.0625,
+            safe: 0.0625 < 0.0625,
+        };
+        assert!(!ic.safe);
+    }
+
+    #[test]
+    fn inbreeding_unsafe_above_threshold() {
+        let ic = InbreedingCoefficient {
+            male_id: 1,
+            female_id: 2,
+            coefficient: 0.25,
+            safe: 0.25 < 0.0625,
+        };
+        assert!(!ic.safe);
+    }
+
+    #[test]
+    fn inbreeding_serde_roundtrip() {
+        let ic = InbreedingCoefficient {
+            male_id: 10,
+            female_id: 20,
+            coefficient: 0.125,
+            safe: false,
+        };
+        let json = serde_json::to_string(&ic).unwrap();
+        let back: InbreedingCoefficient = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.male_id, 10);
+        assert_eq!(back.female_id, 20);
+        assert!((back.coefficient - 0.125).abs() < f64::EPSILON);
+        assert!(!back.safe);
+    }
+
+    // --- ClutchStatus enum ---
+
+    #[test]
+    fn clutch_status_serde_roundtrip() {
+        for status in [ClutchStatus::Incubating, ClutchStatus::Hatched, ClutchStatus::Failed] {
+            let json = serde_json::to_string(&status).unwrap();
+            let back: ClutchStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, status);
+        }
+    }
+
+    #[test]
+    fn clutch_status_equality() {
+        assert_eq!(ClutchStatus::Incubating, ClutchStatus::Incubating);
+        assert_ne!(ClutchStatus::Incubating, ClutchStatus::Hatched);
+        assert_ne!(ClutchStatus::Hatched, ClutchStatus::Failed);
+    }
+
+    #[test]
+    fn clutch_status_json_values() {
+        assert_eq!(serde_json::to_string(&ClutchStatus::Incubating).unwrap(), "\"Incubating\"");
+        assert_eq!(serde_json::to_string(&ClutchStatus::Hatched).unwrap(), "\"Hatched\"");
+        assert_eq!(serde_json::to_string(&ClutchStatus::Failed).unwrap(), "\"Failed\"");
+    }
+}
