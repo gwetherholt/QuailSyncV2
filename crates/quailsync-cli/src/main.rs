@@ -1,9 +1,9 @@
-use chrono::Local;
+use chrono::{Local, NaiveDate};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use quailsync_common::{
-    Alert, BirdStatus, Bloodline, BrooderReading, CreateBird, CreateBloodline, Sex, Severity,
-    SystemMetrics,
+    Alert, BirdStatus, Bloodline, BrooderReading, Clutch, ClutchStatus, CreateBird,
+    CreateBloodline, CreateClutch, Sex, Severity, SystemMetrics, UpdateClutch,
 };
 use serde::Deserialize;
 
@@ -51,6 +51,11 @@ enum Commands {
         #[command(subcommand)]
         action: FlockAction,
     },
+    /// Manage clutches and incubation
+    Clutch {
+        #[command(subcommand)]
+        action: ClutchAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -97,6 +102,40 @@ enum BirdAction {
 enum FlockAction {
     /// Show flock summary
     Summary,
+}
+
+#[derive(Subcommand)]
+enum ClutchAction {
+    /// Add a new clutch
+    Add {
+        #[arg(long)]
+        bloodline: Option<i64>,
+        #[arg(long)]
+        eggs: u32,
+        #[arg(long)]
+        set_date: Option<String>,
+        #[arg(long)]
+        pair: Option<i64>,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// List all clutches
+    List,
+    /// Update a clutch (after candling or hatch)
+    Update {
+        #[arg(long)]
+        id: i64,
+        #[arg(long)]
+        fertile: Option<u32>,
+        #[arg(long)]
+        hatched: Option<u32>,
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// Show incubation schedule for active clutches
+    Schedule,
 }
 
 #[derive(Deserialize)]
@@ -458,6 +497,244 @@ async fn cmd_flock_summary(base: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Clutch & Incubation commands
+// ---------------------------------------------------------------------------
+
+async fn cmd_clutch_add(
+    base: &str,
+    bloodline: Option<i64>,
+    eggs: u32,
+    set_date: Option<String>,
+    pair: Option<i64>,
+    notes: Option<String>,
+) -> anyhow::Result<()> {
+    let set = match set_date {
+        Some(s) => NaiveDate::parse_from_str(&s, "%Y-%m-%d")?,
+        None => Local::now().date_naive(),
+    };
+    let body = CreateClutch {
+        breeding_pair_id: pair,
+        bloodline_id: bloodline,
+        eggs_set: eggs,
+        eggs_fertile: None,
+        eggs_hatched: None,
+        set_date: set,
+        status: ClutchStatus::Incubating,
+        notes,
+    };
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/clutches"))
+        .json(&body)
+        .send()
+        .await?;
+    let clutch: Clutch = resp.json().await?;
+    println!(
+        "{} clutch #{} — {} eggs set on {}, expected hatch {}",
+        "Created".green().bold(),
+        clutch.id,
+        clutch.eggs_set,
+        clutch.set_date,
+        clutch.expected_hatch_date,
+    );
+    Ok(())
+}
+
+async fn cmd_clutch_list(base: &str) -> anyhow::Result<()> {
+    let clutches: Vec<Clutch> = reqwest::get(format!("{base}/api/clutches"))
+        .await?
+        .json()
+        .await?;
+    if clutches.is_empty() {
+        println!("{}", "No clutches yet.".dimmed());
+        return Ok(());
+    }
+
+    // Fetch bloodlines for name lookup
+    let bloodlines: Vec<Bloodline> = reqwest::get(format!("{base}/api/bloodlines"))
+        .await?
+        .json()
+        .await?;
+
+    let today = Local::now().date_naive();
+
+    println!("{}", "Clutches".bold().underline());
+    println!();
+    println!(
+        "  {:<4} {:<16} {:<6} {:<8} {:<8} {:<12} {:<12} {:<12} {}",
+        "ID".bold(),
+        "Bloodline".bold(),
+        "Eggs".bold(),
+        "Fertile".bold(),
+        "Hatched".bold(),
+        "Set Date".bold(),
+        "Hatch Date".bold(),
+        "Status".bold(),
+        "Remaining".bold(),
+    );
+    println!("  {}", "-".repeat(95));
+
+    for c in &clutches {
+        let bl_name = bloodlines
+            .iter()
+            .find(|b| Some(b.id) == c.bloodline_id)
+            .map(|b| b.name.as_str())
+            .unwrap_or("-");
+
+        let remaining = match c.status {
+            ClutchStatus::Hatched => "Hatched".to_string(),
+            ClutchStatus::Failed => "Failed".to_string(),
+            ClutchStatus::Incubating => {
+                let days = (c.expected_hatch_date - today).num_days();
+                if days > 0 {
+                    format!("{days}d")
+                } else if days == 0 {
+                    "Today!".to_string()
+                } else {
+                    format!("{}d overdue", -days)
+                }
+            }
+        };
+
+        let fertile_str = c
+            .eggs_fertile
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "-".into());
+        let hatched_str = c
+            .eggs_hatched
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "-".into());
+
+        println!(
+            "  {:<4} {:<16} {:<6} {:<8} {:<8} {:<12} {:<12} {:<12} {}",
+            c.id,
+            bl_name,
+            c.eggs_set,
+            fertile_str,
+            hatched_str,
+            c.set_date,
+            c.expected_hatch_date,
+            format!("{:?}", c.status),
+            remaining,
+        );
+    }
+    Ok(())
+}
+
+async fn cmd_clutch_update(
+    base: &str,
+    id: i64,
+    fertile: Option<u32>,
+    hatched: Option<u32>,
+    status_str: Option<String>,
+    notes: Option<String>,
+) -> anyhow::Result<()> {
+    // If hatched count is provided and no explicit status, auto-set to Hatched
+    let status = match (&status_str, &hatched) {
+        (Some(s), _) => Some(match s.to_lowercase().as_str() {
+            "failed" => ClutchStatus::Failed,
+            "hatched" => ClutchStatus::Hatched,
+            "incubating" => ClutchStatus::Incubating,
+            _ => anyhow::bail!("unknown status: {s} (use incubating/hatched/failed)"),
+        }),
+        (None, Some(_)) => Some(ClutchStatus::Hatched),
+        _ => None,
+    };
+
+    let body = UpdateClutch {
+        eggs_fertile: fertile,
+        eggs_hatched: hatched,
+        status,
+        notes,
+    };
+
+    let resp = reqwest::Client::new()
+        .put(format!("{base}/api/clutches/{id}"))
+        .json(&body)
+        .send()
+        .await?;
+
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        anyhow::bail!("clutch #{id} not found");
+    }
+
+    let clutch: Clutch = resp.json().await?;
+    println!(
+        "{} clutch #{} — {:?}, fertile: {}, hatched: {}",
+        "Updated".green().bold(),
+        clutch.id,
+        clutch.status,
+        clutch
+            .eggs_fertile
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "-".into()),
+        clutch
+            .eggs_hatched
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "-".into()),
+    );
+    Ok(())
+}
+
+async fn cmd_clutch_schedule(base: &str) -> anyhow::Result<()> {
+    let clutches: Vec<Clutch> = reqwest::get(format!("{base}/api/clutches"))
+        .await?
+        .json()
+        .await?;
+
+    let active: Vec<&Clutch> = clutches
+        .iter()
+        .filter(|c| c.status == ClutchStatus::Incubating)
+        .collect();
+
+    if active.is_empty() {
+        println!("{}", "No active clutches.".dimmed());
+        return Ok(());
+    }
+
+    let today = Local::now().date_naive();
+
+    println!("{}", "Incubation Schedule".bold().underline());
+    println!();
+
+    for c in &active {
+        let candle_1 = c.set_date + chrono::Duration::days(7);
+        let candle_2 = c.set_date + chrono::Duration::days(14);
+        let lockdown = c.set_date + chrono::Duration::days(14);
+        let hatch = c.expected_hatch_date;
+
+        println!(
+            "  Clutch #{} — {} eggs, set {}",
+            c.id, c.eggs_set, c.set_date,
+        );
+
+        let events: Vec<(&str, NaiveDate)> = vec![
+            ("Candle (day 7)", candle_1),
+            ("Candle + Lockdown (day 14)", candle_2),
+            ("Expected Hatch (day 17)", hatch),
+        ];
+
+        for (label, date) in &events {
+            let days_away = (*date - today).num_days();
+            let line = format!("    {:<30} {}", label, date);
+            if days_away > 0 {
+                println!("{}", line.green());
+            } else if days_away == 0 {
+                println!("{}", line.yellow().bold());
+            } else {
+                println!("{}", line.dimmed());
+            }
+        }
+
+        // Suppress unused variable warning — lockdown == candle_2 intentionally
+        let _ = lockdown;
+
+        println!();
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -487,6 +764,16 @@ async fn main() {
         },
         Commands::Flock { action } => match action {
             FlockAction::Summary => cmd_flock_summary(base).await,
+        },
+        Commands::Clutch { action } => match action {
+            ClutchAction::Add {
+                bloodline, eggs, set_date, pair, notes,
+            } => cmd_clutch_add(base, bloodline, eggs, set_date, pair, notes).await,
+            ClutchAction::List => cmd_clutch_list(base).await,
+            ClutchAction::Update {
+                id, fertile, hatched, status, notes,
+            } => cmd_clutch_update(base, id, fertile, hatched, status, notes).await,
+            ClutchAction::Schedule => cmd_clutch_schedule(base).await,
         },
     };
 

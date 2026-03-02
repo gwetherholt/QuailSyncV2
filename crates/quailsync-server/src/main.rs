@@ -3,7 +3,7 @@ use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Query, State,
+        Path, Query, State,
     },
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -15,7 +15,7 @@ use colored::Colorize;
 use quailsync_common::{
     Alert, AlertConfig, Bird, BirdStatus, Bloodline, BreedingPair, BrooderReading, Clutch,
     ClutchStatus, CreateBird, CreateBloodline, CreateBreedingPair, CreateClutch, Sex, Severity,
-    Species, SystemMetrics, TelemetryPayload,
+    Species, SystemMetrics, TelemetryPayload, UpdateClutch,
 };
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -778,6 +778,84 @@ async fn list_clutches(State(state): State<AppState>) -> Json<Vec<Clutch>> {
     Json(rows)
 }
 
+async fn update_clutch(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<UpdateClutch>,
+) -> impl IntoResponse {
+    let conn = state.db.lock().unwrap();
+
+    // Check the clutch exists
+    let exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM clutches WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|c| c > 0)
+        .unwrap_or(false);
+
+    if !exists {
+        return (StatusCode::NOT_FOUND, Json(None::<Clutch>)).into_response();
+    }
+
+    if let Some(fertile) = body.eggs_fertile {
+        conn.execute(
+            "UPDATE clutches SET eggs_fertile = ?1 WHERE id = ?2",
+            params![fertile, id],
+        )
+        .unwrap();
+    }
+    if let Some(hatched) = body.eggs_hatched {
+        conn.execute(
+            "UPDATE clutches SET eggs_hatched = ?1 WHERE id = ?2",
+            params![hatched, id],
+        )
+        .unwrap();
+    }
+    if let Some(ref status) = body.status {
+        conn.execute(
+            "UPDATE clutches SET status = ?1 WHERE id = ?2",
+            params![clutch_status_to_str(status), id],
+        )
+        .unwrap();
+    }
+    if let Some(ref notes) = body.notes {
+        conn.execute(
+            "UPDATE clutches SET notes = ?1 WHERE id = ?2",
+            params![notes, id],
+        )
+        .unwrap();
+    }
+
+    // Return updated clutch
+    let clutch = conn
+        .query_row(
+            "SELECT id, breeding_pair_id, bloodline_id, eggs_set, eggs_fertile, eggs_hatched, set_date, expected_hatch_date, status, notes FROM clutches WHERE id = ?1",
+            params![id],
+            |row| {
+                let set_str: String = row.get(6)?;
+                let exp_str: String = row.get(7)?;
+                let status_str: String = row.get(8)?;
+                Ok(Clutch {
+                    id: row.get(0)?,
+                    breeding_pair_id: row.get(1)?,
+                    bloodline_id: row.get(2)?,
+                    eggs_set: row.get(3)?,
+                    eggs_fertile: row.get(4)?,
+                    eggs_hatched: row.get(5)?,
+                    set_date: NaiveDate::parse_from_str(&set_str, "%Y-%m-%d").unwrap_or_default(),
+                    expected_hatch_date: NaiveDate::parse_from_str(&exp_str, "%Y-%m-%d").unwrap_or_default(),
+                    status: str_to_clutch_status(&status_str),
+                    notes: row.get(9)?,
+                })
+            },
+        )
+        .unwrap();
+
+    (StatusCode::OK, Json(Some(clutch))).into_response()
+}
+
 // --- Flock Summary ---
 
 #[derive(Serialize)]
@@ -892,6 +970,7 @@ async fn main() {
         .route("/api/birds", get(list_birds).post(create_bird))
         .route("/api/breeding-pairs", get(list_breeding_pairs).post(create_breeding_pair))
         .route("/api/clutches", get(list_clutches).post(create_clutch))
+        .route("/api/clutches/{id}", axum::routing::put(update_clutch))
         .route("/api/flock/summary", get(flock_summary))
         .with_state(state);
 
