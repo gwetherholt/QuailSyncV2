@@ -4,37 +4,45 @@ use quailsync_common::{BrooderReading, SystemMetrics, TelemetryPayload};
 use rand::Rng;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-fn mock_brooder_reading() -> TelemetryPayload {
+fn mock_brooder_readings() -> Vec<TelemetryPayload> {
     let mut rng = rand::rng();
+    let configs: [(i64, f64, f64); 3] = [
+        (1, 97.0, 100.0),
+        (2, 95.0, 98.0),
+        (3, 96.0, 99.0),
+    ];
 
-    // ~10% chance of out-of-range reading
-    let (temp, humidity) = if rng.random_range(0..10) == 0 {
-        // Generate abnormal values — could be high or low
-        let temp = if rng.random_bool(0.5) {
-            rng.random_range(85.0..=92.0) // too cold
-        } else {
-            rng.random_range(103.0..=110.0) // too hot
-        };
-        let humidity = if rng.random_bool(0.5) {
-            rng.random_range(20.0..=35.0) // too dry
-        } else {
-            rng.random_range(65.0..=80.0) // too humid
-        };
-        (temp, humidity)
-    } else {
-        // Normal range: 95-100°F, 40-60%
-        (
-            rng.random_range(95.0..=100.0),
-            rng.random_range(40.0..=60.0),
-        )
-    };
+    configs
+        .iter()
+        .map(|&(id, temp_min, temp_max)| {
+            let (temp, humidity) = if rng.random_range(0..10) == 0 {
+                // ~10% chance of out-of-range reading
+                let temp = if rng.random_bool(0.5) {
+                    rng.random_range(85.0..=92.0) // too cold
+                } else {
+                    rng.random_range(103.0..=110.0) // too hot
+                };
+                let humidity = if rng.random_bool(0.5) {
+                    rng.random_range(20.0..=35.0) // too dry
+                } else {
+                    rng.random_range(65.0..=80.0) // too humid
+                };
+                (temp, humidity)
+            } else {
+                (
+                    rng.random_range(temp_min..=temp_max),
+                    rng.random_range(40.0..=60.0),
+                )
+            };
 
-    TelemetryPayload::Brooder(BrooderReading {
-        temperature_celsius: temp,
-        humidity_percent: humidity,
-        timestamp: Utc::now(),
-        brooder_id: None,
-    })
+            TelemetryPayload::Brooder(BrooderReading {
+                temperature_celsius: temp,
+                humidity_percent: humidity,
+                timestamp: Utc::now(),
+                brooder_id: Some(id),
+            })
+        })
+        .collect()
 }
 
 fn mock_system_metrics() -> TelemetryPayload {
@@ -61,18 +69,23 @@ async fn main() {
     let mut tick = 0u64;
 
     loop {
-        let payload = if tick % 2 == 0 {
-            mock_brooder_reading()
+        if tick % 2 == 0 {
+            for payload in mock_brooder_readings() {
+                let json = serde_json::to_string(&payload).unwrap();
+                println!("[send] {json}");
+                if write.send(Message::Text(json.into())).await.is_err() {
+                    eprintln!("connection lost, exiting");
+                    return;
+                }
+            }
         } else {
-            mock_system_metrics()
-        };
-
-        let json = serde_json::to_string(&payload).unwrap();
-        println!("[send] {json}");
-
-        if write.send(Message::Text(json.into())).await.is_err() {
-            eprintln!("connection lost, exiting");
-            break;
+            let payload = mock_system_metrics();
+            let json = serde_json::to_string(&payload).unwrap();
+            println!("[send] {json}");
+            if write.send(Message::Text(json.into())).await.is_err() {
+                eprintln!("connection lost, exiting");
+                return;
+            }
         }
 
         tick += 1;
