@@ -197,6 +197,12 @@ pub struct CreateClutch {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateBird {
+    pub status: Option<BirdStatus>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateClutch {
     pub eggs_fertile: Option<u32>,
     pub eggs_hatched: Option<u32>,

@@ -19,6 +19,8 @@
     --warning:#e67e22;
     --safe:#27ae60;
     --radius:12px;
+    --sidebar-w:200px;
+    --sidebar-collapsed:60px;
   }
 
   body{
@@ -27,34 +29,88 @@
     color:var(--charcoal);
     line-height:1.5;
     min-height:100vh;
+    display:flex;
   }
 
-  /* --- Header --- */
-  header{
-    background:var(--sage);
-    padding:1rem 2rem;
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    box-shadow:0 2px 8px rgba(0,0,0,.08);
+  /* --- Sidebar --- */
+  .sidebar{
+    width:var(--sidebar-w);
+    min-height:100vh;
+    background:var(--cream);
+    border-right:1px solid #e0d8d0;
+    display:flex;flex-direction:column;
+    transition:width .2s;
+    position:fixed;left:0;top:0;bottom:0;
+    z-index:100;
   }
-  header h1{font-size:1.5rem;font-weight:700;letter-spacing:-.02em}
+  .sidebar-logo{
+    padding:1rem;
+    font-size:1.2rem;font-weight:700;
+    border-bottom:1px solid var(--beige);
+    white-space:nowrap;overflow:hidden;
+  }
+  .sidebar-logo .logo-text{margin-left:.4rem}
+  .sidebar-nav{flex:1;padding:.5rem 0}
+  .sidebar-item{
+    display:flex;align-items:center;gap:.6rem;
+    padding:.7rem 1rem;
+    cursor:pointer;
+    font-size:.9rem;font-weight:500;
+    color:var(--charcoal);
+    text-decoration:none;
+    border-left:3px solid transparent;
+    transition:background .15s,border-color .15s;
+    white-space:nowrap;overflow:hidden;
+  }
+  .sidebar-item:hover{background:var(--beige)}
+  .sidebar-item.active{
+    background:var(--sage-light);
+    border-left-color:var(--sage);
+    font-weight:600;
+  }
+  .sidebar-item .icon{font-size:1.1rem;flex-shrink:0;width:24px;text-align:center}
+  .sidebar-item .label{overflow:hidden;text-overflow:ellipsis}
+  .sidebar-footer{
+    padding:.75rem 1rem;
+    border-top:1px solid var(--beige);
+    font-size:.8rem;
+    display:flex;align-items:center;gap:.5rem;
+    white-space:nowrap;overflow:hidden;
+  }
   .status-dot{
-    width:10px;height:10px;border-radius:50%;display:inline-block;
-    margin-right:6px;vertical-align:middle;
+    width:10px;height:10px;border-radius:50%;display:inline-block;flex-shrink:0;
   }
   .status-dot.connected{background:var(--safe)}
   .status-dot.disconnected{background:var(--danger)}
-  #connection-label{font-size:.85rem}
 
-  /* --- Grid --- */
+  .hamburger{
+    display:none;
+    position:fixed;top:.75rem;left:.75rem;z-index:200;
+    background:var(--cream);border:1px solid #e0d8d0;border-radius:8px;
+    width:36px;height:36px;cursor:pointer;
+    font-size:1.2rem;align-items:center;justify-content:center;
+  }
+
+  /* --- Main --- */
+  .main{
+    margin-left:var(--sidebar-w);
+    flex:1;
+    min-height:100vh;
+    transition:margin-left .2s;
+  }
+  .main-header{
+    background:var(--sage);
+    padding:1rem 2rem;
+    font-size:1.3rem;font-weight:700;
+    box-shadow:0 2px 8px rgba(0,0,0,.08);
+  }
+  #app{padding:1.5rem 2rem;max-width:1440px;margin:0 auto}
+
+  /* --- Grid (dashboard) --- */
   .grid{
     display:grid;
     grid-template-columns:repeat(auto-fill,minmax(380px,1fr));
     gap:1.25rem;
-    padding:1.5rem 2rem;
-    max-width:1440px;
-    margin:0 auto;
   }
 
   /* --- Panel --- */
@@ -107,7 +163,7 @@
   .bloodline-list{margin-top:.6rem}
   .bloodline-row{display:flex;justify-content:space-between;padding:.2rem 0;border-bottom:1px solid var(--beige)}
 
-  /* --- Clutch tracker --- */
+  /* --- Clutch tracker (dashboard) --- */
   .clutch-card{
     background:var(--beige);border-radius:8px;padding:.6rem .8rem;margin-bottom:.5rem;
   }
@@ -135,321 +191,689 @@
   .coeff.safe{background:var(--safe);color:#fff}
   .coeff.risky{background:var(--danger);color:#fff}
 
-  /* --- System gauges --- */
-  .gauge-row{display:flex;align-items:center;gap:.75rem;margin-bottom:.6rem}
-  .gauge-label{width:55px;font-size:.8rem;color:#777;text-align:right}
-  .gauge-track{flex:1;height:10px;border-radius:5px;background:#e0d8d0;overflow:hidden}
-  .gauge-fill{height:100%;border-radius:5px;transition:width .4s}
-  .gauge-pct{width:40px;font-size:.8rem;font-weight:600;text-align:right}
+  /* --- Data Table --- */
+  .data-table{
+    width:100%;border-collapse:collapse;font-size:.85rem;
+  }
+  .data-table th{
+    text-align:left;padding:.6rem .75rem;
+    background:var(--sage-light);font-weight:600;font-size:.8rem;
+    text-transform:uppercase;letter-spacing:.03em;color:#555;
+    position:sticky;top:0;
+  }
+  .data-table td{
+    padding:.5rem .75rem;border-bottom:1px solid var(--beige);
+  }
+  .data-table tbody tr:hover{background:rgba(183,196,160,.12)}
+  .data-table tbody tr:nth-child(even){background:rgba(0,0,0,.015)}
+  .data-table tbody tr:nth-child(even):hover{background:rgba(183,196,160,.12)}
+  .table-wrap{overflow-x:auto;border-radius:var(--radius);background:var(--cream);box-shadow:0 1px 4px rgba(0,0,0,.06)}
+
+  /* --- Band color dot --- */
+  .band-dot{
+    width:14px;height:14px;border-radius:50%;display:inline-block;
+    border:1px solid rgba(0,0,0,.15);vertical-align:middle;
+  }
+
+  /* --- Filter bar --- */
+  .filter-bar{
+    display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:1rem;align-items:center;
+  }
+  .filter-btn{
+    padding:.35rem .75rem;border-radius:20px;
+    border:1px solid #d0c8c0;background:var(--cream);
+    font-size:.8rem;cursor:pointer;transition:all .15s;
+    color:var(--charcoal);
+  }
+  .filter-btn:hover{border-color:var(--sage)}
+  .filter-btn.active{
+    background:var(--sage);color:#fff;border-color:var(--sage);
+  }
+
+  /* --- Status action buttons --- */
+  .status-btn{
+    padding:.2rem .55rem;border-radius:12px;
+    border:1px solid #d0c8c0;background:var(--cream);
+    font-size:.72rem;cursor:pointer;transition:all .15s;
+    color:var(--charcoal);
+  }
+  .status-btn:hover{background:var(--rose-light);border-color:var(--dusty-rose)}
+
+  /* --- Page top bar --- */
+  .page-top{
+    display:flex;justify-content:space-between;align-items:center;
+    margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;
+  }
+  .page-title{font-size:1.1rem;font-weight:700}
+  .btn-primary{
+    padding:.45rem 1rem;border-radius:8px;
+    background:var(--sage);color:#fff;border:none;
+    font-size:.85rem;font-weight:600;cursor:pointer;
+    transition:background .15s;
+  }
+  .btn-primary:hover{background:#9ab085}
+
+  /* --- Modal --- */
+  .modal-overlay{
+    position:fixed;top:0;left:0;right:0;bottom:0;
+    background:rgba(0,0,0,.4);
+    display:flex;align-items:center;justify-content:center;
+    z-index:500;
+  }
+  .modal{
+    background:var(--cream);border-radius:var(--radius);
+    padding:1.5rem;width:90%;max-width:480px;
+    box-shadow:0 8px 32px rgba(0,0,0,.15);
+    max-height:90vh;overflow-y:auto;
+  }
+  .modal h3{margin-bottom:1rem;font-size:1rem}
+  .modal label{display:block;font-size:.8rem;font-weight:600;margin-bottom:.2rem;margin-top:.6rem;color:#666}
+  .modal input,.modal select,.modal textarea{
+    width:100%;padding:.45rem .6rem;border:1px solid #d0c8c0;
+    border-radius:8px;font-size:.85rem;font-family:inherit;
+    background:#fff;
+  }
+  .modal textarea{resize:vertical;min-height:60px}
+  .modal-actions{display:flex;gap:.5rem;justify-content:flex-end;margin-top:1rem}
+  .btn-cancel{
+    padding:.4rem .9rem;border-radius:8px;
+    background:var(--beige);border:1px solid #d0c8c0;
+    font-size:.85rem;cursor:pointer;
+  }
+
+  /* --- Clutch page cards --- */
+  .clutch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:1rem}
+  .clutch-page-card{
+    background:var(--cream);border-radius:var(--radius);
+    padding:1rem;box-shadow:0 1px 4px rgba(0,0,0,.06);
+  }
+  .clutch-page-card.muted{opacity:.6}
+  .clutch-page-card h4{font-size:.9rem;margin-bottom:.5rem}
+  .clutch-stats{display:flex;gap:1rem;font-size:.8rem;margin:.4rem 0;color:#666}
+  .clutch-actions{display:flex;gap:.4rem;margin-top:.5rem;flex-wrap:wrap}
+  .inline-form{
+    margin-top:.5rem;padding:.5rem;background:var(--beige);border-radius:8px;
+    display:flex;gap:.4rem;align-items:flex-end;flex-wrap:wrap;
+  }
+  .inline-form label{font-size:.72rem;margin:0}
+  .inline-form input{width:80px;padding:.25rem .4rem;font-size:.8rem}
+  .inline-form button{padding:.25rem .6rem;font-size:.78rem}
+
+  /* --- Timeline --- */
+  .timeline-section{margin-top:1.5rem}
+  .timeline-section h3{font-size:.95rem;margin-bottom:.75rem}
+  .timeline{
+    display:flex;gap:.5rem;overflow-x:auto;padding:.5rem 0;
+  }
+  .timeline-bar{
+    min-width:28px;border-radius:4px;text-align:center;
+    font-size:.65rem;font-weight:600;color:#fff;
+    display:flex;align-items:flex-end;justify-content:center;
+    padding-bottom:4px;position:relative;
+  }
+  .timeline-label{
+    position:absolute;top:-18px;font-size:.65rem;color:#888;
+    white-space:nowrap;font-weight:400;
+  }
 
   /* --- Responsive --- */
+  @media(max-width:768px){
+    .sidebar{width:var(--sidebar-collapsed)}
+    .sidebar .label,.sidebar .logo-text,.sidebar-footer .conn-text{display:none}
+    .main{margin-left:var(--sidebar-collapsed)}
+    .hamburger{display:flex}
+    .sidebar.open{width:var(--sidebar-w)}
+    .sidebar.open .label,.sidebar.open .logo-text,.sidebar.open .conn-text{display:inline}
+    .grid{grid-template-columns:1fr}
+    #app{padding:1rem}
+    .main-header{padding:.75rem 1rem .75rem 3.5rem}
+  }
   @media(max-width:480px){
-    .grid{grid-template-columns:1fr;padding:1rem}
-    header{padding:.75rem 1rem}
+    .data-table{font-size:.78rem}
+    .data-table th,.data-table td{padding:.4rem .5rem}
   }
 </style>
 </head>
 <body>
 
-<header>
-  <h1>&#x1F423; QuailSync</h1>
-  <div>
+<button class="hamburger" id="hamburger" onclick="document.querySelector('.sidebar').classList.toggle('open')">&#9776;</button>
+
+<nav class="sidebar" id="sidebar">
+  <div class="sidebar-logo">&#x1F423;<span class="logo-text">QuailSync</span></div>
+  <div class="sidebar-nav">
+    <a class="sidebar-item" data-route="#/dashboard" onclick="Router.navigate('#/dashboard')">
+      <span class="icon">&#x1F3E0;</span><span class="label">Dashboard</span>
+    </a>
+    <a class="sidebar-item" data-route="#/flock" onclick="Router.navigate('#/flock')">
+      <span class="icon">&#x1F426;</span><span class="label">Flock</span>
+    </a>
+    <a class="sidebar-item" data-route="#/clutches" onclick="Router.navigate('#/clutches')">
+      <span class="icon">&#x1F95A;</span><span class="label">Clutches</span>
+    </a>
+  </div>
+  <div class="sidebar-footer">
     <span id="status-dot" class="status-dot disconnected"></span>
-    <span id="connection-label">Agent disconnected</span>
+    <span class="conn-text" id="connection-label">Disconnected</span>
   </div>
-</header>
+</nav>
 
-<div class="grid">
-
-  <!-- Brooder Panel -->
-  <div class="panel">
-    <div class="panel-header">&#x1F321;&#xFE0F; Brooder</div>
-    <div class="panel-body" id="brooder-panel">
-      <div class="no-data">Waiting for data...</div>
-    </div>
-  </div>
-
-  <!-- Alerts Panel -->
-  <div class="panel">
-    <div class="panel-header">&#x1F6A8; Alerts</div>
-    <div class="panel-body" id="alerts-panel">
-      <div class="no-data">No recent alerts</div>
-    </div>
-  </div>
-
-  <!-- Flock Overview Panel -->
-  <div class="panel">
-    <div class="panel-header">&#x1F426; Flock Overview</div>
-    <div class="panel-body" id="flock-panel">
-      <div class="no-data">Loading...</div>
-    </div>
-  </div>
-
-  <!-- Clutch Tracker Panel -->
-  <div class="panel">
-    <div class="panel-header">&#x1F95A; Clutch Tracker</div>
-    <div class="panel-body" id="clutch-panel">
-      <div class="no-data">Loading...</div>
-    </div>
-  </div>
-
-  <!-- Breeding Panel -->
-  <div class="panel">
-    <div class="panel-header">&#x1F48D; Breeding</div>
-    <div class="panel-body" id="breeding-panel">
-      <div class="no-data">Loading...</div>
-    </div>
-  </div>
-
-  <!-- System Panel -->
-  <div class="panel">
-    <div class="panel-header">&#x1F5A5;&#xFE0F; System</div>
-    <div class="panel-body" id="system-panel">
-      <div class="no-data">Waiting for data...</div>
-    </div>
-  </div>
-
+<div class="main">
+  <div class="main-header" id="page-header">Dashboard</div>
+  <div id="app"></div>
 </div>
 
 <script>
 (function(){
   'use strict';
 
-  // ----- helpers -----
-  function $(id){ return document.getElementById(id) }
-  async function api(path){
-    try{
-      const r=await fetch(path);
-      if(!r.ok) return null;
-      return r.json();
-    }catch(e){ return null }
+  // ===== API helper =====
+  var API = {
+    get: async function(path){
+      try{ var r=await fetch(path); if(!r.ok) return null; return r.json(); }
+      catch(e){ return null; }
+    },
+    post: async function(path, body){
+      try{
+        var r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        return r.json();
+      }catch(e){ return null; }
+    },
+    put: async function(path, body){
+      try{
+        var r=await fetch(path,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        return r.json();
+      }catch(e){ return null; }
+    }
+  };
+
+  // ===== Shared state =====
+  var _intervals = [];
+  var _bloodlines = [];
+  var _birds = [];
+
+  function clearIntervals(){
+    _intervals.forEach(function(id){ clearInterval(id); });
+    _intervals = [];
+  }
+  function addInterval(fn, ms){
+    fn();
+    _intervals.push(setInterval(fn, ms));
   }
 
-  // ----- Connection status (every 10s) -----
+  // ===== Connection status (global, every 10s) =====
   async function pollStatus(){
-    const d=await api('/api/status');
-    const dot=$('status-dot'), lbl=$('connection-label');
+    var d = await API.get('/api/status');
+    var dot = document.getElementById('status-dot');
+    var lbl = document.getElementById('connection-label');
     if(d && d.agent_connected){
       dot.className='status-dot connected';
-      lbl.textContent='Agent connected';
+      lbl.textContent='Connected';
     }else{
       dot.className='status-dot disconnected';
-      lbl.textContent='Agent disconnected';
+      lbl.textContent='Disconnected';
     }
   }
+  setInterval(pollStatus, 10000);
+  pollStatus();
 
-  // ----- Brooder panel (every 30s) -----
-  async function pollBrooder(){
-    const history=await api('/api/brooder/history?minutes=60');
-    const el=$('brooder-panel');
-    if(!history || history.length===0){
-      el.innerHTML='<div class="no-data">No brooder readings yet</div>';
-      return;
-    }
-    const latest=history[0];
-    const temp=latest.temperature_celsius.toFixed(1);
-    const hum=latest.humidity_percent.toFixed(1);
+  // ===== Router =====
+  var Router = window.Router = {
+    current: null,
+    init: function(){
+      window.addEventListener('hashchange', function(){ Router.route(); });
+      if(!location.hash || location.hash === '#/' || location.hash === '#') location.hash = '#/dashboard';
+      else Router.route();
+    },
+    navigate: function(hash){
+      location.hash = hash;
+      // close mobile sidebar
+      document.getElementById('sidebar').classList.remove('open');
+    },
+    route: function(){
+      var hash = location.hash || '#/dashboard';
+      // Stop previous page
+      if(Router.current && Router.current.stop) Router.current.stop();
+      clearIntervals();
 
-    // sparkline from history (most recent on right)
-    const pts=history.slice().reverse().slice(-30);
-    const temps=pts.map(p=>p.temperature_celsius);
-    const tMin=Math.min(...temps), tMax=Math.max(...temps);
-    const range=tMax-tMin||1;
+      // Highlight nav
+      document.querySelectorAll('.sidebar-item').forEach(function(el){
+        el.classList.toggle('active', el.getAttribute('data-route') === hash);
+      });
 
-    let bars='';
-    for(const t of temps){
-      const h=Math.max(4, ((t-tMin)/range)*56);
-      bars+=`<div class="spark-bar" style="height:${h}px" title="${t.toFixed(1)}\u00b0F"></div>`;
-    }
+      var hdr = document.getElementById('page-header');
+      var app = document.getElementById('app');
 
-    el.innerHTML=`
-      <div class="reading-row">
-        <div><span class="reading-label">Temperature</span><br><span class="reading-value">${temp}&deg;F</span></div>
-        <div style="text-align:right"><span class="reading-label">Humidity</span><br><span class="reading-value">${hum}%</span></div>
-      </div>
-      <div class="sparkline">${bars}</div>
-      <div style="text-align:center;font-size:.7rem;color:#aaa;margin-top:.3rem">Last 60 min</div>
-    `;
-  }
-
-  // ----- Alerts panel (every 30s) -----
-  async function pollAlerts(){
-    const data=await api('/api/alerts?minutes=120');
-    const el=$('alerts-panel');
-    if(!data || data.length===0){
-      el.innerHTML='<div class="no-data">No recent alerts</div>';
-      return;
-    }
-    let html='';
-    for(const a of data.slice(0,10)){
-      const cls=a.severity==='Critical'?'critical':'warning';
-      const time=a.timestamp?a.timestamp.split(' ').pop()||'':'';
-      html+=`<div class="alert-item ${cls}"><span class="alert-time">${time}</span>${a.message}</div>`;
-    }
-    el.innerHTML=html;
-  }
-
-  // ----- Flock overview (every 60s) -----
-  async function pollFlock(){
-    const d=await api('/api/flock/summary');
-    const el=$('flock-panel');
-    if(!d){
-      el.innerHTML='<div class="no-data">No flock data</div>';
-      return;
-    }
-    let blines='';
-    if(d.bloodlines && d.bloodlines.length>0){
-      for(const b of d.bloodlines){
-        blines+=`<div class="bloodline-row"><span>${b.name}</span><span>${b.count}</span></div>`;
+      if(hash === '#/flock'){
+        hdr.textContent = 'Flock Management';
+        Router.current = Page.Flock;
+      } else if(hash === '#/clutches'){
+        hdr.textContent = 'Clutch Tracker';
+        Router.current = Page.Clutches;
+      } else {
+        hdr.textContent = 'Dashboard';
+        Router.current = Page.Dashboard;
       }
+
+      Router.current.render(app);
+      Router.current.start();
     }
-    el.innerHTML=`
-      <div class="stat-grid">
-        <div class="stat-box"><div class="num">${d.total_birds}</div><div class="lbl">Total</div></div>
-        <div class="stat-box"><div class="num">${d.active_birds}</div><div class="lbl">Active</div></div>
-        <div class="stat-box"><div class="num">${d.males}</div><div class="lbl">Males</div></div>
-        <div class="stat-box"><div class="num">${d.females}</div><div class="lbl">Females</div></div>
-      </div>
-      ${blines?`<div class="bloodline-list"><div style="font-size:.75rem;color:#999;margin-top:.5rem;margin-bottom:.25rem">BLOODLINES</div>${blines}</div>`:''}
-    `;
-  }
+  };
 
-  // ----- Clutch tracker (every 60s) -----
-  async function pollClutches(){
-    const data=await api('/api/clutches');
-    const el=$('clutch-panel');
-    if(!data || data.length===0){
-      el.innerHTML='<div class="no-data">No clutches yet</div>';
-      return;
-    }
-    const now=new Date();
-    let html='';
-    for(const c of data){
-      if(c.status!=='Incubating') continue;
-      const setD=new Date(c.set_date+'T00:00:00');
-      const hatchD=new Date(c.expected_hatch_date+'T00:00:00');
-      const totalDays=17;
-      const elapsed=Math.max(0,(now-setD)/(86400000));
-      const remaining=Math.max(0,Math.ceil((hatchD-now)/86400000));
-      const pct=Math.min(100,(elapsed/totalDays)*100);
+  // ===== Dashboard Page =====
+  var Page = {};
 
-      let cls='early';
-      if(pct>=70) cls='late';
-      else if(pct>=40) cls='mid';
-
-      const eggs=c.eggs_set;
-      const fertile=c.eggs_fertile!=null?c.eggs_fertile:'?';
-
-      html+=`
-        <div class="clutch-card">
-          <div class="clutch-label">Clutch #${c.id} &mdash; ${eggs} eggs (${fertile} fertile)</div>
-          <div class="progress-bar"><div class="progress-fill ${cls}" style="width:${pct.toFixed(0)}%"></div></div>
-          <div class="clutch-info"><span>Day ${Math.floor(elapsed)} of 17</span><span>${remaining} days left</span></div>
-        </div>
-      `;
-    }
-    if(!html) html='<div class="no-data">No incubating clutches</div>';
-    el.innerHTML=html;
-  }
-
-  // ----- Breeding panel (every 60s) -----
-  async function pollBreeding(){
-    const data=await api('/api/breeding/suggest');
-    const el=$('breeding-panel');
-    if(!data || data.length===0){
-      el.innerHTML='<div class="no-data">Need at least 1 male and 1 female</div>';
-      return;
-    }
-    // Show top 5 safest pairs
-    const safest=data.filter(p=>p.safe).slice(0,5);
-    const risky=data.filter(p=>!p.safe).slice(0,3);
-
-    let html='';
-    if(safest.length>0){
-      html+='<div style="font-size:.75rem;color:#999;margin-bottom:.25rem">SAFEST PAIRS</div>';
-      for(const p of safest){
-        html+=`<div class="pair-row safe-pair">
-          <span>Male #${p.male_id} &times; Female #${p.female_id}</span>
-          <span class="coeff safe">${p.coefficient.toFixed(3)}</span>
-        </div>`;
+  Page.Dashboard = {
+    render: function(app){
+      app.innerHTML = '<div class="grid">' +
+        '<div class="panel"><div class="panel-header">&#x1F321;&#xFE0F; Brooder</div><div class="panel-body" id="d-brooder"><div class="no-data">Waiting for data...</div></div></div>' +
+        '<div class="panel"><div class="panel-header">&#x1F6A8; Alerts</div><div class="panel-body" id="d-alerts"><div class="no-data">No recent alerts</div></div></div>' +
+        '<div class="panel"><div class="panel-header">&#x1F426; Flock Overview</div><div class="panel-body" id="d-flock"><div class="no-data">Loading...</div></div></div>' +
+        '<div class="panel"><div class="panel-header">&#x1F48D; Breeding</div><div class="panel-body" id="d-breeding"><div class="no-data">Loading...</div></div></div>' +
+      '</div>';
+    },
+    start: function(){
+      addInterval(this._pollBrooder, 30000);
+      addInterval(this._pollAlerts, 30000);
+      addInterval(this._pollFlock, 60000);
+      addInterval(this._pollBreeding, 60000);
+    },
+    stop: function(){},
+    _pollBrooder: async function(){
+      var history = await API.get('/api/brooder/history?minutes=60');
+      var el = document.getElementById('d-brooder');
+      if(!el) return;
+      if(!history || history.length===0){ el.innerHTML='<div class="no-data">No brooder readings yet</div>'; return; }
+      var latest=history[0];
+      var temp=latest.temperature_celsius.toFixed(1);
+      var hum=latest.humidity_percent.toFixed(1);
+      var pts=history.slice().reverse().slice(-30);
+      var temps=pts.map(function(p){return p.temperature_celsius});
+      var tMin=Math.min.apply(null,temps), tMax=Math.max.apply(null,temps);
+      var range=tMax-tMin||1;
+      var bars='';
+      temps.forEach(function(t){
+        var h=Math.max(4,((t-tMin)/range)*56);
+        bars+='<div class="spark-bar" style="height:'+h+'px" title="'+t.toFixed(1)+'\u00b0F"></div>';
+      });
+      el.innerHTML='<div class="reading-row"><div><span class="reading-label">Temperature</span><br><span class="reading-value">'+temp+'&deg;F</span></div><div style="text-align:right"><span class="reading-label">Humidity</span><br><span class="reading-value">'+hum+'%</span></div></div><div class="sparkline">'+bars+'</div><div style="text-align:center;font-size:.7rem;color:#aaa;margin-top:.3rem">Last 60 min</div>';
+    },
+    _pollAlerts: async function(){
+      var data = await API.get('/api/alerts?minutes=120');
+      var el = document.getElementById('d-alerts');
+      if(!el) return;
+      if(!data || data.length===0){ el.innerHTML='<div class="no-data">No recent alerts</div>'; return; }
+      var html='';
+      data.slice(0,10).forEach(function(a){
+        var cls = a.severity==='Critical'?'critical':'warning';
+        var time = a.timestamp ? (a.timestamp.split(' ').pop()||'') : '';
+        html+='<div class="alert-item '+cls+'"><span class="alert-time">'+time+'</span>'+a.message+'</div>';
+      });
+      el.innerHTML=html;
+    },
+    _pollFlock: async function(){
+      var d = await API.get('/api/flock/summary');
+      var el = document.getElementById('d-flock');
+      if(!el) return;
+      if(!d){ el.innerHTML='<div class="no-data">No flock data</div>'; return; }
+      var blines='';
+      if(d.bloodlines && d.bloodlines.length>0){
+        d.bloodlines.forEach(function(b){ blines+='<div class="bloodline-row"><span>'+b.name+'</span><span>'+b.count+'</span></div>'; });
       }
-    }
-    if(risky.length>0){
-      html+=`<div style="font-size:.75rem;color:#999;margin-top:.5rem;margin-bottom:.25rem">RISKY PAIRS</div>`;
-      for(const p of risky){
-        html+=`<div class="pair-row risky-pair">
-          <span>Male #${p.male_id} &times; Female #${p.female_id}</span>
-          <span class="coeff risky">${p.coefficient.toFixed(3)}</span>
-        </div>`;
+      el.innerHTML='<div class="stat-grid"><div class="stat-box"><div class="num">'+d.total_birds+'</div><div class="lbl">Total</div></div><div class="stat-box"><div class="num">'+d.active_birds+'</div><div class="lbl">Active</div></div><div class="stat-box"><div class="num">'+d.males+'</div><div class="lbl">Males</div></div><div class="stat-box"><div class="num">'+d.females+'</div><div class="lbl">Females</div></div></div>'+(blines?'<div class="bloodline-list"><div style="font-size:.75rem;color:#999;margin-top:.5rem;margin-bottom:.25rem">BLOODLINES</div>'+blines+'</div>':'');
+    },
+    _pollBreeding: async function(){
+      var data = await API.get('/api/breeding/suggest');
+      var el = document.getElementById('d-breeding');
+      if(!el) return;
+      if(!data || data.length===0){ el.innerHTML='<div class="no-data">Need at least 1 male and 1 female</div>'; return; }
+      var safest=data.filter(function(p){return p.safe}).slice(0,5);
+      var risky=data.filter(function(p){return !p.safe}).slice(0,3);
+      var html='';
+      if(safest.length>0){
+        html+='<div style="font-size:.75rem;color:#999;margin-bottom:.25rem">SAFEST PAIRS</div>';
+        safest.forEach(function(p){ html+='<div class="pair-row safe-pair"><span>Male #'+p.male_id+' &times; Female #'+p.female_id+'</span><span class="coeff safe">'+p.coefficient.toFixed(3)+'</span></div>'; });
       }
+      if(risky.length>0){
+        html+='<div style="font-size:.75rem;color:#999;margin-top:.5rem;margin-bottom:.25rem">RISKY PAIRS</div>';
+        risky.forEach(function(p){ html+='<div class="pair-row risky-pair"><span>Male #'+p.male_id+' &times; Female #'+p.female_id+'</span><span class="coeff risky">'+p.coefficient.toFixed(3)+'</span></div>'; });
+      }
+      if(!html) html='<div class="no-data">No pairs to display</div>';
+      el.innerHTML=html;
     }
-    if(!html) html='<div class="no-data">No pairs to display</div>';
-    el.innerHTML=html;
-  }
+  };
 
-  // ----- System panel (every 30s) -----
-  function gaugeColor(pct){
-    if(pct>85) return 'var(--danger)';
-    if(pct>60) return 'var(--warning)';
-    return 'var(--sage)';
-  }
+  // ===== Flock Page =====
+  Page.Flock = {
+    filter: 'all',
+    bloodlineFilter: null,
+    render: function(app){
+      app.innerHTML =
+        '<div class="page-top"><div class="page-title">&#x1F426; Flock</div><button class="btn-primary" onclick="Page.Flock.openModal()">+ Add Bird</button></div>' +
+        '<div class="filter-bar" id="flock-filters"></div>' +
+        '<div class="table-wrap"><table class="data-table"><thead><tr>' +
+        '<th>ID</th><th>Band</th><th>Sex</th><th>Bloodline</th><th>Hatch Date</th><th>Gen</th><th>Status</th><th>Parents</th><th>Actions</th>' +
+        '</tr></thead><tbody id="flock-tbody"></tbody></table></div>';
+    },
+    start: function(){
+      this.filter = 'all';
+      this.bloodlineFilter = null;
+      this._load();
+      addInterval(this._load.bind(this), 60000);
+    },
+    stop: function(){},
+    _load: async function(){
+      var bl = await API.get('/api/bloodlines');
+      if(bl) _bloodlines = bl;
+      var birds = await API.get('/api/birds');
+      if(birds) _birds = birds;
+      this._renderFilters();
+      this._renderTable();
+    },
+    _renderFilters: function(){
+      var el = document.getElementById('flock-filters');
+      if(!el) return;
+      var self = this;
+      var filters = [
+        {key:'all',label:'All'},
+        {key:'active',label:'Active'},
+        {key:'males',label:'Males'},
+        {key:'females',label:'Females'}
+      ];
+      var html='';
+      filters.forEach(function(f){
+        var active = (self.filter===f.key && !self.bloodlineFilter)?'active':'';
+        html+='<button class="filter-btn '+active+'" onclick="Page.Flock.applyFilter(\''+f.key+'\')">'+f.label+'</button>';
+      });
+      // bloodline filters
+      _bloodlines.forEach(function(bl){
+        var active = (self.bloodlineFilter===bl.id)?'active':'';
+        html+='<button class="filter-btn '+active+'" onclick="Page.Flock.applyBloodlineFilter('+bl.id+')">'+bl.name+'</button>';
+      });
+      el.innerHTML = html;
+    },
+    _renderTable: function(){
+      var tbody = document.getElementById('flock-tbody');
+      if(!tbody) return;
+      var self = this;
+      var filtered = _birds.filter(function(b){
+        if(self.bloodlineFilter) return b.bloodline_id === self.bloodlineFilter;
+        if(self.filter==='active') return b.status==='Active';
+        if(self.filter==='males') return b.sex==='Male';
+        if(self.filter==='females') return b.sex==='Female';
+        return true;
+      });
 
-  async function pollSystem(){
-    const d=await api('/api/system/latest');
-    const el=$('system-panel');
-    if(!d){
-      el.innerHTML='<div class="no-data">No system metrics yet</div>';
-      return;
+      if(filtered.length===0){
+        tbody.innerHTML='<tr><td colspan="9" class="no-data">No birds found</td></tr>';
+        return;
+      }
+
+      var html='';
+      filtered.forEach(function(b){
+        var blName = '';
+        _bloodlines.forEach(function(bl){ if(bl.id===b.bloodline_id) blName=bl.name; });
+        var bandHtml = b.band_color ? '<span class="band-dot" style="background:'+b.band_color+'" title="'+b.band_color+'"></span>' : '&mdash;';
+        var parents = '';
+        if(b.mother_id || b.father_id){
+          var m = b.mother_id ? 'M#'+b.mother_id : '?';
+          var f = b.father_id ? 'F#'+b.father_id : '?';
+          parents = m+' / '+f;
+        } else { parents = '&mdash;'; }
+
+        var actions = '';
+        if(b.status==='Active'){
+          actions = '<button class="status-btn" onclick="Page.Flock.updateStatus('+b.id+',\'Culled\')">Culled</button> ' +
+                    '<button class="status-btn" onclick="Page.Flock.updateStatus('+b.id+',\'Deceased\')">Deceased</button> ' +
+                    '<button class="status-btn" onclick="Page.Flock.updateStatus('+b.id+',\'Sold\')">Sold</button>';
+        } else {
+          actions = '<span style="font-size:.75rem;color:#999">'+b.status+'</span>';
+        }
+
+        html+='<tr><td>'+b.id+'</td><td>'+bandHtml+'</td><td>'+b.sex+'</td><td>'+blName+'</td><td>'+b.hatch_date+'</td><td>'+b.generation+'</td><td>'+b.status+'</td><td>'+parents+'</td><td>'+actions+'</td></tr>';
+      });
+      tbody.innerHTML = html;
+    },
+    applyFilter: function(key){
+      this.filter = key;
+      this.bloodlineFilter = null;
+      this._renderFilters();
+      this._renderTable();
+    },
+    applyBloodlineFilter: function(id){
+      this.bloodlineFilter = (this.bloodlineFilter === id) ? null : id;
+      this.filter = 'all';
+      this._renderFilters();
+      this._renderTable();
+    },
+    updateStatus: async function(id, status){
+      await API.put('/api/birds/'+id, {status: status});
+      // update local cache
+      _birds.forEach(function(b){ if(b.id===id) b.status=status; });
+      this._renderTable();
+    },
+    openModal: function(){
+      var blOpts = '';
+      _bloodlines.forEach(function(bl){
+        blOpts+='<option value="'+bl.id+'">'+bl.name+'</option>';
+      });
+      var today = new Date().toISOString().split('T')[0];
+      var html = '<div class="modal-overlay" id="bird-modal-overlay" onclick="if(event.target===this)Page.Flock.closeModal()">' +
+        '<div class="modal"><h3>Add Bird</h3>' +
+        '<label>Band Color</label><input id="m-band" type="text" placeholder="e.g. red, blue">' +
+        '<label>Sex</label><select id="m-sex"><option value="Male">Male</option><option value="Female">Female</option><option value="Unknown">Unknown</option></select>' +
+        '<label>Bloodline</label><select id="m-bloodline">'+blOpts+'</select>' +
+        '<label>Hatch Date</label><input id="m-hatch" type="date" value="'+today+'">' +
+        '<label>Mother ID (optional)</label><input id="m-mother" type="number" placeholder="Bird ID">' +
+        '<label>Father ID (optional)</label><input id="m-father" type="number" placeholder="Bird ID">' +
+        '<label>Generation</label><input id="m-gen" type="number" value="1" min="1">' +
+        '<label>Notes</label><textarea id="m-notes" placeholder="Optional notes"></textarea>' +
+        '<div class="modal-actions"><button class="btn-cancel" onclick="Page.Flock.closeModal()">Cancel</button><button class="btn-primary" onclick="Page.Flock.submitBird()">Add Bird</button></div>' +
+        '</div></div>';
+      document.body.insertAdjacentHTML('beforeend', html);
+    },
+    closeModal: function(){
+      var ov = document.getElementById('bird-modal-overlay');
+      if(ov) ov.remove();
+    },
+    submitBird: async function(){
+      var band = document.getElementById('m-band').value.trim() || null;
+      var sex = document.getElementById('m-sex').value;
+      var bloodline_id = parseInt(document.getElementById('m-bloodline').value);
+      var hatch_date = document.getElementById('m-hatch').value;
+      var mother = document.getElementById('m-mother').value;
+      var father = document.getElementById('m-father').value;
+      var gen = parseInt(document.getElementById('m-gen').value) || 1;
+      var notes = document.getElementById('m-notes').value.trim() || null;
+
+      if(!bloodline_id || !hatch_date){ alert('Bloodline and hatch date are required'); return; }
+
+      await API.post('/api/birds', {
+        band_color: band,
+        sex: sex,
+        bloodline_id: bloodline_id,
+        hatch_date: hatch_date,
+        mother_id: mother ? parseInt(mother) : null,
+        father_id: father ? parseInt(father) : null,
+        generation: gen,
+        status: 'Active',
+        notes: notes
+      });
+      this.closeModal();
+      this._load();
     }
-    const cpu=d.cpu_usage_percent.toFixed(1);
-    const memPct=((d.memory_used_bytes/d.memory_total_bytes)*100).toFixed(1);
-    const diskPct=((d.disk_used_bytes/d.disk_total_bytes)*100).toFixed(1);
-    const memMB=(d.memory_used_bytes/1048576).toFixed(0);
-    const memTotalMB=(d.memory_total_bytes/1048576).toFixed(0);
-    const diskGB=(d.disk_used_bytes/1073741824).toFixed(1);
-    const diskTotalGB=(d.disk_total_bytes/1073741824).toFixed(1);
+  };
+  window.Page = Page;
 
-    const uptimeH=Math.floor(d.uptime_seconds/3600);
-    const uptimeM=Math.floor((d.uptime_seconds%3600)/60);
+  // ===== Clutches Page =====
+  Page.Clutches = {
+    _clutches: [],
+    render: function(app){
+      app.innerHTML =
+        '<div class="page-top"><div class="page-title">&#x1F95A; Clutches</div><button class="btn-primary" onclick="Page.Clutches.openModal()">+ Add Clutch</button></div>' +
+        '<div id="clutch-list"></div>' +
+        '<div class="timeline-section" id="clutch-timeline-section"></div>';
+    },
+    start: function(){
+      this._load();
+      addInterval(this._load.bind(this), 60000);
+    },
+    stop: function(){},
+    _load: async function(){
+      var bl = await API.get('/api/bloodlines');
+      if(bl) _bloodlines = bl;
+      var data = await API.get('/api/clutches');
+      if(data) this._clutches = data;
+      this._renderList();
+      this._renderTimeline();
+    },
+    _renderList: function(){
+      var el = document.getElementById('clutch-list');
+      if(!el) return;
+      if(this._clutches.length===0){ el.innerHTML='<div class="no-data">No clutches yet</div>'; return; }
+      var now = new Date();
+      var html='<div class="clutch-grid">';
+      var self = this;
 
-    el.innerHTML=`
-      <div class="gauge-row">
-        <div class="gauge-label">CPU</div>
-        <div class="gauge-track"><div class="gauge-fill" style="width:${cpu}%;background:${gaugeColor(cpu)}"></div></div>
-        <div class="gauge-pct">${cpu}%</div>
-      </div>
-      <div class="gauge-row">
-        <div class="gauge-label">RAM</div>
-        <div class="gauge-track"><div class="gauge-fill" style="width:${memPct}%;background:${gaugeColor(memPct)}"></div></div>
-        <div class="gauge-pct">${memPct}%</div>
-      </div>
-      <div class="gauge-row">
-        <div class="gauge-label">Disk</div>
-        <div class="gauge-track"><div class="gauge-fill" style="width:${diskPct}%;background:${gaugeColor(diskPct)}"></div></div>
-        <div class="gauge-pct">${diskPct}%</div>
-      </div>
-      <div style="text-align:center;font-size:.75rem;color:#999;margin-top:.4rem">
-        ${memMB}/${memTotalMB} MB &bull; ${diskGB}/${diskTotalGB} GB &bull; Up ${uptimeH}h ${uptimeM}m
-      </div>
-    `;
-  }
+      // Sort: incubating first, then by set_date desc
+      var sorted = this._clutches.slice().sort(function(a,b){
+        if(a.status==='Incubating' && b.status!=='Incubating') return -1;
+        if(a.status!=='Incubating' && b.status==='Incubating') return 1;
+        return b.id - a.id;
+      });
 
-  // ----- Boot -----
-  function init(){
-    pollStatus();  pollBrooder();  pollAlerts();
-    pollFlock();   pollClutches(); pollBreeding();  pollSystem();
+      sorted.forEach(function(c){
+        var isIncubating = c.status==='Incubating';
+        var muted = isIncubating ? '' : ' muted';
+        var setD = new Date(c.set_date+'T00:00:00');
+        var hatchD = new Date(c.expected_hatch_date+'T00:00:00');
+        var elapsed = Math.max(0,(now-setD)/86400000);
+        var remaining = Math.max(0,Math.ceil((hatchD-now)/86400000));
+        var pct = Math.min(100,(elapsed/17)*100);
+        var cls='early';
+        if(pct>=70) cls='late';
+        else if(pct>=40) cls='mid';
 
-    setInterval(pollStatus,  10000);
-    setInterval(pollBrooder, 30000);
-    setInterval(pollAlerts,  30000);
-    setInterval(pollSystem,  30000);
-    setInterval(pollFlock,   60000);
-    setInterval(pollClutches,60000);
-    setInterval(pollBreeding,60000);
-  }
+        var eggs = c.eggs_set;
+        var fertile = c.eggs_fertile!=null ? c.eggs_fertile : '?';
+        var hatched = c.eggs_hatched!=null ? c.eggs_hatched : '?';
 
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',init);
-  else init();
+        // Bloodline name
+        var blName='';
+        _bloodlines.forEach(function(bl){ if(bl.id===c.bloodline_id) blName=bl.name; });
+
+        var card = '<div class="clutch-page-card'+muted+'">';
+        card += '<h4>Clutch #'+c.id+(blName?' &mdash; '+blName:'')+'</h4>';
+
+        if(isIncubating){
+          card += '<div class="progress-bar"><div class="progress-fill '+cls+'" style="width:'+pct.toFixed(0)+'%"></div></div>';
+          card += '<div class="clutch-info"><span>Day '+Math.floor(elapsed)+' of 17</span><span>'+remaining+' days left</span></div>';
+        }
+
+        card += '<div class="clutch-stats"><span>Set: '+eggs+'</span><span>Fertile: '+fertile+'</span><span>Hatched: '+hatched+'</span><span>Status: '+c.status+'</span></div>';
+
+        if(isIncubating){
+          card += '<div class="clutch-actions">';
+          card += '<button class="status-btn" onclick="Page.Clutches.showCandling('+c.id+')">Record Candling</button>';
+          card += '<button class="status-btn" onclick="Page.Clutches.showHatch('+c.id+')">Record Hatch</button>';
+          card += '</div>';
+          card += '<div id="clutch-inline-'+c.id+'"></div>';
+        }
+
+        card += '</div>';
+        html += card;
+      });
+      html += '</div>';
+      el.innerHTML = html;
+    },
+    _renderTimeline: function(){
+      var el = document.getElementById('clutch-timeline-section');
+      if(!el) return;
+      var incubating = this._clutches.filter(function(c){ return c.status==='Incubating'; });
+      if(incubating.length===0){ el.innerHTML=''; return; }
+
+      var now = new Date();
+      var html='<h3>Incubation Timeline</h3><div class="timeline">';
+      incubating.forEach(function(c){
+        var setD = new Date(c.set_date+'T00:00:00');
+        var elapsed = Math.max(0,Math.floor((now-setD)/86400000));
+        var day = Math.min(elapsed,17);
+        var pct = (day/17)*100;
+        var h = Math.max(30, (pct/100)*120);
+        var cls='var(--sage)';
+        if(pct>=70) cls='var(--dusty-rose)';
+        else if(pct>=40) cls='var(--warning)';
+        html+='<div class="timeline-bar" style="height:'+h+'px;background:'+cls+';width:40px"><span class="timeline-label">#'+c.id+'</span>'+day+'</div>';
+      });
+      html += '</div>';
+      el.innerHTML = html;
+    },
+    showCandling: function(id){
+      var el = document.getElementById('clutch-inline-'+id);
+      if(!el) return;
+      el.innerHTML='<div class="inline-form"><label>Fertile eggs</label><input type="number" id="candle-count-'+id+'" min="0"><button class="btn-primary" onclick="Page.Clutches.recordCandling('+id+')">Save</button><button class="btn-cancel" onclick="document.getElementById(\'clutch-inline-'+id+'\').innerHTML=\'\'">Cancel</button></div>';
+    },
+    showHatch: function(id){
+      var el = document.getElementById('clutch-inline-'+id);
+      if(!el) return;
+      el.innerHTML='<div class="inline-form"><label>Hatched count</label><input type="number" id="hatch-count-'+id+'" min="0"><button class="btn-primary" onclick="Page.Clutches.recordHatch('+id+')">Save</button><button class="btn-cancel" onclick="document.getElementById(\'clutch-inline-'+id+'\').innerHTML=\'\'">Cancel</button></div>';
+    },
+    recordCandling: async function(id){
+      var count = parseInt(document.getElementById('candle-count-'+id).value);
+      if(isNaN(count)) return;
+      await API.put('/api/clutches/'+id, {eggs_fertile: count});
+      this._load();
+    },
+    recordHatch: async function(id){
+      var count = parseInt(document.getElementById('hatch-count-'+id).value);
+      if(isNaN(count)) return;
+      await API.put('/api/clutches/'+id, {eggs_hatched: count, status: 'Hatched'});
+      this._load();
+    },
+    openModal: function(){
+      var blOpts = '<option value="">-- None --</option>';
+      _bloodlines.forEach(function(bl){
+        blOpts+='<option value="'+bl.id+'">'+bl.name+'</option>';
+      });
+      var today = new Date().toISOString().split('T')[0];
+      var html = '<div class="modal-overlay" id="clutch-modal-overlay" onclick="if(event.target===this)Page.Clutches.closeModal()">' +
+        '<div class="modal"><h3>Add Clutch</h3>' +
+        '<label>Bloodline</label><select id="mc-bloodline">'+blOpts+'</select>' +
+        '<label>Eggs Set</label><input id="mc-eggs" type="number" min="1" value="12">' +
+        '<label>Set Date</label><input id="mc-date" type="date" value="'+today+'">' +
+        '<label>Notes</label><textarea id="mc-notes" placeholder="Optional notes"></textarea>' +
+        '<div class="modal-actions"><button class="btn-cancel" onclick="Page.Clutches.closeModal()">Cancel</button><button class="btn-primary" onclick="Page.Clutches.submitClutch()">Add Clutch</button></div>' +
+        '</div></div>';
+      document.body.insertAdjacentHTML('beforeend', html);
+    },
+    closeModal: function(){
+      var ov = document.getElementById('clutch-modal-overlay');
+      if(ov) ov.remove();
+    },
+    submitClutch: async function(){
+      var bloodline = document.getElementById('mc-bloodline').value;
+      var eggs = parseInt(document.getElementById('mc-eggs').value);
+      var setDate = document.getElementById('mc-date').value;
+      var notes = document.getElementById('mc-notes').value.trim() || null;
+
+      if(!eggs || !setDate){ alert('Eggs count and set date are required'); return; }
+
+      await API.post('/api/clutches', {
+        breeding_pair_id: null,
+        bloodline_id: bloodline ? parseInt(bloodline) : null,
+        eggs_set: eggs,
+        eggs_fertile: null,
+        eggs_hatched: null,
+        set_date: setDate,
+        status: 'Incubating',
+        notes: notes
+      });
+      this.closeModal();
+      this._load();
+    }
+  };
+
+  // ===== Boot =====
+  Router.init();
 })();
 </script>
 </body>

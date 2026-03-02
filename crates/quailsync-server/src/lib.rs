@@ -15,7 +15,8 @@ use colored::Colorize;
 use quailsync_common::{
     Alert, AlertConfig, Bird, BirdStatus, Bloodline, BreedingPair, BrooderReading, Clutch,
     ClutchStatus, CreateBird, CreateBloodline, CreateBreedingPair, CreateClutch,
-    InbreedingCoefficient, Sex, Severity, Species, SystemMetrics, TelemetryPayload, UpdateClutch,
+    InbreedingCoefficient, Sex, Severity, Species, SystemMetrics, TelemetryPayload, UpdateBird,
+    UpdateClutch,
 };
 use rust_embed::Embed;
 use rusqlite::{params, Connection};
@@ -649,6 +650,68 @@ async fn list_birds(State(state): State<AppState>) -> Json<Vec<Bird>> {
     Json(rows)
 }
 
+async fn update_bird(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<UpdateBird>,
+) -> impl IntoResponse {
+    let conn = state.db.lock().unwrap();
+
+    let exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM birds WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|c| c > 0)
+        .unwrap_or(false);
+
+    if !exists {
+        return (StatusCode::NOT_FOUND, Json(None::<Bird>)).into_response();
+    }
+
+    if let Some(ref status) = body.status {
+        conn.execute(
+            "UPDATE birds SET status = ?1 WHERE id = ?2",
+            params![bird_status_to_str(status), id],
+        )
+        .unwrap();
+    }
+    if let Some(ref notes) = body.notes {
+        conn.execute(
+            "UPDATE birds SET notes = ?1 WHERE id = ?2",
+            params![notes, id],
+        )
+        .unwrap();
+    }
+
+    let bird = conn
+        .query_row(
+            "SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes FROM birds WHERE id = ?1",
+            params![id],
+            |row| {
+                let sex_str: String = row.get(2)?;
+                let hatch_str: String = row.get(4)?;
+                let status_str: String = row.get(8)?;
+                Ok(Bird {
+                    id: row.get(0)?,
+                    band_color: row.get(1)?,
+                    sex: str_to_sex(&sex_str),
+                    bloodline_id: row.get(3)?,
+                    hatch_date: NaiveDate::parse_from_str(&hatch_str, "%Y-%m-%d").unwrap_or_default(),
+                    mother_id: row.get(5)?,
+                    father_id: row.get(6)?,
+                    generation: row.get(7)?,
+                    status: str_to_bird_status(&status_str),
+                    notes: row.get(9)?,
+                })
+            },
+        )
+        .unwrap();
+
+    (StatusCode::OK, Json(Some(bird))).into_response()
+}
+
 // --- Breeding Pairs ---
 
 async fn create_breeding_pair(
@@ -1052,6 +1115,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/alerts", get(alerts))
         .route("/api/bloodlines", get(list_bloodlines).post(create_bloodline))
         .route("/api/birds", get(list_birds).post(create_bird))
+        .route("/api/birds/{id}", axum::routing::put(update_bird))
         .route("/api/breeding-pairs", get(list_breeding_pairs).post(create_breeding_pair))
         .route("/api/clutches", get(list_clutches).post(create_clutch))
         .route("/api/clutches/{id}", axum::routing::put(update_clutch))
