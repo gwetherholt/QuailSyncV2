@@ -48,8 +48,6 @@ QuailSync is a Rust workspace with four crates and an embedded web dashboard:
 - **Flock summary** -- At-a-glance stats: total/active birds, male/female counts, birds per bloodline
 - **Status lifecycle** -- Mark birds as Active, Culled, Deceased, or Sold
 <img width="1187" height="483" alt="image" src="https://github.com/user-attachments/assets/8449f6f2-4d4c-4e52-858c-72690489ca3d" />
-<img width="1498" height="607" alt="image" src="https://github.com/user-attachments/assets/4320fb95-6fc4-4720-9bfa-f75a311a0693" />
-<img width="1498" height="607" alt="image" src="https://github.com/user-attachments/assets/a2a42ae7-1938-4e78-a84e-8beba7278545" />
 
 ### Clutch & Incubation
 - **Clutch tracking** -- Log clutches with egg counts, set dates, and automatic 17-day hatch date calculation
