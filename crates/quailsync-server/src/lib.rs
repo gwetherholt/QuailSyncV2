@@ -47,10 +47,26 @@ pub struct AppState {
 }
 
 // ---------------------------------------------------------------------------
+// Mutex helper — recover from poison instead of cascading panics
+// ---------------------------------------------------------------------------
+
+/// Acquire the database connection, recovering from a poisoned mutex.
+/// A poisoned mutex means a previous thread panicked while holding the lock,
+/// but the underlying SQLite connection is still valid and usable.
+fn acquire_db(state: &AppState) -> std::sync::MutexGuard<'_, Connection> {
+    state.db.lock().unwrap_or_else(|poisoned| {
+        eprintln!("{}", "[WARN] Database mutex was poisoned — recovering".yellow());
+        poisoned.into_inner()
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Database setup
 // ---------------------------------------------------------------------------
 
 pub fn init_db(conn: &Connection) {
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
+        .expect("failed to enable foreign keys");
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS brooders (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -344,7 +360,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             Message::Text(text) => match serde_json::from_str::<TelemetryPayload>(&text) {
                 Ok(payload) => {
                     print_payload(&payload);
-                    let conn = state.db.lock().unwrap();
+                    let conn = acquire_db(&state);
                     store_payload(&conn, &payload);
                     if let TelemetryPayload::Brooder(ref reading) = payload {
                         check_brooder_alerts(&conn, reading, &state.alert_config);
@@ -402,7 +418,7 @@ async fn health() -> &'static str {
 }
 
 async fn brooder_latest(State(state): State<AppState>) -> impl IntoResponse {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let result = conn.query_row(
         "SELECT temperature, humidity, timestamp, brooder_id FROM brooder_readings
          ORDER BY id DESC LIMIT 1",
@@ -433,7 +449,7 @@ async fn brooder_history(
     Query(params): Query<HistoryParams>,
 ) -> impl IntoResponse {
     let minutes = params.minutes.unwrap_or(60);
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let mut stmt = conn
         .prepare(
             "SELECT temperature, humidity, timestamp, brooder_id FROM brooder_readings
@@ -461,7 +477,7 @@ async fn brooder_history(
 }
 
 async fn system_latest(State(state): State<AppState>) -> impl IntoResponse {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let result = conn.query_row(
         "SELECT cpu_usage, memory_used, memory_total, disk_used, disk_total, uptime_seconds
          FROM system_metrics ORDER BY id DESC LIMIT 1",
@@ -492,7 +508,7 @@ struct StatusSummary {
 }
 
 async fn status(State(state): State<AppState>) -> Json<StatusSummary> {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
 
     let last_brooder: Option<String> = conn
         .query_row(
@@ -531,7 +547,7 @@ async fn alerts(
     Query(params): Query<HistoryParams>,
 ) -> Json<Vec<Alert>> {
     let minutes = params.minutes.unwrap_or(60);
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let mut stmt = conn
         .prepare(
             "SELECT severity, message, timestamp FROM alerts
@@ -621,7 +637,7 @@ async fn create_bloodline(
     State(state): State<AppState>,
     Json(body): Json<CreateBloodline>,
 ) -> impl IntoResponse {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     conn.execute(
         "INSERT INTO bloodlines (name, source, notes) VALUES (?1, ?2, ?3)",
         params![body.name, body.source, body.notes],
@@ -640,7 +656,7 @@ async fn create_bloodline(
 }
 
 async fn list_bloodlines(State(state): State<AppState>) -> Json<Vec<Bloodline>> {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let mut stmt = conn
         .prepare("SELECT id, name, source, notes FROM bloodlines ORDER BY id")
         .unwrap();
@@ -665,7 +681,7 @@ async fn create_bird(
     State(state): State<AppState>,
     Json(body): Json<CreateBird>,
 ) -> impl IntoResponse {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     conn.execute(
         "INSERT INTO birds (band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -701,7 +717,7 @@ async fn create_bird(
 }
 
 async fn list_birds(State(state): State<AppState>) -> Json<Vec<Bird>> {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let mut stmt = conn
         .prepare("SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes FROM birds ORDER BY id")
         .unwrap();
@@ -734,7 +750,7 @@ async fn update_bird(
     Path(id): Path<i64>,
     Json(body): Json<UpdateBird>,
 ) -> impl IntoResponse {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
 
     let exists: bool = conn
         .query_row(
@@ -797,7 +813,7 @@ async fn create_breeding_pair(
     State(state): State<AppState>,
     Json(body): Json<CreateBreedingPair>,
 ) -> impl IntoResponse {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     conn.execute(
         "INSERT INTO breeding_pairs (male_id, female_id, start_date, end_date, notes)
          VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -825,7 +841,7 @@ async fn create_breeding_pair(
 }
 
 async fn list_breeding_pairs(State(state): State<AppState>) -> Json<Vec<BreedingPair>> {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let mut stmt = conn
         .prepare("SELECT id, male_id, female_id, start_date, end_date, notes FROM breeding_pairs ORDER BY id")
         .unwrap();
@@ -855,7 +871,7 @@ async fn create_clutch(
     Json(body): Json<CreateClutch>,
 ) -> impl IntoResponse {
     let expected = body.set_date + chrono::Duration::days(17);
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     conn.execute(
         "INSERT INTO clutches (breeding_pair_id, bloodline_id, eggs_set, eggs_fertile, eggs_hatched, set_date, expected_hatch_date, status, notes)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -891,7 +907,7 @@ async fn create_clutch(
 }
 
 async fn list_clutches(State(state): State<AppState>) -> Json<Vec<Clutch>> {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let mut stmt = conn
         .prepare("SELECT id, breeding_pair_id, bloodline_id, eggs_set, eggs_fertile, eggs_hatched, set_date, expected_hatch_date, status, notes FROM clutches ORDER BY id")
         .unwrap();
@@ -924,7 +940,7 @@ async fn update_clutch(
     Path(id): Path<i64>,
     Json(body): Json<UpdateClutch>,
 ) -> impl IntoResponse {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
 
     let exists: bool = conn
         .query_row(
@@ -1013,7 +1029,7 @@ struct BloodlineCount {
 }
 
 async fn flock_summary(State(state): State<AppState>) -> Json<FlockSummary> {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
 
     let total_birds: i64 = conn
         .query_row("SELECT COUNT(*) FROM birds", [], |row| row.get(0))
@@ -1105,7 +1121,7 @@ fn compute_relatedness(m: &BirdRecord, f: &BirdRecord) -> f64 {
 }
 
 async fn breeding_suggest(State(state): State<AppState>) -> Json<Vec<InbreedingCoefficient>> {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let mut stmt = conn
         .prepare(
             "SELECT id, sex, bloodline_id, mother_id, father_id
@@ -1158,7 +1174,7 @@ async fn create_weight(
     Path(bird_id): Path<i64>,
     Json(body): Json<CreateWeightRecord>,
 ) -> impl IntoResponse {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     conn.execute(
         "INSERT INTO weight_records (bird_id, weight_grams, date, notes) VALUES (?1, ?2, ?3, ?4)",
         params![bird_id, body.weight_grams, body.date.to_string(), body.notes],
@@ -1181,7 +1197,7 @@ async fn list_weights(
     State(state): State<AppState>,
     Path(bird_id): Path<i64>,
 ) -> Json<Vec<WeightRecord>> {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let mut stmt = conn
         .prepare(
             "SELECT id, bird_id, weight_grams, date, notes FROM weight_records
@@ -1267,7 +1283,7 @@ async fn create_processing(
     State(state): State<AppState>,
     Json(body): Json<CreateProcessingRecord>,
 ) -> impl IntoResponse {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     conn.execute(
         "INSERT INTO processing_records (bird_id, reason, scheduled_date, notes) VALUES (?1, ?2, ?3, ?4)",
         params![
@@ -1299,7 +1315,7 @@ async fn update_processing(
     Path(id): Path<i64>,
     Json(body): Json<UpdateProcessingRecord>,
 ) -> impl IntoResponse {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
 
     let exists: bool = conn
         .query_row(
@@ -1356,7 +1372,7 @@ async fn update_processing(
 }
 
 async fn list_processing(State(state): State<AppState>) -> Json<Vec<ProcessingRecord>> {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let mut stmt = conn
         .prepare(
             "SELECT id, bird_id, reason, scheduled_date, processed_date, final_weight_grams, status, notes
@@ -1372,7 +1388,7 @@ async fn list_processing(State(state): State<AppState>) -> Json<Vec<ProcessingRe
 }
 
 async fn list_processing_queue(State(state): State<AppState>) -> Json<Vec<ProcessingRecord>> {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let mut stmt = conn
         .prepare(
             "SELECT id, bird_id, reason, scheduled_date, processed_date, final_weight_grams, status, notes
@@ -1404,7 +1420,7 @@ async fn create_breeding_group(
         None
     };
 
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     conn.execute(
         "INSERT INTO breeding_groups (name, male_id, start_date, notes) VALUES (?1, ?2, ?3, ?4)",
         params![body.name, body.male_id, body.start_date.to_string(), body.notes],
@@ -1444,7 +1460,7 @@ async fn create_breeding_group(
 }
 
 async fn list_breeding_groups(State(state): State<AppState>) -> Json<Vec<BreedingGroup>> {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let mut stmt = conn
         .prepare("SELECT id, name, male_id, start_date, notes FROM breeding_groups ORDER BY id")
         .unwrap();
@@ -1488,7 +1504,7 @@ async fn get_breeding_group(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let group = conn.query_row(
         "SELECT id, name, male_id, start_date, notes FROM breeding_groups WHERE id = ?1",
         params![id],
@@ -1537,7 +1553,7 @@ async fn get_breeding_group(
 // ---------------------------------------------------------------------------
 
 async fn cull_recommendations(State(state): State<AppState>) -> Json<Vec<CullRecommendation>> {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let mut recs: Vec<CullRecommendation> = Vec::new();
 
     // 1. Excess males: ideal males = ceil(active_females / MAX_FEMALES_PER_MALE)
@@ -1707,7 +1723,7 @@ async fn create_camera(
     State(state): State<AppState>,
     Json(body): Json<CreateCameraFeed>,
 ) -> impl IntoResponse {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     conn.execute(
         "INSERT INTO camera_feeds (name, location, feed_url, status, brooder_id) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![
@@ -1734,7 +1750,7 @@ async fn create_camera(
 }
 
 async fn list_cameras(State(state): State<AppState>) -> Json<Vec<CameraFeed>> {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let mut stmt = conn
         .prepare("SELECT id, name, location, feed_url, status, brooder_id FROM camera_feeds ORDER BY id")
         .unwrap();
@@ -1761,7 +1777,7 @@ async fn create_frame(
     Json(body): Json<CreateFrameCapture>,
 ) -> impl IntoResponse {
     let now = Utc::now();
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     conn.execute(
         "INSERT INTO frame_captures (camera_id, timestamp, image_path, life_stage) VALUES (?1, ?2, ?3, ?4)",
         params![
@@ -1790,7 +1806,7 @@ async fn create_frame_detections(
     Path(frame_id): Path<i64>,
     Json(body): Json<Vec<CreateDetectionResult>>,
 ) -> impl IntoResponse {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let mut results = Vec::new();
     for d in body {
         conn.execute(
@@ -1835,7 +1851,7 @@ async fn list_frames(
     Query(params): Query<FrameQueryParams>,
 ) -> Json<Vec<FrameCapture>> {
     let minutes = params.minutes.unwrap_or(60);
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
 
     let (sql, binds): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match params.camera_id {
         Some(cid) => (
@@ -1889,7 +1905,7 @@ async fn camera_detection_summary(
     State(state): State<AppState>,
     Path(camera_id): Path<i64>,
 ) -> Json<Vec<DetectionSummaryEntry>> {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let mut stmt = conn
         .prepare(
             "SELECT dr.label, COUNT(*), AVG(dr.confidence)
@@ -1923,8 +1939,27 @@ async fn create_brooder(
     State(state): State<AppState>,
     Json(body): Json<CreateBrooder>,
 ) -> impl IntoResponse {
-    let conn = state.db.lock().unwrap();
-    conn.execute(
+    let conn = acquire_db(&state);
+
+    // Validate bloodline exists if provided
+    if let Some(bl_id) = body.bloodline_id {
+        let exists = conn
+            .query_row(
+                "SELECT COUNT(*) FROM bloodlines WHERE id = ?1",
+                params![bl_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0);
+        if exists == 0 {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Bloodline #{bl_id} does not exist"),
+            )
+                .into_response();
+        }
+    }
+
+    match conn.execute(
         "INSERT INTO brooders (name, bloodline_id, life_stage, qr_code, notes) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![
             body.name,
@@ -1933,24 +1968,32 @@ async fn create_brooder(
             body.qr_code,
             body.notes,
         ],
-    )
-    .unwrap();
-    let id = conn.last_insert_rowid();
-    (
-        StatusCode::CREATED,
-        Json(Brooder {
-            id,
-            name: body.name,
-            bloodline_id: body.bloodline_id,
-            life_stage: body.life_stage,
-            qr_code: body.qr_code,
-            notes: body.notes,
-        }),
-    )
+    ) {
+        Ok(_) => {
+            let id = conn.last_insert_rowid();
+            (
+                StatusCode::CREATED,
+                Json(Brooder {
+                    id,
+                    name: body.name,
+                    bloodline_id: body.bloodline_id,
+                    life_stage: body.life_stage,
+                    qr_code: body.qr_code,
+                    notes: body.notes,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to create brooder: {e}"),
+        )
+            .into_response(),
+    }
 }
 
 async fn list_brooders(State(state): State<AppState>) -> Json<Vec<Brooder>> {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let mut stmt = conn
         .prepare("SELECT id, name, bloodline_id, life_stage, qr_code, notes FROM brooders ORDER BY id")
         .unwrap();
@@ -1978,7 +2021,7 @@ async fn brooder_readings(
     Query(params): Query<HistoryParams>,
 ) -> Json<Vec<BrooderReading>> {
     let minutes = params.minutes.unwrap_or(60);
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     let mut stmt = conn
         .prepare(
             "SELECT temperature, humidity, timestamp, brooder_id FROM brooder_readings
@@ -2018,7 +2061,7 @@ async fn brooder_status(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
 
     // Fetch the brooder
     let brooder = conn.query_row(
@@ -2082,7 +2125,7 @@ async fn update_camera_brooder(
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let brooder_id = body.get("brooder_id").and_then(|v| v.as_i64());
-    let conn = state.db.lock().unwrap();
+    let conn = acquire_db(&state);
     conn.execute(
         "UPDATE camera_feeds SET brooder_id = ?1 WHERE id = ?2",
         params![brooder_id, id],
