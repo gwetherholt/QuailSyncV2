@@ -1,4 +1,5 @@
 # QuailSync
+<img width="1174" height="947" alt="image" src="https://github.com/user-attachments/assets/ef0b7dc5-2609-44f5-b839-a32de03f7eb0" />
 
 A cozy, all-in-one quail farm management system built in Rust. Monitors brooder conditions in real time, tracks your entire flock with colored leg bands, manages clutch incubation from set to hatch, and even helps you pick the safest breeding pairs so your covey stays healthy and happy.
 
@@ -46,6 +47,9 @@ QuailSync is a Rust workspace with four crates and an embedded web dashboard:
 - **Bloodline registry** -- Track breeding lines with name, source, and notes
 - **Flock summary** -- At-a-glance stats: total/active birds, male/female counts, birds per bloodline
 - **Status lifecycle** -- Mark birds as Active, Culled, Deceased, or Sold
+<img width="1187" height="483" alt="image" src="https://github.com/user-attachments/assets/8449f6f2-4d4c-4e52-858c-72690489ca3d" />
+<img width="1498" height="607" alt="image" src="https://github.com/user-attachments/assets/4320fb95-6fc4-4720-9bfa-f75a311a0693" />
+![Uploading image.png…]()
 
 ### Clutch & Incubation
 - **Clutch tracking** -- Log clutches with egg counts, set dates, and automatic 17-day hatch date calculation
@@ -70,6 +74,7 @@ QuailSync is a Rust workspace with four crates and an embedded web dashboard:
 - **Full management suite** -- `status`, `brood`, `system`, `alerts`, `bloodline`, `bird`, `flock`, `clutch`, `breeding` subcommands
 - **Colored terminal output** -- Status indicators, reading tables, and alert history with ANSI colors
 - **Remote server support** -- Point the CLI at any QuailSync server with `--server`
+![Uploading image.png…]()
 
 ## Quick Start
 
