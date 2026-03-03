@@ -2399,15 +2399,24 @@
      --------------------------------------------------------- */
   Page.NfcScan = {
     render: function(app){
+      var isHttps = location.protocol === 'https:';
       var hasWebNfc = 'NDEFReader' in window;
       var html = '<div class="page-top-bar"><h2>NFC Tag Scanner</h2></div>';
       html += '<div class="panel"><div class="panel-body" style="text-align:center;padding:2rem">';
-      if(hasWebNfc){
+      if(!isHttps){
+        var httpsUrl = 'https://' + location.hostname + ':3443' + location.pathname + location.hash;
+        html += '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:1rem;margin-bottom:1.5rem;color:#856404">';
+        html += '<strong>HTTPS Required for NFC</strong><br>';
+        html += 'For NFC scanning, access this page at<br><a href="'+httpsUrl+'" style="color:#0d6efd;word-break:break-all">'+httpsUrl+'</a><br>from your Android phone.';
+        html += '<br><small style="color:#888">You may need to accept the self-signed certificate warning.</small>';
+        html += '</div>';
+      }
+      if(isHttps && hasWebNfc){
         html += '<p>Tap an NFC tag to look up the bird.</p>';
         html += '<button class="btn-primary" id="nfc-scan-btn" onclick="Page.NfcScan.startScan()">Start Scanning</button>';
         html += '<div id="nfc-scan-status" style="margin-top:1rem"></div>';
-      } else {
-        html += '<p style="color:#888">Web NFC is not available in this browser.<br>Requires Android Chrome over HTTPS.</p>';
+      } else if(isHttps && !hasWebNfc){
+        html += '<p style="color:#888">Web NFC is not available in this browser.<br>Requires Android Chrome.</p>';
       }
       html += '<hr style="margin:1.5rem 0">';
       html += '<p>Or enter a tag ID manually:</p>';
