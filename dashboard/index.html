@@ -558,11 +558,29 @@
   .camera-status-badge.offline{background:var(--danger);color:#fff}
   .camera-meta{font-size:.8rem;color:#777;margin-bottom:.5rem}
   .camera-meta span{margin-right:1rem}
+  .camera-feed{position:relative;margin-bottom:.6rem}
+  .camera-feed img{width:100%;border-radius:8px;display:block;background:#000}
   .camera-feed-placeholder{
-    background:var(--beige);border-radius:8px;height:150px;
+    background:var(--beige);border-radius:8px;height:200px;
     display:flex;align-items:center;justify-content:center;
     color:#aaa;font-size:.85rem;font-style:italic;
     border:2px dashed #d0c8c0;margin-bottom:.6rem;
+  }
+  .camera-actions{display:flex;gap:.5rem;margin-bottom:.5rem}
+  .camera-actions button{
+    flex:1;padding:.35rem .5rem;font-size:.78rem;border:1px solid #d0c8c0;
+    border-radius:var(--radius);background:var(--beige);cursor:pointer;
+    transition:background .15s;
+  }
+  .camera-actions button:hover{background:#e8e0d8}
+  .camera-settings-btn{
+    background:none;border:none;cursor:pointer;font-size:1rem;padding:2px 6px;
+    border-radius:4px;opacity:.6;transition:opacity .15s;
+  }
+  .camera-settings-btn:hover{opacity:1}
+  .camera-thumb{
+    border-radius:6px;object-fit:cover;cursor:pointer;
+    border:1px solid #d0c8c0;background:#000;
   }
   .detection-summary{margin-top:.5rem}
   .detection-summary-title{font-size:.75rem;color:#999;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.3rem}
@@ -1017,7 +1035,8 @@
         return;
       }
       // Multi-brooder
-      var html='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.75rem">';
+      var DEFAULT_CAM = 'http://192.168.0.114:8080';
+      var html='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:.75rem">';
       for(var i=0;i<brooders.length;i++){
         var b=brooders[i];
         var status = await API.get('/api/brooders/'+b.id+'/status');
@@ -1027,6 +1046,7 @@
         var tempStr = status && status.latest_temp!=null ? status.latest_temp.toFixed(1)+'&deg;F' : '--';
         var humStr = status && status.latest_humidity!=null ? status.latest_humidity.toFixed(1)+'%' : '--';
         var alertHtml = (status && status.has_alert) ? status.alert_message : '';
+        var camBase = b.camera_url || DEFAULT_CAM;
         // Seed sparkline cache from REST data
         var sparkTemps = [];
         if(readings && readings.length>0){
@@ -1036,7 +1056,10 @@
         self._sparkCache[String(b.id)] = sparkTemps.slice();
         html+='<div data-brooder-id="'+b.id+'" style="background:var(--cream);border-radius:var(--radius);padding:.75rem;'+alertBorder+'">';
         html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem"><strong style="font-size:.88rem">'+b.name+'</strong><span style="font-size:.62rem;padding:2px 6px;border-radius:8px;'+stageCls+'">'+b.life_stage+'</span></div>';
-        html+='<div class="reading-row" style="margin-bottom:.2rem"><div><span class="reading-label">Temp</span><br><span class="reading-value" data-field="temp">'+tempStr+'</span></div><div style="text-align:right"><span class="reading-label">Hum</span><br><span class="reading-value" data-field="hum">'+humStr+'</span></div></div>';
+        html+='<div style="display:flex;gap:.5rem;align-items:flex-start;margin-bottom:.2rem">';
+        html+='<div style="flex:1"><div class="reading-row"><div><span class="reading-label">Temp</span><br><span class="reading-value" data-field="temp">'+tempStr+'</span></div><div style="text-align:right"><span class="reading-label">Hum</span><br><span class="reading-value" data-field="hum">'+humStr+'</span></div></div></div>';
+        html+='<a onclick="Router.navigate(\'#/cameras\')" title="View camera"><img class="camera-thumb" src="'+camBase+'/stream" width="100" height="75" onerror="this.style.display=\'none\'"></a>';
+        html+='</div>';
         html+='<div class="sparkline" data-field="spark">'+self._buildSparkBars(sparkTemps,20,28)+'</div>';
         html+='<div data-field="alert" style="font-size:.7rem;color:var(--danger);margin-top:.3rem">'+alertHtml+'</div>';
         html+='</div>';
@@ -2205,9 +2228,10 @@
      CAMERAS PAGE
      --------------------------------------------------------- */
   Page.Cameras = {
+    _brooders: [],
     _cameras: [],
-    _summaries: {},
-    _lastFrames: {},
+    _DEFAULT_CAM: 'http://192.168.0.114:8080',
+
     render: function(app){
       app.innerHTML =
         '<div class="page-top"><div class="page-title">&#x1F3A5; Cameras</div><button class="btn-primary" onclick="Page.Cameras.openModal()">+ Add Camera</button></div>' +
@@ -2215,74 +2239,98 @@
     },
     start: function(){
       this._load();
-      addInterval(this._load.bind(this), 30000);
+      addInterval(this._load.bind(this), 60000);
     },
     stop: function(){},
-    _load: async function(){
-      var cams = await API.get('/api/cameras');
-      if(cams) this._cameras = cams; else this._cameras = [];
 
-      var self = this;
-      var promises = this._cameras.map(async function(cam){
-        var summary = await API.get('/api/cameras/'+cam.id+'/detections/summary');
-        if(summary) self._summaries[cam.id] = summary; else self._summaries[cam.id] = [];
-        var frames = await API.get('/api/frames?camera_id='+cam.id+'&minutes=1440');
-        if(frames && frames.length>0) self._lastFrames[cam.id] = frames[0];
-        else self._lastFrames[cam.id] = null;
-      });
-      await Promise.all(promises);
+    _load: async function(){
+      var brooders = await API.get('/api/brooders');
+      this._brooders = brooders || [];
+      var cams = await API.get('/api/cameras');
+      this._cameras = cams || [];
       this._renderList();
     },
+
+    _camUrl: function(brooder){
+      return brooder.camera_url || this._DEFAULT_CAM;
+    },
+
     _renderList: function(){
       var el = document.getElementById('cameras-list');
       if(!el) return;
-      if(this._cameras.length===0){
-        el.innerHTML = emptyState('&#x1F3A5;','No cameras registered yet','+ Add Camera','Page.Cameras.openModal()');
+      if(this._brooders.length===0 && this._cameras.length===0){
+        el.innerHTML = emptyState('&#x1F3A5;','No cameras configured','+ Add Camera','Page.Cameras.openModal()');
         return;
       }
       var self = this;
       var html='<div class="camera-grid">';
-      this._cameras.forEach(function(cam){
-        var statusCls = cam.status==='Active'?'active':'offline';
-        var lastFrame = self._lastFrames[cam.id];
-        var lastTs = lastFrame ? lastFrame.timestamp.replace('T',' ').substring(0,16) : 'No captures';
-        var lastStage = lastFrame ? lastFrame.life_stage : '';
 
-        html+='<div class="camera-card">';
-        html+='<div class="camera-card-header"><h4>'+cam.name+'</h4><span class="camera-status-badge '+statusCls+'">'+cam.status+'</span></div>';
-        html+='<div class="camera-meta"><span>'+cam.location+'</span><span>'+cam.feed_url+'</span></div>';
-        html+='<div class="camera-feed-placeholder">Live feed &mdash; connect Pi to enable</div>';
-        html+='<div class="camera-meta"><span>Last capture: '+lastTs+'</span>';
-        if(lastStage) html+='<span>Stage: '+lastStage+'</span>';
-        html+='</div>';
-
-        var summary = self._summaries[cam.id] || [];
-        if(summary.length>0){
-          var maxCount = Math.max.apply(null, summary.map(function(s){return s.count}));
-          html+='<div class="detection-summary"><div class="detection-summary-title">Recent Detections</div>';
-          summary.forEach(function(s){
-            var pct = maxCount>0 ? (s.count/maxCount)*100 : 0;
-            html+='<div class="detection-bar">';
-            html+='<span class="detection-bar-label">'+s.label+'</span>';
-            html+='<div style="flex:1;background:var(--beige);border-radius:3px;height:6px"><div class="detection-bar-fill" style="width:'+pct.toFixed(0)+'%"></div></div>';
-            html+='<span class="detection-bar-count">'+s.count+' ('+(s.avg_confidence*100).toFixed(0)+'%)</span>';
-            html+='</div>';
-          });
-          html+='</div>';
-        } else {
-          html+='<div class="no-data" style="padding:.4rem;font-size:.8rem">No detections yet</div>';
-        }
+      // Brooder cameras
+      this._brooders.forEach(function(b){
+        var baseUrl = self._camUrl(b);
+        var streamUrl = baseUrl+'/stream';
+        var snapUrl = baseUrl+'/snapshot';
+        html+='<div class="camera-card" data-brooder-cam="'+b.id+'">';
+        html+='<div class="camera-card-header"><h4>'+b.name+' Camera</h4><div style="display:flex;align-items:center;gap:.4rem"><span class="camera-status-badge active" id="cam-status-'+b.id+'">Live</span><button class="camera-settings-btn" onclick="Page.Cameras.editUrl('+b.id+')" title="Camera settings">&#x2699;</button></div></div>';
+        html+='<div class="camera-feed"><img src="'+streamUrl+'" alt="'+b.name+' feed" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\';var badge=document.getElementById(\'cam-status-'+b.id+'\');if(badge){badge.className=\'camera-status-badge offline\';badge.textContent=\'Offline\'}"><div class="camera-feed-placeholder" style="display:none">Camera offline or unreachable</div></div>';
+        html+='<div class="camera-actions"><button onclick="window.open(\''+snapUrl+'\',\'_blank\')">&#x1F4F8; Snapshot</button><button onclick="Page.Cameras.fullscreen(this)">&#x26F6; Full Screen</button></div>';
+        html+='<div class="camera-meta"><span>'+baseUrl+'</span></div>';
         html+='</div>';
       });
+
+      // Additional standalone cameras (from camera_feeds table)
+      this._cameras.forEach(function(cam){
+        var statusCls = cam.status==='Active'?'active':'offline';
+        html+='<div class="camera-card">';
+        html+='<div class="camera-card-header"><h4>'+cam.name+'</h4><span class="camera-status-badge '+statusCls+'">'+cam.status+'</span></div>';
+        html+='<div class="camera-feed"><img src="'+cam.feed_url+'/stream" alt="'+cam.name+'" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'"><div class="camera-feed-placeholder" style="display:none">Camera offline or unreachable</div></div>';
+        html+='<div class="camera-actions"><button onclick="window.open(\''+cam.feed_url+'/snapshot\',\'_blank\')">&#x1F4F8; Snapshot</button><button onclick="Page.Cameras.fullscreen(this)">&#x26F6; Full Screen</button></div>';
+        html+='<div class="camera-meta"><span>'+cam.location+'</span><span>'+cam.feed_url+'</span></div>';
+        html+='</div>';
+      });
+
       html+='</div>';
       el.innerHTML=html;
     },
+
+    fullscreen: function(btn){
+      var card = btn.closest('.camera-card');
+      var img = card ? card.querySelector('.camera-feed img') : null;
+      if(img && img.style.display!=='none'){
+        if(img.requestFullscreen) img.requestFullscreen();
+        else if(img.webkitRequestFullscreen) img.webkitRequestFullscreen();
+      }
+    },
+
+    editUrl: function(brooderId){
+      var b = this._brooders.find(function(x){return x.id===brooderId});
+      var current = b ? (b.camera_url||'') : '';
+      var html = '<div class="modal-overlay" id="cam-modal-overlay" onclick="if(event.target===this)Page.Cameras.closeModal()">' +
+        '<div class="modal"><h3>Camera Settings &mdash; '+(b?b.name:'Brooder')+'</h3>' +
+        '<label>Camera Base URL</label><input id="mc-cam-url-edit" type="text" value="'+current+'" placeholder="e.g. http://192.168.0.114:8080">' +
+        '<div style="font-size:.75rem;color:#888;margin-top:.2rem">Stream: {url}/stream &nbsp; Snapshot: {url}/snapshot<br>Leave empty to use default ('+this._DEFAULT_CAM+')</div>' +
+        '<div class="modal-actions"><button class="btn-cancel" onclick="Page.Cameras.closeModal()">Cancel</button><button class="btn-primary" onclick="Page.Cameras.saveUrl('+brooderId+')">Save</button></div>' +
+        '</div></div>';
+      document.body.insertAdjacentHTML('beforeend', html);
+      document.getElementById('mc-cam-url-edit').focus();
+    },
+
+    saveUrl: async function(brooderId){
+      var val = document.getElementById('mc-cam-url-edit').value.trim();
+      var payload = {camera_url: val || null};
+      var resp = await API.put('/api/brooders/'+brooderId, payload);
+      this.closeModal();
+      if(resp !== false) toast('Camera URL updated');
+      else toast('Failed to update','error');
+      this._load();
+    },
+
     openModal: function(){
       var html = '<div class="modal-overlay" id="cam-modal-overlay" onclick="if(event.target===this)Page.Cameras.closeModal()">' +
         '<div class="modal"><h3>Add Camera</h3>' +
         '<label>Name</label><input id="mc-cam-name" type="text" placeholder="e.g. Brooder Cam">' +
         '<label>Location</label><input id="mc-cam-loc" type="text" placeholder="e.g. Brooder 1, Pen A">' +
-        '<label>Feed URL</label><input id="mc-cam-url" type="text" placeholder="e.g. http://192.168.1.50:8080/video">' +
+        '<label>Feed URL</label><input id="mc-cam-url" type="text" placeholder="e.g. http://192.168.1.50:8080">' +
         '<div class="modal-actions"><button class="btn-cancel" onclick="Page.Cameras.closeModal()">Cancel</button><button class="btn-primary" onclick="Page.Cameras.submitCamera()">Add Camera</button></div>' +
         '</div></div>';
       document.body.insertAdjacentHTML('beforeend', html);

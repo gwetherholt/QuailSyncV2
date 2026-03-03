@@ -239,6 +239,9 @@ pub fn init_db(conn: &Connection) {
     // NFC tag on birds
     conn.execute("ALTER TABLE birds ADD COLUMN nfc_tag_id TEXT UNIQUE", []).ok();
 
+    // Camera URL on brooders
+    conn.execute("ALTER TABLE brooders ADD COLUMN camera_url TEXT", []).ok();
+
     // Chick groups (nursery)
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS chick_groups (
@@ -2142,13 +2145,14 @@ async fn create_brooder(
     }
 
     match conn.execute(
-        "INSERT INTO brooders (name, bloodline_id, life_stage, qr_code, notes) VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO brooders (name, bloodline_id, life_stage, qr_code, notes, camera_url) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
             body.name,
             body.bloodline_id,
             life_stage_to_str(&body.life_stage),
             body.qr_code,
             body.notes,
+            body.camera_url,
         ],
     ) {
         Ok(_) => {
@@ -2162,6 +2166,7 @@ async fn create_brooder(
                     life_stage: body.life_stage,
                     qr_code: body.qr_code,
                     notes: body.notes,
+                    camera_url: body.camera_url,
                 }),
             )
                 .into_response()
@@ -2174,10 +2179,64 @@ async fn create_brooder(
     }
 }
 
+async fn update_brooder(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+
+    // Check brooder exists
+    let exists = conn
+        .query_row(
+            "SELECT COUNT(*) FROM brooders WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0);
+    if exists == 0 {
+        return (StatusCode::NOT_FOUND, "brooder not found").into_response();
+    }
+
+    if let Some(url) = body.get("camera_url") {
+        let val = if url.is_null() {
+            None
+        } else {
+            url.as_str().map(|s| s.to_string())
+        };
+        conn.execute(
+            "UPDATE brooders SET camera_url = ?1 WHERE id = ?2",
+            params![val, id],
+        )
+        .ok();
+    }
+    if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
+        conn.execute(
+            "UPDATE brooders SET name = ?1 WHERE id = ?2",
+            params![name, id],
+        )
+        .ok();
+    }
+    if let Some(notes) = body.get("notes") {
+        let val = if notes.is_null() {
+            None
+        } else {
+            notes.as_str().map(|s| s.to_string())
+        };
+        conn.execute(
+            "UPDATE brooders SET notes = ?1 WHERE id = ?2",
+            params![val, id],
+        )
+        .ok();
+    }
+
+    StatusCode::OK.into_response()
+}
+
 async fn list_brooders(State(state): State<AppState>) -> Json<Vec<Brooder>> {
     let conn = acquire_db(&state);
     let mut stmt = conn
-        .prepare("SELECT id, name, bloodline_id, life_stage, qr_code, notes FROM brooders ORDER BY id")
+        .prepare("SELECT id, name, bloodline_id, life_stage, qr_code, notes, camera_url FROM brooders ORDER BY id")
         .unwrap();
     let rows: Vec<Brooder> = stmt
         .query_map([], |row| {
@@ -2189,6 +2248,7 @@ async fn list_brooders(State(state): State<AppState>) -> Json<Vec<Brooder>> {
                 life_stage: str_to_life_stage(&stage_str),
                 qr_code: row.get(4)?,
                 notes: row.get(5)?,
+                camera_url: row.get(6)?,
             })
         })
         .unwrap()
@@ -2247,7 +2307,7 @@ async fn brooder_status(
 
     // Fetch the brooder
     let brooder = conn.query_row(
-        "SELECT id, name, bloodline_id, life_stage, qr_code, notes FROM brooders WHERE id = ?1",
+        "SELECT id, name, bloodline_id, life_stage, qr_code, notes, camera_url FROM brooders WHERE id = ?1",
         params![id],
         |row| {
             let stage_str: String = row.get(3)?;
@@ -2258,6 +2318,7 @@ async fn brooder_status(
                 life_stage: str_to_life_stage(&stage_str),
                 qr_code: row.get(4)?,
                 notes: row.get(5)?,
+                camera_url: row.get(6)?,
             })
         },
     );
@@ -2773,6 +2834,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/flock/cull-recommendations", get(cull_recommendations))
         .route("/api/breeding/suggest", get(breeding_suggest))
         .route("/api/brooders", get(list_brooders).post(create_brooder))
+        .route("/api/brooders/{id}", axum::routing::put(update_brooder))
         .route("/api/brooders/{id}/readings", get(brooder_readings))
         .route("/api/brooders/{id}/status", get(brooder_status))
         .route("/api/cameras", get(list_cameras).post(create_camera))

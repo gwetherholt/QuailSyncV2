@@ -432,6 +432,8 @@ pub struct Brooder {
     pub life_stage: LifeStage,
     pub qr_code: String,
     pub notes: Option<String>,
+    #[serde(default)]
+    pub camera_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -441,6 +443,8 @@ pub struct CreateBrooder {
     pub life_stage: LifeStage,
     pub qr_code: String,
     pub notes: Option<String>,
+    #[serde(default)]
+    pub camera_url: Option<String>,
 }
 
 // =========================================================================

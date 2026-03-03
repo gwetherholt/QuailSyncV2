@@ -1689,6 +1689,7 @@ async fn cmd_brooder_add(
         life_stage: parse_life_stage(&stage),
         qr_code: qr.unwrap_or_default(),
         notes,
+        camera_url: None,
     };
     let client = reqwest::Client::new();
     let resp: Brooder = client
