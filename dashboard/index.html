@@ -14,12 +14,15 @@
     --cream:#FEFCF9;
     --charcoal:#4A4A4A;
     --sage-light:#d2dcc3;
+    --sage-dark:#9ab085;
     --rose-light:#e8c8c8;
     --danger:#c0392b;
     --warning:#e67e22;
     --safe:#27ae60;
+    --blue:#5b9bd5;
     --radius:12px;
-    --sidebar-w:200px;
+    --shadow:0 2px 8px rgba(0,0,0,.07);
+    --sidebar-w:210px;
     --sidebar-collapsed:60px;
   }
 
@@ -32,7 +35,7 @@
     display:flex;
   }
 
-  /* --- Sidebar --- */
+  /* ---------- Sidebar ---------- */
   .sidebar{
     width:var(--sidebar-w);
     min-height:100vh;
@@ -44,31 +47,35 @@
     z-index:100;
   }
   .sidebar-logo{
-    padding:1rem;
-    font-size:1.2rem;font-weight:700;
+    padding:1rem 1rem .85rem;
+    font-size:1.15rem;font-weight:700;
     border-bottom:1px solid var(--beige);
     white-space:nowrap;overflow:hidden;
+    display:flex;align-items:center;gap:.45rem;
+    letter-spacing:-.01em;
   }
-  .sidebar-logo .logo-text{margin-left:.4rem}
+  .sidebar-logo .logo-egg{font-size:1.3rem}
+  .sidebar-logo .logo-text{margin-left:.1rem}
   .sidebar-nav{flex:1;padding:.5rem 0}
   .sidebar-item{
-    display:flex;align-items:center;gap:.6rem;
-    padding:.7rem 1rem;
+    display:flex;align-items:center;gap:.65rem;
+    padding:.65rem 1rem;
     cursor:pointer;
-    font-size:.9rem;font-weight:500;
+    font-size:.88rem;font-weight:500;
     color:var(--charcoal);
     text-decoration:none;
     border-left:3px solid transparent;
-    transition:background .15s,border-color .15s;
+    transition:all .15s;
     white-space:nowrap;overflow:hidden;
   }
   .sidebar-item:hover{background:var(--beige)}
   .sidebar-item.active{
     background:var(--sage-light);
     border-left-color:var(--sage);
-    font-weight:600;
+    font-weight:700;
+    color:#3a5a28;
   }
-  .sidebar-item .icon{font-size:1.1rem;flex-shrink:0;width:24px;text-align:center}
+  .sidebar-item .icon{font-size:1.05rem;flex-shrink:0;width:24px;text-align:center}
   .sidebar-item .label{overflow:hidden;text-overflow:ellipsis}
   .sidebar-footer{
     padding:.75rem 1rem;
@@ -91,7 +98,7 @@
     font-size:1.2rem;align-items:center;justify-content:center;
   }
 
-  /* --- Main --- */
+  /* ---------- Main ---------- */
   .main{
     margin-left:var(--sidebar-w);
     flex:1;
@@ -101,23 +108,59 @@
   .main-header{
     background:var(--sage);
     padding:1rem 2rem;
-    font-size:1.3rem;font-weight:700;
+    font-size:1.25rem;font-weight:700;
     box-shadow:0 2px 8px rgba(0,0,0,.08);
+    color:#fff;
+    letter-spacing:-.01em;
   }
-  #app{padding:1.5rem 2rem;max-width:1440px;margin:0 auto}
-
-  /* --- Grid (dashboard) --- */
-  .grid{
-    display:grid;
-    grid-template-columns:repeat(auto-fill,minmax(380px,1fr));
-    gap:1.25rem;
+  #app{
+    padding:1.5rem 2rem;max-width:1440px;margin:0 auto;
+    transition:opacity .2s ease;
   }
+  #app.fade-out{opacity:0}
 
-  /* --- Panel --- */
+  /* ---------- Toast ---------- */
+  .toast-container{
+    position:fixed;top:1rem;right:1rem;z-index:999;
+    display:flex;flex-direction:column;gap:.5rem;
+    pointer-events:none;
+  }
+  .toast{
+    padding:.65rem 1.1rem;border-radius:10px;
+    font-size:.85rem;font-weight:500;
+    box-shadow:0 4px 16px rgba(0,0,0,.12);
+    transform:translateX(120%);
+    transition:transform .3s ease, opacity .3s ease;
+    opacity:0;pointer-events:auto;
+    max-width:360px;
+  }
+  .toast.show{transform:translateX(0);opacity:1}
+  .toast-success{background:#e8f5e9;color:#1b5e20;border-left:4px solid var(--safe)}
+  .toast-error{background:#fce4e4;color:#b71c1c;border-left:4px solid var(--danger)}
+  .toast-info{background:#e3f2fd;color:#0d47a1;border-left:4px solid var(--blue)}
+
+  /* ---------- Loading Spinner ---------- */
+  .loading-wrap{display:flex;align-items:center;justify-content:center;padding:2rem}
+  .spinner{
+    width:32px;height:32px;border:3px solid var(--beige);
+    border-top-color:var(--sage);border-radius:50%;
+    animation:spin .7s linear infinite;
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* ---------- Empty State ---------- */
+  .empty-state{
+    text-align:center;padding:2.5rem 1.5rem;color:#999;
+  }
+  .empty-state .empty-icon{font-size:2.5rem;margin-bottom:.6rem}
+  .empty-state p{font-size:.9rem;margin-bottom:1rem;color:#888}
+  .empty-state .btn-primary{font-size:.85rem}
+
+  /* ---------- Panels & Cards ---------- */
   .panel{
     background:var(--cream);
     border-radius:var(--radius);
-    box-shadow:0 1px 4px rgba(0,0,0,.06);
+    box-shadow:var(--shadow);
     overflow:hidden;
     display:flex;flex-direction:column;
   }
@@ -125,25 +168,55 @@
     padding:.75rem 1rem;
     font-weight:600;font-size:.95rem;
     border-bottom:1px solid var(--beige);
-    display:flex;align-items:center;gap:.5rem;
+    display:flex;align-items:center;justify-content:space-between;gap:.5rem;
   }
+  .panel-header-left{display:flex;align-items:center;gap:.5rem}
   .panel-body{
     padding:1rem;
     flex:1;
     font-size:.875rem;
   }
+  .view-all-link{
+    font-size:.78rem;color:var(--sage-dark);font-weight:500;
+    cursor:pointer;text-decoration:none;
+  }
+  .view-all-link:hover{text-decoration:underline}
 
-  /* --- Brooder sparkline --- */
-  .sparkline{display:flex;align-items:flex-end;gap:2px;height:60px;margin-top:.5rem}
+  /* ---------- Dashboard Grid ---------- */
+  .dash-grid{display:grid;gap:1.25rem}
+  .dash-row-2{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem}
+
+  /* ---------- Quick Stats ---------- */
+  .quick-stats{display:grid;grid-template-columns:1fr 1fr;gap:.75rem}
+  .qs-card{
+    background:var(--beige);border-radius:10px;padding:.85rem;text-align:center;
+  }
+  .qs-card .qs-num{font-size:1.6rem;font-weight:700;line-height:1.2}
+  .qs-card .qs-label{font-size:.72rem;color:#888;text-transform:uppercase;letter-spacing:.04em}
+
+  /* ---------- Stacked Bar ---------- */
+  .bar-chart-row{
+    display:flex;align-items:center;gap:.6rem;margin-bottom:.5rem;font-size:.82rem;
+  }
+  .bar-chart-label{width:60px;text-align:right;font-weight:600;font-size:.78rem;color:#777}
+  .bar-chart-track{flex:1;height:22px;border-radius:6px;background:var(--beige);overflow:hidden;display:flex}
+  .bar-chart-seg{height:100%;transition:width .4s;position:relative}
+  .bar-chart-count{margin-left:.4rem;font-size:.78rem;color:#888;min-width:24px}
+  .bar-legend{display:flex;flex-wrap:wrap;gap:.6rem;margin-top:.6rem}
+  .bar-legend-item{display:flex;align-items:center;gap:.3rem;font-size:.75rem;color:#777}
+  .bar-legend-dot{width:10px;height:10px;border-radius:3px}
+
+  /* ---------- Brooder sparkline ---------- */
+  .sparkline{display:flex;align-items:flex-end;gap:2px;height:36px}
   .spark-bar{
     flex:1;min-width:3px;border-radius:2px 2px 0 0;
     background:var(--sage);transition:height .3s;
   }
   .reading-row{display:flex;justify-content:space-between;margin-bottom:.35rem}
-  .reading-label{color:#777;font-size:.8rem}
-  .reading-value{font-weight:600;font-size:1.1rem}
+  .reading-label{color:#777;font-size:.78rem}
+  .reading-value{font-weight:600;font-size:1.05rem}
 
-  /* --- Alerts --- */
+  /* ---------- Alerts ---------- */
   .alert-item{
     padding:.5rem .75rem;border-radius:8px;margin-bottom:.4rem;
     font-size:.8rem;
@@ -151,92 +224,48 @@
   .alert-item.warning{background:#fef3e2;border-left:3px solid var(--warning)}
   .alert-item.critical{background:#fce4e4;border-left:3px solid var(--danger)}
   .alert-time{color:#999;font-size:.7rem;float:right}
+  .alerts-scroll{max-height:220px;overflow-y:auto}
   .no-data{color:#aaa;font-style:italic;text-align:center;padding:1rem}
 
-  /* --- Flock overview --- */
-  .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:.5rem}
-  .stat-box{
-    background:var(--beige);border-radius:8px;padding:.6rem .8rem;text-align:center;
-  }
-  .stat-box .num{font-size:1.4rem;font-weight:700}
-  .stat-box .lbl{font-size:.7rem;color:#888;text-transform:uppercase;letter-spacing:.04em}
-  .bloodline-list{margin-top:.6rem}
-  .bloodline-row{display:flex;justify-content:space-between;padding:.2rem 0;border-bottom:1px solid var(--beige)}
-
-  /* --- Clutch tracker (dashboard) --- */
-  .clutch-card{
-    background:var(--beige);border-radius:8px;padding:.6rem .8rem;margin-bottom:.5rem;
-  }
-  .clutch-label{font-weight:600;font-size:.8rem;margin-bottom:.3rem}
-  .progress-bar{
-    height:8px;border-radius:4px;background:#e0d8d0;overflow:hidden;
-  }
-  .progress-fill{
-    height:100%;border-radius:4px;transition:width .4s;
-  }
-  .progress-fill.early{background:var(--sage)}
-  .progress-fill.mid{background:var(--warning)}
-  .progress-fill.late{background:var(--dusty-rose)}
-  .clutch-info{display:flex;justify-content:space-between;font-size:.7rem;color:#888;margin-top:.2rem}
-
-  /* --- Breeding --- */
-  .pair-row{
-    display:flex;justify-content:space-between;align-items:center;
-    padding:.4rem .6rem;border-radius:8px;margin-bottom:.3rem;
-    font-size:.82rem;
-  }
-  .pair-row.safe-pair{background:#e8f5e9}
-  .pair-row.risky-pair{background:#fce4e4}
-
-  /* --- Cull Review --- */
-  .cull-section{margin-top:1.5rem}
-  .cull-header{
-    font-size:.95rem;font-weight:700;cursor:pointer;
-    padding:.6rem .8rem;background:var(--cream);border-radius:var(--radius);
-    box-shadow:0 1px 4px rgba(0,0,0,.06);display:flex;align-items:center;gap:.5rem;
-  }
-  .cull-header .badge{
-    background:var(--danger);color:#fff;font-size:.7rem;font-weight:700;
-    padding:2px 8px;border-radius:10px;
-  }
-  .cull-body{margin-top:.5rem}
-  .cull-group-label{
-    font-size:.8rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;
-    color:var(--danger);margin:.6rem 0 .3rem;
-  }
-  .cull-row{
-    padding:.4rem .75rem;border-radius:8px;margin-bottom:.3rem;
-    background:#fce4e4;font-size:.82rem;display:flex;justify-content:space-between;
-  }
-  .coeff{font-weight:600;font-size:.75rem;padding:2px 8px;border-radius:10px}
-  .coeff.safe{background:var(--safe);color:#fff}
-  .coeff.risky{background:var(--danger);color:#fff}
-
-  /* --- Data Table --- */
+  /* ---------- Data Table ---------- */
   .data-table{
     width:100%;border-collapse:collapse;font-size:.85rem;
   }
   .data-table th{
     text-align:left;padding:.6rem .75rem;
-    background:var(--sage-light);font-weight:600;font-size:.8rem;
+    background:var(--sage-light);font-weight:600;font-size:.78rem;
     text-transform:uppercase;letter-spacing:.03em;color:#555;
     position:sticky;top:0;
   }
   .data-table td{
     padding:.5rem .75rem;border-bottom:1px solid var(--beige);
   }
-  .data-table tbody tr:hover{background:rgba(183,196,160,.12)}
+  .data-table tbody tr{cursor:pointer;transition:background .1s}
+  .data-table tbody tr:hover{background:rgba(183,196,160,.15)}
   .data-table tbody tr:nth-child(even){background:rgba(0,0,0,.015)}
-  .data-table tbody tr:nth-child(even):hover{background:rgba(183,196,160,.12)}
-  .table-wrap{overflow-x:auto;border-radius:var(--radius);background:var(--cream);box-shadow:0 1px 4px rgba(0,0,0,.06)}
+  .data-table tbody tr:nth-child(even):hover{background:rgba(183,196,160,.15)}
+  .table-wrap{overflow-x:auto;border-radius:var(--radius);background:var(--cream);box-shadow:var(--shadow)}
 
-  /* --- Band color dot --- */
+  /* ---------- Band color dot ---------- */
   .band-dot{
     width:14px;height:14px;border-radius:50%;display:inline-block;
     border:1px solid rgba(0,0,0,.15);vertical-align:middle;
   }
+  .band-dot-lg{
+    width:48px;height:48px;border-radius:50%;display:inline-flex;
+    align-items:center;justify-content:center;
+    border:2px solid rgba(0,0,0,.12);font-size:1.2rem;
+    flex-shrink:0;
+  }
 
-  /* --- Filter bar --- */
+  /* ---------- Bird Link ---------- */
+  .bird-link{
+    color:var(--sage-dark);font-weight:600;cursor:pointer;
+    text-decoration:none;
+  }
+  .bird-link:hover{text-decoration:underline;color:#7a9a64}
+
+  /* ---------- Filter bar ---------- */
   .filter-bar{
     display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:1rem;align-items:center;
   }
@@ -251,16 +280,16 @@
     background:var(--sage);color:#fff;border-color:var(--sage);
   }
 
-  /* --- Status action buttons --- */
+  /* ---------- Status / action buttons ---------- */
   .status-btn{
-    padding:.2rem .55rem;border-radius:12px;
+    padding:.25rem .6rem;border-radius:12px;
     border:1px solid #d0c8c0;background:var(--cream);
-    font-size:.72rem;cursor:pointer;transition:all .15s;
+    font-size:.73rem;cursor:pointer;transition:all .15s;
     color:var(--charcoal);
   }
   .status-btn:hover{background:var(--rose-light);border-color:var(--dusty-rose)}
 
-  /* --- Page top bar --- */
+  /* ---------- Page top bar ---------- */
   .page-top{
     display:flex;justify-content:space-between;align-items:center;
     margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;
@@ -272,21 +301,49 @@
     font-size:.85rem;font-weight:600;cursor:pointer;
     transition:background .15s;
   }
-  .btn-primary:hover{background:#9ab085}
+  .btn-primary:hover{background:var(--sage-dark)}
+  .btn-secondary{
+    padding:.4rem .85rem;border-radius:8px;
+    background:var(--beige);color:var(--charcoal);
+    border:1px solid #d0c8c0;
+    font-size:.82rem;font-weight:500;cursor:pointer;
+    transition:all .15s;
+  }
+  .btn-secondary:hover{border-color:var(--sage);background:var(--sage-light)}
+  .btn-danger{
+    padding:.4rem .85rem;border-radius:8px;
+    background:#fce4e4;color:var(--danger);
+    border:1px solid #e8b0b0;
+    font-size:.82rem;font-weight:500;cursor:pointer;
+    transition:all .15s;
+  }
+  .btn-danger:hover{background:#f5c6c6}
 
-  /* --- Modal --- */
+  /* ---------- Back button ---------- */
+  .back-btn{
+    display:inline-flex;align-items:center;gap:.3rem;
+    font-size:.85rem;color:#888;cursor:pointer;
+    margin-bottom:1rem;text-decoration:none;
+    transition:color .15s;
+  }
+  .back-btn:hover{color:var(--charcoal)}
+
+  /* ---------- Modal ---------- */
   .modal-overlay{
     position:fixed;top:0;left:0;right:0;bottom:0;
     background:rgba(0,0,0,.4);
     display:flex;align-items:center;justify-content:center;
-    z-index:500;
+    z-index:500;animation:fadeIn .15s;
   }
+  @keyframes fadeIn{from{opacity:0}to{opacity:1}}
   .modal{
     background:var(--cream);border-radius:var(--radius);
     padding:1.5rem;width:90%;max-width:480px;
     box-shadow:0 8px 32px rgba(0,0,0,.15);
     max-height:90vh;overflow-y:auto;
+    animation:slideUp .2s ease;
   }
+  @keyframes slideUp{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
   .modal h3{margin-bottom:1rem;font-size:1rem}
   .modal label{display:block;font-size:.8rem;font-weight:600;margin-bottom:.2rem;margin-top:.6rem;color:#666}
   .modal input,.modal select,.modal textarea{
@@ -302,15 +359,65 @@
     font-size:.85rem;cursor:pointer;
   }
 
-  /* --- Clutch page cards --- */
-  .clutch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:1rem}
-  .clutch-page-card{
+  /* ---------- Bird Detail ---------- */
+  .bird-profile{
+    display:flex;gap:1.5rem;align-items:flex-start;
     background:var(--cream);border-radius:var(--radius);
-    padding:1rem;box-shadow:0 1px 4px rgba(0,0,0,.06);
+    padding:1.25rem;box-shadow:var(--shadow);margin-bottom:1.25rem;
+    flex-wrap:wrap;
   }
-  .clutch-page-card.muted{opacity:.6}
-  .clutch-page-card h4{font-size:.9rem;margin-bottom:.5rem}
-  .clutch-stats{display:flex;gap:1rem;font-size:.8rem;margin:.4rem 0;color:#666}
+  .bird-profile-info{flex:1;min-width:200px}
+  .bird-profile-info h2{font-size:1.15rem;margin-bottom:.4rem;display:flex;align-items:center;gap:.6rem}
+  .bird-meta-grid{
+    display:grid;grid-template-columns:auto 1fr;gap:.2rem .8rem;
+    font-size:.85rem;
+  }
+  .bird-meta-grid dt{color:#888;font-weight:500}
+  .bird-meta-grid dd{font-weight:600}
+  .status-badge{
+    display:inline-block;padding:2px 10px;border-radius:12px;
+    font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.03em;
+  }
+  .status-badge.active{background:#e8f5e9;color:#1b5e20}
+  .status-badge.culled{background:#fce4e4;color:#b71c1c}
+  .status-badge.deceased{background:#e0e0e0;color:#555}
+  .status-badge.sold{background:#e3f2fd;color:#0d47a1}
+
+  .bird-detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.25rem}
+  .bird-detail-grid .panel{min-height:0}
+
+  .growth-metrics{display:grid;grid-template-columns:1fr 1fr;gap:.6rem}
+  .gm-card{background:var(--beige);border-radius:8px;padding:.7rem;text-align:center}
+  .gm-card .gm-val{font-size:1.3rem;font-weight:700}
+  .gm-card .gm-lbl{font-size:.7rem;color:#888;text-transform:uppercase}
+
+  .bird-actions{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:1rem}
+  .bird-notes{
+    background:var(--beige);border-radius:8px;padding:.8rem;
+    font-size:.85rem;color:#666;white-space:pre-wrap;
+    min-height:60px;
+  }
+
+  /* ---------- Weight Chart SVG ---------- */
+  .weight-chart-wrap{padding:.5rem 0}
+  .weight-chart-wrap svg{width:100%;height:auto}
+
+  /* ---------- Clutch Cards ---------- */
+  .clutch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:1rem}
+  .clutch-card{
+    background:var(--cream);border-radius:var(--radius);
+    padding:1.1rem;box-shadow:var(--shadow);
+    display:flex;gap:1rem;align-items:flex-start;
+  }
+  .clutch-card.muted{opacity:.55}
+  .clutch-card-body{flex:1;min-width:0}
+  .clutch-card-body h4{font-size:.9rem;margin-bottom:.4rem}
+  .clutch-dates{font-size:.78rem;color:#777;margin:.4rem 0}
+  .clutch-dates .highlight{color:var(--sage-dark);font-weight:700}
+  .clutch-egg-counts{display:flex;gap:.8rem;font-size:.8rem;margin:.4rem 0}
+  .clutch-egg-counts span{display:flex;flex-direction:column;align-items:center}
+  .clutch-egg-counts .egg-num{font-size:1.1rem;font-weight:700}
+  .clutch-egg-counts .egg-lbl{font-size:.65rem;color:#999;text-transform:uppercase}
   .clutch-actions{display:flex;gap:.4rem;margin-top:.5rem;flex-wrap:wrap}
   .inline-form{
     margin-top:.5rem;padding:.5rem;background:var(--beige);border-radius:8px;
@@ -320,28 +427,106 @@
   .inline-form input{width:80px;padding:.25rem .4rem;font-size:.8rem}
   .inline-form button{padding:.25rem .6rem;font-size:.78rem}
 
-  /* --- Timeline --- */
-  .timeline-section{margin-top:1.5rem}
-  .timeline-section h3{font-size:.95rem;margin-bottom:.75rem}
-  .timeline{
-    display:flex;gap:.5rem;overflow-x:auto;padding:.5rem 0;
+  /* ---------- Clutch Ring ---------- */
+  .clutch-ring-wrap{flex-shrink:0}
+  .clutch-ring-wrap svg{display:block}
+
+  /* ---------- Clutch Timeline ---------- */
+  .timeline-wrap{
+    background:var(--cream);border-radius:var(--radius);
+    padding:1rem;box-shadow:var(--shadow);margin-bottom:1.25rem;
+    overflow-x:auto;
   }
-  .timeline-bar{
-    min-width:28px;border-radius:4px;text-align:center;
-    font-size:.65rem;font-weight:600;color:#fff;
-    display:flex;align-items:flex-end;justify-content:center;
-    padding-bottom:4px;position:relative;
+  .timeline-wrap h3{font-size:.9rem;margin-bottom:.75rem}
+  .timeline-gantt{position:relative;min-height:30px;padding-top:22px}
+  .timeline-gantt-bar{
+    position:absolute;height:22px;border-radius:6px;
+    font-size:.68rem;font-weight:600;color:#fff;
+    display:flex;align-items:center;justify-content:center;
+    white-space:nowrap;overflow:hidden;
+    cursor:default;min-width:40px;
+    box-shadow:0 1px 3px rgba(0,0,0,.1);
   }
-  .timeline-label{
-    position:absolute;top:-18px;font-size:.65rem;color:#888;
-    white-space:nowrap;font-weight:400;
+  .timeline-today{
+    position:absolute;top:0;bottom:0;width:2px;background:var(--danger);
+    z-index:2;
+  }
+  .timeline-today-label{
+    position:absolute;top:-18px;font-size:.6rem;color:var(--danger);
+    font-weight:600;white-space:nowrap;transform:translateX(-50%);
+  }
+  .timeline-date-axis{display:flex;justify-content:space-between;font-size:.6rem;color:#aaa;margin-top:.3rem}
+
+  /* ---------- Breeding Page ---------- */
+  .tabs{display:flex;gap:0;margin-bottom:1rem;border-bottom:2px solid var(--beige)}
+  .tab{
+    padding:.6rem 1.2rem;font-size:.88rem;font-weight:500;
+    cursor:pointer;color:#999;border-bottom:2px solid transparent;
+    margin-bottom:-2px;transition:all .15s;
+  }
+  .tab:hover{color:var(--charcoal)}
+  .tab.active{color:var(--charcoal);font-weight:700;border-bottom-color:var(--sage)}
+
+  .breed-group-card{
+    background:var(--cream);border-radius:var(--radius);
+    padding:1rem;box-shadow:var(--shadow);margin-bottom:.75rem;
+  }
+  .breed-group-card h4{font-size:.9rem;margin-bottom:.5rem;display:flex;align-items:center;gap:.5rem}
+  .ratio-badge{
+    font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:10px;
+  }
+  .ratio-badge.good{background:#e8f5e9;color:#1b5e20}
+  .ratio-badge.warn{background:#fef3e2;color:#e65100}
+  .ratio-badge.bad{background:#fce4e4;color:#b71c1c}
+  .breed-birds{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.4rem;font-size:.82rem}
+  .breed-bird-chip{
+    display:inline-flex;align-items:center;gap:.3rem;
+    padding:.2rem .5rem;border-radius:8px;background:var(--beige);
+    font-size:.78rem;
   }
 
-  /* --- Camera cards --- */
+  .pair-row{
+    display:flex;justify-content:space-between;align-items:center;
+    padding:.5rem .75rem;border-radius:8px;margin-bottom:.4rem;
+    font-size:.82rem;
+  }
+  .pair-row.safe-pair{background:#e8f5e9}
+  .pair-row.risky-pair{background:#fce4e4}
+  .pair-info{display:flex;align-items:center;gap:.5rem}
+  .coeff{font-weight:600;font-size:.75rem;padding:2px 8px;border-radius:10px}
+  .coeff.safe{background:var(--safe);color:#fff}
+  .coeff.risky{background:var(--danger);color:#fff}
+
+  /* ---------- Processing Kanban ---------- */
+  .kanban{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;align-items:start}
+  .kanban-col{
+    background:var(--beige);border-radius:var(--radius);
+    padding:.75rem;min-height:200px;
+  }
+  .kanban-col-header{
+    font-size:.82rem;font-weight:700;text-transform:uppercase;
+    letter-spacing:.04em;margin-bottom:.6rem;
+    display:flex;align-items:center;gap:.4rem;
+  }
+  .kanban-col-header .col-count{
+    background:var(--cream);font-size:.7rem;padding:1px 7px;border-radius:10px;
+    font-weight:600;
+  }
+  .kanban-card{
+    background:var(--cream);border-radius:10px;
+    padding:.7rem .85rem;box-shadow:0 1px 4px rgba(0,0,0,.06);
+    margin-bottom:.5rem;font-size:.82rem;
+  }
+  .kanban-card-header{display:flex;align-items:center;gap:.4rem;margin-bottom:.3rem}
+  .kanban-card-reason{font-size:.75rem;color:#888;margin-bottom:.4rem}
+  .kanban-card-date{font-size:.7rem;color:#aaa}
+  .kanban-card-actions{display:flex;gap:.3rem;margin-top:.4rem}
+
+  /* ---------- Camera cards ---------- */
   .camera-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:1rem}
   .camera-card{
     background:var(--cream);border-radius:var(--radius);
-    padding:1rem;box-shadow:0 1px 4px rgba(0,0,0,.06);
+    padding:1rem;box-shadow:var(--shadow);
   }
   .camera-card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem}
   .camera-card-header h4{font-size:.9rem;margin:0}
@@ -353,7 +538,7 @@
   .camera-meta{font-size:.8rem;color:#777;margin-bottom:.5rem}
   .camera-meta span{margin-right:1rem}
   .camera-feed-placeholder{
-    background:var(--beige);border-radius:8px;height:160px;
+    background:var(--beige);border-radius:8px;height:150px;
     display:flex;align-items:center;justify-content:center;
     color:#aaa;font-size:.85rem;font-style:italic;
     border:2px dashed #d0c8c0;margin-bottom:.6rem;
@@ -370,7 +555,12 @@
   .detection-bar-label{min-width:60px;font-weight:600}
   .detection-bar-count{color:#888;font-size:.75rem}
 
-  /* --- Responsive --- */
+  /* ---------- Responsive ---------- */
+  @media(max-width:900px){
+    .dash-row-2{grid-template-columns:1fr}
+    .bird-detail-grid{grid-template-columns:1fr}
+    .kanban{grid-template-columns:1fr}
+  }
   @media(max-width:768px){
     .sidebar{width:var(--sidebar-collapsed)}
     .sidebar .label,.sidebar .logo-text,.sidebar-footer .conn-text{display:none}
@@ -378,9 +568,9 @@
     .hamburger{display:flex}
     .sidebar.open{width:var(--sidebar-w)}
     .sidebar.open .label,.sidebar.open .logo-text,.sidebar.open .conn-text{display:inline}
-    .grid{grid-template-columns:1fr}
     #app{padding:1rem}
     .main-header{padding:.75rem 1rem .75rem 3.5rem}
+    .clutch-grid{grid-template-columns:1fr}
   }
   @media(max-width:480px){
     .data-table{font-size:.78rem}
@@ -390,10 +580,12 @@
 </head>
 <body>
 
+<div class="toast-container" id="toast-container"></div>
+
 <button class="hamburger" id="hamburger" onclick="document.querySelector('.sidebar').classList.toggle('open')">&#9776;</button>
 
 <nav class="sidebar" id="sidebar">
-  <div class="sidebar-logo">&#x1F423;<span class="logo-text">QuailSync</span></div>
+  <div class="sidebar-logo"><span class="logo-egg">&#x1F423;</span><span class="logo-text">QuailSync</span></div>
   <div class="sidebar-nav">
     <a class="sidebar-item" data-route="#/dashboard" onclick="Router.navigate('#/dashboard')">
       <span class="icon">&#x1F3E0;</span><span class="label">Dashboard</span>
@@ -403,6 +595,12 @@
     </a>
     <a class="sidebar-item" data-route="#/clutches" onclick="Router.navigate('#/clutches')">
       <span class="icon">&#x1F95A;</span><span class="label">Clutches</span>
+    </a>
+    <a class="sidebar-item" data-route="#/breeding" onclick="Router.navigate('#/breeding')">
+      <span class="icon">&#x1F48D;</span><span class="label">Breeding</span>
+    </a>
+    <a class="sidebar-item" data-route="#/processing" onclick="Router.navigate('#/processing')">
+      <span class="icon">&#x1FA93;</span><span class="label">Processing</span>
     </a>
     <a class="sidebar-item" data-route="#/cameras" onclick="Router.navigate('#/cameras')">
       <span class="icon">&#x1F3A5;</span><span class="label">Cameras</span>
@@ -423,7 +621,9 @@
 (function(){
   'use strict';
 
-  // ===== API helper =====
+  /* =========================================================
+     API helper
+     ========================================================= */
   var API = {
     get: async function(path){
       try{ var r=await fetch(path); if(!r.ok) return null; return r.json(); }
@@ -432,18 +632,22 @@
     post: async function(path, body){
       try{
         var r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        if(!r.ok){ var err=await r.text(); console.error('POST '+path+' failed:',err); return null; }
         return r.json();
       }catch(e){ return null; }
     },
     put: async function(path, body){
       try{
         var r=await fetch(path,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        if(!r.ok) return null;
         return r.json();
       }catch(e){ return null; }
     }
   };
 
-  // ===== Shared state =====
+  /* =========================================================
+     Shared state
+     ========================================================= */
   var _intervals = [];
   var _bloodlines = [];
   var _birds = [];
@@ -457,7 +661,89 @@
     _intervals.push(setInterval(fn, ms));
   }
 
-  // ===== Connection status (global, every 10s) =====
+  /* =========================================================
+     Utility functions
+     ========================================================= */
+  var BLOODLINE_COLORS = ['#B7C4A0','#D4A0A0','#A0B8D4','#D4C4A0','#C4A0D4','#A0D4C4','#D4A0B8','#B8D4A0','#D4B8A0','#A0C4D4'];
+
+  function bloodlineColor(idx){
+    return BLOODLINE_COLORS[idx % BLOODLINE_COLORS.length];
+  }
+
+  function toast(message, type){
+    var c = document.getElementById('toast-container');
+    var el = document.createElement('div');
+    el.className = 'toast toast-'+(type||'success');
+    el.textContent = message;
+    c.appendChild(el);
+    setTimeout(function(){ el.classList.add('show'); }, 20);
+    setTimeout(function(){
+      el.classList.remove('show');
+      setTimeout(function(){ el.remove(); }, 300);
+    }, 3200);
+  }
+
+  function loadingHTML(){
+    return '<div class="loading-wrap"><div class="spinner"></div></div>';
+  }
+
+  function emptyState(icon, msg, btnText, btnAction){
+    var html = '<div class="empty-state"><div class="empty-icon">'+icon+'</div><p>'+msg+'</p>';
+    if(btnText) html += '<button class="btn-primary" onclick="'+btnAction+'">'+btnText+'</button>';
+    html += '</div>';
+    return html;
+  }
+
+  function birdLink(id, text){
+    if(!id) return '&mdash;';
+    return '<a class="bird-link" onclick="Router.navigate(\'#/flock/bird/'+id+'\')">'+(text||'#'+id)+'</a>';
+  }
+
+  function bandDot(color, size){
+    if(!color) return '';
+    var s = size || 14;
+    return '<span class="band-dot" style="width:'+s+'px;height:'+s+'px;background:'+color+'" title="'+color+'"></span>';
+  }
+
+  function bloodlineName(id){
+    var name = '';
+    _bloodlines.forEach(function(bl){ if(bl.id===id) name=bl.name; });
+    return name;
+  }
+
+  function findBird(id){
+    var found = null;
+    _birds.forEach(function(b){ if(b.id===id) found=b; });
+    return found;
+  }
+
+  function formatCullReason(reason){
+    if(reason === 'ExcessMale') return 'Excess male';
+    if(typeof reason === 'object'){
+      if(reason.LowWeight) return 'Low weight ('+reason.LowWeight.weight_grams.toFixed(0)+'g)';
+      if(reason.HighInbreeding) return 'High inbreeding ('+reason.HighInbreeding.coefficient.toFixed(3)+')';
+    }
+    return String(reason);
+  }
+
+  function formatDate(dateStr){
+    if(!dateStr) return '&mdash;';
+    return dateStr;
+  }
+
+  function daysBetween(d1, d2){
+    return Math.ceil((d2 - d1) / 86400000);
+  }
+
+  function addDays(dateStr, days){
+    var d = new Date(dateStr+'T00:00:00');
+    d.setDate(d.getDate() + days);
+    return d.toISOString().split('T')[0];
+  }
+
+  /* =========================================================
+     Connection status (global, every 10s)
+     ========================================================= */
   async function pollStatus(){
     var d = await API.get('/api/status');
     var dot = document.getElementById('status-dot');
@@ -473,7 +759,9 @@
   setInterval(pollStatus, 10000);
   pollStatus();
 
-  // ===== Router =====
+  /* =========================================================
+     Router
+     ========================================================= */
   var Router = window.Router = {
     current: null,
     init: function(){
@@ -483,7 +771,6 @@
     },
     navigate: function(hash){
       location.hash = hash;
-      // close mobile sidebar
       document.getElementById('sidebar').classList.remove('open');
     },
     route: function(){
@@ -492,60 +779,87 @@
       if(Router.current && Router.current.stop) Router.current.stop();
       clearIntervals();
 
-      // Highlight nav
-      document.querySelectorAll('.sidebar-item').forEach(function(el){
-        el.classList.toggle('active', el.getAttribute('data-route') === hash);
-      });
-
-      var hdr = document.getElementById('page-header');
       var app = document.getElementById('app');
+      var hdr = document.getElementById('page-header');
 
-      if(hash === '#/flock'){
-        hdr.textContent = 'Flock Management';
-        Router.current = Page.Flock;
-      } else if(hash === '#/clutches'){
-        hdr.textContent = 'Clutch Tracker';
-        Router.current = Page.Clutches;
-      } else if(hash === '#/cameras'){
-        hdr.textContent = 'Cameras';
-        Router.current = Page.Cameras;
-      } else {
-        hdr.textContent = 'Dashboard';
-        Router.current = Page.Dashboard;
-      }
+      // Fade out
+      app.classList.add('fade-out');
 
-      Router.current.render(app);
-      Router.current.start();
+      setTimeout(function(){
+        // Highlight nav
+        var navRoute = hash;
+        if(hash.indexOf('#/flock/bird/') === 0) navRoute = '#/flock';
+        document.querySelectorAll('.sidebar-item').forEach(function(el){
+          el.classList.toggle('active', el.getAttribute('data-route') === navRoute);
+        });
+
+        if(hash.indexOf('#/flock/bird/') === 0){
+          var birdId = parseInt(hash.split('/').pop());
+          hdr.textContent = 'Bird Detail';
+          Router.current = Page.BirdDetail;
+          Page.BirdDetail._birdId = birdId;
+        } else if(hash === '#/flock'){
+          hdr.textContent = 'Flock Management';
+          Router.current = Page.Flock;
+        } else if(hash === '#/clutches'){
+          hdr.textContent = 'Clutch Tracker';
+          Router.current = Page.Clutches;
+        } else if(hash === '#/breeding'){
+          hdr.textContent = 'Breeding';
+          Router.current = Page.Breeding;
+        } else if(hash === '#/processing'){
+          hdr.textContent = 'Processing';
+          Router.current = Page.Processing;
+        } else if(hash === '#/cameras'){
+          hdr.textContent = 'Cameras';
+          Router.current = Page.Cameras;
+        } else {
+          hdr.textContent = 'Dashboard';
+          Router.current = Page.Dashboard;
+        }
+
+        Router.current.render(app);
+        Router.current.start();
+        // Fade in
+        app.classList.remove('fade-out');
+      }, 180);
     }
   };
 
-  // ===== Dashboard Page =====
-  var Page = {};
+  /* =========================================================
+     Pages
+     ========================================================= */
+  var Page = window.Page = {};
 
+  /* ---------------------------------------------------------
+     DASHBOARD
+     --------------------------------------------------------- */
   Page.Dashboard = {
     render: function(app){
-      app.innerHTML = '<div class="grid">' +
-        '<div class="panel" style="grid-column:1/-1"><div class="panel-header">&#x1F321;&#xFE0F; Brooders</div><div class="panel-body" id="d-brooder"><div class="no-data">Waiting for data...</div></div></div>' +
-        '<div class="panel"><div class="panel-header">&#x1F6A8; Alerts</div><div class="panel-body" id="d-alerts"><div class="no-data">No recent alerts</div></div></div>' +
-        '<div class="panel"><div class="panel-header">&#x1F426; Flock Overview</div><div class="panel-body" id="d-flock"><div class="no-data">Loading...</div></div></div>' +
-        '<div class="panel"><div class="panel-header">&#x1F48D; Breeding</div><div class="panel-body" id="d-breeding"><div class="no-data">Loading...</div></div></div>' +
+      app.innerHTML = '<div class="dash-grid">' +
+        '<div class="panel" style="grid-column:1/-1"><div class="panel-header"><span class="panel-header-left">&#x1F321;&#xFE0F; Brooders</span></div><div class="panel-body" id="d-brooder">'+loadingHTML()+'</div></div>' +
+        '<div class="dash-row-2">' +
+          '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F6A8; Alerts</span><a class="view-all-link" id="d-alerts-viewall" style="display:none">View all</a></div><div class="panel-body"><div class="alerts-scroll" id="d-alerts">'+loadingHTML()+'</div></div></div>' +
+          '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F4CA; Quick Stats</span></div><div class="panel-body" id="d-stats">'+loadingHTML()+'</div></div>' +
+        '</div>' +
+        '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F426; Flock Overview</span><a class="view-all-link" onclick="Router.navigate(\'#/flock\')">View flock</a></div><div class="panel-body" id="d-flock">'+loadingHTML()+'</div></div>' +
       '</div>';
     },
     start: function(){
       addInterval(this._pollBrooder, 30000);
       addInterval(this._pollAlerts, 30000);
+      addInterval(this._pollStats, 60000);
       addInterval(this._pollFlock, 60000);
-      addInterval(this._pollBreeding, 60000);
     },
     stop: function(){},
+
     _pollBrooder: async function(){
       var el = document.getElementById('d-brooder');
       if(!el) return;
       var brooders = await API.get('/api/brooders');
       if(!brooders || brooders.length===0){
-        // Fallback: single brooder view from global readings
         var history = await API.get('/api/brooder/history?minutes=60');
-        if(!history || history.length===0){ el.innerHTML='<div class="no-data">No brooder readings yet</div>'; return; }
+        if(!history || history.length===0){ el.innerHTML=emptyState('&#x1F321;&#xFE0F;','No brooder readings yet','',null); return; }
         var latest=history[0];
         var temp=latest.temperature_celsius.toFixed(1);
         var hum=latest.humidity_percent.toFixed(1);
@@ -555,14 +869,14 @@
         var range=tMax-tMin||1;
         var bars='';
         temps.forEach(function(t){
-          var h=Math.max(4,((t-tMin)/range)*56);
+          var h=Math.max(4,((t-tMin)/range)*32);
           bars+='<div class="spark-bar" style="height:'+h+'px" title="'+t.toFixed(1)+'\u00b0F"></div>';
         });
-        el.innerHTML='<div class="reading-row"><div><span class="reading-label">Temperature</span><br><span class="reading-value">'+temp+'&deg;F</span></div><div style="text-align:right"><span class="reading-label">Humidity</span><br><span class="reading-value">'+hum+'%</span></div></div><div class="sparkline">'+bars+'</div><div style="text-align:center;font-size:.7rem;color:#aaa;margin-top:.3rem">Last 60 min</div>';
+        el.innerHTML='<div class="reading-row"><div><span class="reading-label">Temperature</span><br><span class="reading-value">'+temp+'&deg;F</span></div><div style="text-align:right"><span class="reading-label">Humidity</span><br><span class="reading-value">'+hum+'%</span></div></div><div class="sparkline">'+bars+'</div>';
         return;
       }
-      // Multi-brooder card view
-      var html='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:.75rem">';
+      // Multi-brooder
+      var html='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.75rem">';
       for(var i=0;i<brooders.length;i++){
         var b=brooders[i];
         var status = await API.get('/api/brooders/'+b.id+'/status');
@@ -572,7 +886,6 @@
         var tempStr = status && status.latest_temp!=null ? status.latest_temp.toFixed(1)+'&deg;F' : '--';
         var humStr = status && status.latest_humidity!=null ? status.latest_humidity.toFixed(1)+'%' : '--';
         var alertHtml = (status && status.has_alert) ? '<div style="font-size:.7rem;color:var(--danger);margin-top:.3rem">'+status.alert_message+'</div>' : '';
-        // Sparkline from readings
         var sparkHtml='';
         if(readings && readings.length>0){
           var pts=readings.slice().reverse().slice(-20);
@@ -580,80 +893,158 @@
           var tMin=Math.min.apply(null,temps),tMax=Math.max.apply(null,temps);
           var range=tMax-tMin||1;
           temps.forEach(function(t){
-            var h=Math.max(3,((t-tMin)/range)*32);
+            var h=Math.max(3,((t-tMin)/range)*28);
             sparkHtml+='<div class="spark-bar" style="height:'+h+'px" title="'+t.toFixed(1)+'\u00b0F"></div>';
           });
         }
-        var blStr = b.bloodline_id ? 'Bloodline #'+b.bloodline_id : '';
         html+='<div style="background:var(--cream);border-radius:var(--radius);padding:.75rem;'+alertBorder+'">';
-        html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem"><strong>'+b.name+'</strong><span style="font-size:.65rem;padding:2px 6px;border-radius:8px;'+stageCls+'">'+b.life_stage+'</span></div>';
-        if(blStr) html+='<div style="font-size:.7rem;color:#888;margin-bottom:.3rem">'+blStr+'</div>';
-        html+='<div class="reading-row" style="margin-bottom:.3rem"><div><span class="reading-label">Temp</span><br><span class="reading-value" style="font-size:1.1rem">'+tempStr+'</span></div><div style="text-align:right"><span class="reading-label">Hum</span><br><span class="reading-value" style="font-size:1.1rem">'+humStr+'</span></div></div>';
-        if(sparkHtml) html+='<div class="sparkline" style="height:36px">'+sparkHtml+'</div>';
+        html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem"><strong style="font-size:.88rem">'+b.name+'</strong><span style="font-size:.62rem;padding:2px 6px;border-radius:8px;'+stageCls+'">'+b.life_stage+'</span></div>';
+        html+='<div class="reading-row" style="margin-bottom:.2rem"><div><span class="reading-label">Temp</span><br><span class="reading-value">'+tempStr+'</span></div><div style="text-align:right"><span class="reading-label">Hum</span><br><span class="reading-value">'+humStr+'</span></div></div>';
+        if(sparkHtml) html+='<div class="sparkline">'+sparkHtml+'</div>';
         html+=alertHtml+'</div>';
       }
       html+='</div>';
       el.innerHTML=html;
     },
+
     _pollAlerts: async function(){
       var data = await API.get('/api/alerts?minutes=120');
       var el = document.getElementById('d-alerts');
+      var viewAll = document.getElementById('d-alerts-viewall');
       if(!el) return;
-      if(!data || data.length===0){ el.innerHTML='<div class="no-data">No recent alerts</div>'; return; }
+      if(!data || data.length===0){ el.innerHTML='<div class="no-data" style="padding:.5rem">All clear &mdash; no recent alerts</div>'; if(viewAll) viewAll.style.display='none'; return; }
       var html='';
-      data.slice(0,10).forEach(function(a){
+      var show = data.slice(0,5);
+      show.forEach(function(a){
         var cls = a.severity==='Critical'?'critical':'warning';
         var time = a.timestamp ? (a.timestamp.split(' ').pop()||'') : '';
         html+='<div class="alert-item '+cls+'"><span class="alert-time">'+time+'</span>'+a.message+'</div>';
       });
       el.innerHTML=html;
+      if(viewAll && data.length>5) viewAll.style.display='';
+      else if(viewAll) viewAll.style.display='none';
     },
+
+    _pollStats: async function(){
+      var el = document.getElementById('d-stats');
+      if(!el) return;
+      var summary = await API.get('/api/flock/summary');
+      var clutches = await API.get('/api/clutches');
+      var queue = await API.get('/api/processing/queue');
+
+      var totalBirds = summary ? summary.total_birds : 0;
+      var activeCl = 0;
+      var nextHatchDays = '&mdash;';
+      if(clutches){
+        var now = new Date();
+        var minDays = Infinity;
+        clutches.forEach(function(c){
+          if(c.status==='Incubating'){
+            activeCl++;
+            var hd = new Date(c.expected_hatch_date+'T00:00:00');
+            var d = Math.max(0, Math.ceil((hd - now)/86400000));
+            if(d < minDays) minDays = d;
+          }
+        });
+        if(minDays < Infinity) nextHatchDays = minDays;
+      }
+      var pendingProc = queue ? queue.length : 0;
+
+      el.innerHTML = '<div class="quick-stats">' +
+        '<div class="qs-card"><div class="qs-num">'+totalBirds+'</div><div class="qs-label">Total Birds</div></div>' +
+        '<div class="qs-card"><div class="qs-num">'+activeCl+'</div><div class="qs-label">Active Clutches</div></div>' +
+        '<div class="qs-card"><div class="qs-num">'+pendingProc+'</div><div class="qs-label">Pending Processing</div></div>' +
+        '<div class="qs-card"><div class="qs-num">'+nextHatchDays+'</div><div class="qs-label">Days to Next Hatch</div></div>' +
+      '</div>';
+    },
+
     _pollFlock: async function(){
-      var d = await API.get('/api/flock/summary');
       var el = document.getElementById('d-flock');
       if(!el) return;
-      if(!d){ el.innerHTML='<div class="no-data">No flock data</div>'; return; }
-      var blines='';
-      if(d.bloodlines && d.bloodlines.length>0){
-        d.bloodlines.forEach(function(b){ blines+='<div class="bloodline-row"><span>'+b.name+'</span><span>'+b.count+'</span></div>'; });
+      var bl = await API.get('/api/bloodlines');
+      if(bl) _bloodlines = bl;
+      var birds = await API.get('/api/birds');
+      if(birds) _birds = birds; else _birds = [];
+      if(_birds.length === 0){
+        el.innerHTML = emptyState('&#x1F426;','No birds in your flock yet','+ Add Bird','Router.navigate(\'#/flock\')');
+        return;
       }
-      el.innerHTML='<div class="stat-grid"><div class="stat-box"><div class="num">'+d.total_birds+'</div><div class="lbl">Total</div></div><div class="stat-box"><div class="num">'+d.active_birds+'</div><div class="lbl">Active</div></div><div class="stat-box"><div class="num">'+d.males+'</div><div class="lbl">Males</div></div><div class="stat-box"><div class="num">'+d.females+'</div><div class="lbl">Females</div></div></div>'+(blines?'<div class="bloodline-list"><div style="font-size:.75rem;color:#999;margin-top:.5rem;margin-bottom:.25rem">BLOODLINES</div>'+blines+'</div>':'');
-    },
-    _pollBreeding: async function(){
-      var data = await API.get('/api/breeding/suggest');
-      var el = document.getElementById('d-breeding');
-      if(!el) return;
-      if(!data || data.length===0){ el.innerHTML='<div class="no-data">Need at least 1 male and 1 female</div>'; return; }
-      var safest=data.filter(function(p){return p.safe}).slice(0,5);
-      var risky=data.filter(function(p){return !p.safe}).slice(0,3);
-      var html='';
-      if(safest.length>0){
-        html+='<div style="font-size:.75rem;color:#999;margin-bottom:.25rem">SAFEST PAIRS</div>';
-        safest.forEach(function(p){ html+='<div class="pair-row safe-pair"><span>Male #'+p.male_id+' &times; Female #'+p.female_id+'</span><span class="coeff safe">'+p.coefficient.toFixed(3)+'</span></div>'; });
+      // Build stacked bar data
+      var malesByBl = {};
+      var femalesByBl = {};
+      var totalM = 0, totalF = 0;
+      _birds.forEach(function(b){
+        if(b.status !== 'Active') return;
+        var blId = b.bloodline_id || 0;
+        if(b.sex === 'Male'){ malesByBl[blId] = (malesByBl[blId]||0) + 1; totalM++; }
+        else if(b.sex === 'Female'){ femalesByBl[blId] = (femalesByBl[blId]||0) + 1; totalF++; }
+      });
+
+      // Get unique bloodline IDs that have birds
+      var blIds = [];
+      var seen = {};
+      _birds.forEach(function(b){
+        if(b.status==='Active' && !seen[b.bloodline_id]){
+          seen[b.bloodline_id] = true;
+          blIds.push(b.bloodline_id);
+        }
+      });
+
+      var html = '';
+      // Males bar
+      html += '<div class="bar-chart-row"><span class="bar-chart-label">Males</span><div class="bar-chart-track">';
+      if(totalM > 0){
+        blIds.forEach(function(blId, idx){
+          var count = malesByBl[blId] || 0;
+          if(count > 0){
+            var pct = (count / totalM) * 100;
+            html += '<div class="bar-chart-seg" style="width:'+pct.toFixed(1)+'%;background:'+bloodlineColor(idx)+'" title="'+bloodlineName(blId)+': '+count+'"></div>';
+          }
+        });
       }
-      if(risky.length>0){
-        html+='<div style="font-size:.75rem;color:#999;margin-top:.5rem;margin-bottom:.25rem">RISKY PAIRS</div>';
-        risky.forEach(function(p){ html+='<div class="pair-row risky-pair"><span>Male #'+p.male_id+' &times; Female #'+p.female_id+'</span><span class="coeff risky">'+p.coefficient.toFixed(3)+'</span></div>'; });
+      html += '</div><span class="bar-chart-count">'+totalM+'</span></div>';
+
+      // Females bar
+      html += '<div class="bar-chart-row"><span class="bar-chart-label">Females</span><div class="bar-chart-track">';
+      if(totalF > 0){
+        blIds.forEach(function(blId, idx){
+          var count = femalesByBl[blId] || 0;
+          if(count > 0){
+            var pct = (count / totalF) * 100;
+            html += '<div class="bar-chart-seg" style="width:'+pct.toFixed(1)+'%;background:'+bloodlineColor(idx)+'" title="'+bloodlineName(blId)+': '+count+'"></div>';
+          }
+        });
       }
-      if(!html) html='<div class="no-data">No pairs to display</div>';
-      el.innerHTML=html;
+      html += '</div><span class="bar-chart-count">'+totalF+'</span></div>';
+
+      // Legend
+      html += '<div class="bar-legend">';
+      blIds.forEach(function(blId, idx){
+        html += '<span class="bar-legend-item"><span class="bar-legend-dot" style="background:'+bloodlineColor(idx)+'"></span>'+bloodlineName(blId)+'</span>';
+      });
+      html += '</div>';
+
+      // Summary line
+      var active = _birds.filter(function(b){return b.status==='Active'}).length;
+      html += '<div style="margin-top:.6rem;font-size:.78rem;color:#999">'+active+' active birds &middot; '+totalM+' males &middot; '+totalF+' females &middot; ratio 1:'+( totalM>0 ? (totalF/totalM).toFixed(1) : '0' )+'</div>';
+
+      el.innerHTML = html;
     }
   };
 
-  // ===== Flock Page =====
+  /* ---------------------------------------------------------
+     FLOCK PAGE
+     --------------------------------------------------------- */
   Page.Flock = {
     filter: 'all',
     bloodlineFilter: null,
-    _cullRecs: [],
-    _cullOpen: false,
     render: function(app){
       app.innerHTML =
         '<div class="page-top"><div class="page-title">&#x1F426; Flock</div><button class="btn-primary" onclick="Page.Flock.openModal()">+ Add Bird</button></div>' +
         '<div class="filter-bar" id="flock-filters"></div>' +
         '<div class="table-wrap"><table class="data-table"><thead><tr>' +
-        '<th>ID</th><th>Band</th><th>Sex</th><th>Bloodline</th><th>Hatch Date</th><th>Gen</th><th>Status</th><th>Parents</th><th>Actions</th>' +
-        '</tr></thead><tbody id="flock-tbody"></tbody></table></div>' +
-        '<div id="cull-review-section"></div>';
+        '<th>ID</th><th>Band</th><th>Sex</th><th>Bloodline</th><th>Hatch</th><th>Gen</th><th>Status</th><th>Parents</th>' +
+        '</tr></thead><tbody id="flock-tbody"><tr><td colspan="8">'+loadingHTML()+'</td></tr></tbody></table></div>';
     },
     start: function(){
       this.filter = 'all';
@@ -667,11 +1058,8 @@
       if(bl) _bloodlines = bl;
       var birds = await API.get('/api/birds');
       if(birds) _birds = birds;
-      var cull = await API.get('/api/flock/cull-recommendations');
-      if(cull) this._cullRecs = cull; else this._cullRecs = [];
       this._renderFilters();
       this._renderTable();
-      this._renderCullReview();
     },
     _renderFilters: function(){
       var el = document.getElementById('flock-filters');
@@ -688,8 +1076,10 @@
         var active = (self.filter===f.key && !self.bloodlineFilter)?'active':'';
         html+='<button class="filter-btn '+active+'" onclick="Page.Flock.applyFilter(\''+f.key+'\')">'+f.label+'</button>';
       });
-      // bloodline filters
+      var seenBl = {};
       _bloodlines.forEach(function(bl){
+        if(seenBl[bl.id]) return;
+        seenBl[bl.id] = true;
         var active = (self.bloodlineFilter===bl.id)?'active':'';
         html+='<button class="filter-btn '+active+'" onclick="Page.Flock.applyBloodlineFilter('+bl.id+')">'+bl.name+'</button>';
       });
@@ -708,32 +1098,23 @@
       });
 
       if(filtered.length===0){
-        tbody.innerHTML='<tr><td colspan="9" class="no-data">No birds found</td></tr>';
+        tbody.innerHTML='<tr><td colspan="8">'+emptyState('&#x1F426;','No birds found','+ Add Bird','Page.Flock.openModal()')+'</td></tr>';
         return;
       }
 
       var html='';
       filtered.forEach(function(b){
-        var blName = '';
-        _bloodlines.forEach(function(bl){ if(bl.id===b.bloodline_id) blName=bl.name; });
-        var bandHtml = b.band_color ? '<span class="band-dot" style="background:'+b.band_color+'" title="'+b.band_color+'"></span>' : '&mdash;';
+        var blName = bloodlineName(b.bloodline_id);
+        var bandHtml = b.band_color ? bandDot(b.band_color) : '&mdash;';
         var parents = '';
         if(b.mother_id || b.father_id){
-          var m = b.mother_id ? 'M#'+b.mother_id : '?';
-          var f = b.father_id ? 'F#'+b.father_id : '?';
-          parents = m+' / '+f;
+          parents = (b.mother_id ? birdLink(b.mother_id,'M#'+b.mother_id) : '?') + ' / ' + (b.father_id ? birdLink(b.father_id,'F#'+b.father_id) : '?');
         } else { parents = '&mdash;'; }
 
-        var actions = '';
-        if(b.status==='Active'){
-          actions = '<button class="status-btn" onclick="Page.Flock.updateStatus('+b.id+',\'Culled\')">Culled</button> ' +
-                    '<button class="status-btn" onclick="Page.Flock.updateStatus('+b.id+',\'Deceased\')">Deceased</button> ' +
-                    '<button class="status-btn" onclick="Page.Flock.updateStatus('+b.id+',\'Sold\')">Sold</button>';
-        } else {
-          actions = '<span style="font-size:.75rem;color:#999">'+b.status+'</span>';
-        }
+        var statusCls = b.status.toLowerCase();
+        var statusHtml = '<span class="status-badge '+statusCls+'">'+b.status+'</span>';
 
-        html+='<tr><td>'+b.id+'</td><td>'+bandHtml+'</td><td>'+b.sex+'</td><td>'+blName+'</td><td>'+b.hatch_date+'</td><td>'+b.generation+'</td><td>'+b.status+'</td><td>'+parents+'</td><td>'+actions+'</td></tr>';
+        html+='<tr onclick="Router.navigate(\'#/flock/bird/'+b.id+'\')" style="cursor:pointer"><td>'+birdLink(b.id)+'</td><td>'+bandHtml+'</td><td>'+b.sex+'</td><td>'+blName+'</td><td>'+b.hatch_date+'</td><td>'+b.generation+'</td><td>'+statusHtml+'</td><td>'+parents+'</td></tr>';
       });
       tbody.innerHTML = html;
     },
@@ -747,12 +1128,6 @@
       this.bloodlineFilter = (this.bloodlineFilter === id) ? null : id;
       this.filter = 'all';
       this._renderFilters();
-      this._renderTable();
-    },
-    updateStatus: async function(id, status){
-      await API.put('/api/birds/'+id, {status: status});
-      // update local cache
-      _birds.forEach(function(b){ if(b.id===id) b.status=status; });
       this._renderTable();
     },
     openModal: function(){
@@ -779,59 +1154,6 @@
       var ov = document.getElementById('bird-modal-overlay');
       if(ov) ov.remove();
     },
-    toggleCull: function(){
-      this._cullOpen = !this._cullOpen;
-      this._renderCullReview();
-    },
-    _renderCullReview: function(){
-      var el = document.getElementById('cull-review-section');
-      if(!el) return;
-      var recs = this._cullRecs;
-      if(!recs || recs.length===0){ el.innerHTML=''; return; }
-
-      var html='<div class="cull-section">';
-      html+='<div class="cull-header" onclick="Page.Flock.toggleCull()">';
-      html+=(this._cullOpen?'&#9660;':'&#9654;')+' Cull Review <span class="badge">'+recs.length+'</span></div>';
-
-      if(this._cullOpen){
-        html+='<div class="cull-body">';
-        var excess=recs.filter(function(r){return r.reason==='ExcessMale'});
-        var lowW=recs.filter(function(r){return typeof r.reason==='object'&&r.reason.LowWeight!==undefined});
-        var inbr=recs.filter(function(r){return typeof r.reason==='object'&&r.reason.HighInbreeding!==undefined});
-
-        var birdLabel=function(id){
-          var b=null;
-          _birds.forEach(function(bi){if(bi.id===id) b=bi;});
-          if(!b) return '#'+id;
-          var band=b.band_color||'-';
-          var blName='?';
-          _bloodlines.forEach(function(bl){if(bl.id===b.bloodline_id) blName=bl.name;});
-          return '#'+id+' ('+band+', '+blName+')';
-        };
-
-        if(excess.length>0){
-          html+='<div class="cull-group-label">Excess Males</div>';
-          excess.forEach(function(r){ html+='<div class="cull-row"><span>'+birdLabel(r.bird_id)+'</span><span>Surplus male</span></div>'; });
-        }
-        if(lowW.length>0){
-          html+='<div class="cull-group-label">Low Weight</div>';
-          lowW.forEach(function(r){
-            var w=r.reason.LowWeight.weight_grams;
-            html+='<div class="cull-row"><span>'+birdLabel(r.bird_id)+'</span><span>'+w.toFixed(1)+'g (min 200g)</span></div>';
-          });
-        }
-        if(inbr.length>0){
-          html+='<div class="cull-group-label">High Inbreeding Risk</div>';
-          inbr.forEach(function(r){
-            var c=r.reason.HighInbreeding.coefficient;
-            html+='<div class="cull-row"><span>'+birdLabel(r.bird_id)+'</span><span>No safe pairings (coeff: '+c.toFixed(3)+')</span></div>';
-          });
-        }
-        html+='</div>';
-      }
-      html+='</div>';
-      el.innerHTML=html;
-    },
     submitBird: async function(){
       var band = document.getElementById('m-band').value.trim() || null;
       var sex = document.getElementById('m-sex').value;
@@ -842,33 +1164,280 @@
       var gen = parseInt(document.getElementById('m-gen').value) || 1;
       var notes = document.getElementById('m-notes').value.trim() || null;
 
-      if(!bloodline_id || !hatch_date){ alert('Bloodline and hatch date are required'); return; }
+      if(!bloodline_id || !hatch_date){ toast('Bloodline and hatch date are required','error'); return; }
 
-      await API.post('/api/birds', {
-        band_color: band,
-        sex: sex,
-        bloodline_id: bloodline_id,
+      var result = await API.post('/api/birds', {
+        band_color: band, sex: sex, bloodline_id: bloodline_id,
         hatch_date: hatch_date,
         mother_id: mother ? parseInt(mother) : null,
         father_id: father ? parseInt(father) : null,
-        generation: gen,
-        status: 'Active',
-        notes: notes
+        generation: gen, status: 'Active', notes: notes
       });
       this.closeModal();
+      if(result){ toast('Bird #'+result.id+' added successfully'); }
+      else { toast('Failed to add bird','error'); }
       this._load();
     }
   };
-  window.Page = Page;
 
-  // ===== Clutches Page =====
+  /* ---------------------------------------------------------
+     BIRD DETAIL PAGE
+     --------------------------------------------------------- */
+  Page.BirdDetail = {
+    _birdId: null,
+    _bird: null,
+    _weights: [],
+    render: function(app){
+      app.innerHTML = '<a class="back-btn" onclick="Router.navigate(\'#/flock\')">&larr; Back to Flock</a>' +
+        '<div id="bird-detail-content">'+loadingHTML()+'</div>';
+    },
+    start: function(){
+      this._load();
+    },
+    stop: function(){},
+    _load: async function(){
+      var bl = await API.get('/api/bloodlines');
+      if(bl) _bloodlines = bl;
+      var birds = await API.get('/api/birds');
+      if(birds) _birds = birds;
+      this._bird = findBird(this._birdId);
+      var weights = await API.get('/api/birds/'+this._birdId+'/weights');
+      this._weights = weights || [];
+      this._render();
+    },
+    _render: function(){
+      var el = document.getElementById('bird-detail-content');
+      if(!el) return;
+      var b = this._bird;
+      if(!b){
+        el.innerHTML = emptyState('&#x1F426;','Bird not found','Back to Flock','Router.navigate(\'#/flock\')');
+        return;
+      }
+
+      var blName = bloodlineName(b.bloodline_id);
+      var statusCls = b.status.toLowerCase();
+      var bandColor = b.band_color || '#ccc';
+
+      // Profile header
+      var html = '<div class="bird-profile">';
+      html += '<div class="band-dot-lg" style="background:'+bandColor+'"></div>';
+      html += '<div class="bird-profile-info">';
+      html += '<h2>Bird #'+b.id+' <span class="status-badge '+statusCls+'">'+b.status+'</span></h2>';
+      html += '<dl class="bird-meta-grid">';
+      html += '<dt>Sex</dt><dd>'+b.sex+'</dd>';
+      html += '<dt>Bloodline</dt><dd>'+blName+'</dd>';
+      html += '<dt>Band Color</dt><dd>'+(b.band_color || 'None')+'</dd>';
+      html += '<dt>Generation</dt><dd>'+b.generation+'</dd>';
+      html += '<dt>Hatch Date</dt><dd>'+b.hatch_date+'</dd>';
+      html += '<dt>Mother</dt><dd>'+(b.mother_id ? birdLink(b.mother_id) : 'Unknown')+'</dd>';
+      html += '<dt>Father</dt><dd>'+(b.father_id ? birdLink(b.father_id) : 'Unknown')+'</dd>';
+      html += '</dl>';
+      html += '</div></div>';
+
+      // Two-column detail grid
+      html += '<div class="bird-detail-grid">';
+
+      // Weight chart
+      html += '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F4C8; Weight History</span></div><div class="panel-body">';
+      if(this._weights.length > 0){
+        html += '<div class="weight-chart-wrap">' + this._buildWeightChart() + '</div>';
+      } else {
+        html += '<div class="no-data">No weight records yet</div>';
+      }
+      html += '</div></div>';
+
+      // Growth metrics
+      html += '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F4CA; Growth Metrics</span></div><div class="panel-body">';
+      html += this._buildGrowthMetrics();
+      html += '</div></div>';
+
+      html += '</div>'; // end detail grid
+
+      // Notes
+      html += '<div class="panel" style="margin-bottom:1.25rem"><div class="panel-header"><span class="panel-header-left">&#x1F4DD; Notes</span></div><div class="panel-body">';
+      html += '<div class="bird-notes">'+(b.notes || 'No notes')+'</div>';
+      html += '</div></div>';
+
+      // Actions
+      html += '<div class="bird-actions">';
+      html += '<button class="btn-primary" onclick="Page.BirdDetail.openWeightModal()">Log Weight</button>';
+      if(b.status === 'Active'){
+        html += '<button class="btn-secondary" onclick="Page.BirdDetail.updateStatus(\'Culled\')">Mark Culled</button>';
+        html += '<button class="btn-secondary" onclick="Page.BirdDetail.updateStatus(\'Deceased\')">Mark Deceased</button>';
+        html += '<button class="btn-secondary" onclick="Page.BirdDetail.updateStatus(\'Sold\')">Mark Sold</button>';
+        html += '<button class="btn-danger" onclick="Page.BirdDetail.scheduleProcessing()">Schedule Processing</button>';
+      }
+      html += '</div>';
+
+      el.innerHTML = html;
+    },
+
+    _buildWeightChart: function(){
+      var weights = this._weights.slice().sort(function(a,b){
+        return new Date(a.date) - new Date(b.date);
+      });
+      if(weights.length === 0) return '';
+
+      var W = 380, H = 180, padL = 45, padR = 15, padT = 15, padB = 30;
+      var chartW = W - padL - padR;
+      var chartH = H - padT - padB;
+
+      var vals = weights.map(function(w){ return w.weight_grams; });
+      var minVal = Math.min.apply(null, vals);
+      var maxVal = Math.max.apply(null, vals);
+      var range = maxVal - minVal || 10;
+      minVal = Math.max(0, minVal - range*0.1);
+      maxVal = maxVal + range*0.1;
+      range = maxVal - minVal;
+
+      var dates = weights.map(function(w){ return new Date(w.date+'T00:00:00'); });
+      var minDate = dates[0].getTime();
+      var maxDate = dates[dates.length-1].getTime();
+      var dateRange = maxDate - minDate || 1;
+
+      var points = [];
+      weights.forEach(function(w, i){
+        var x = padL + ((dates[i].getTime() - minDate) / dateRange) * chartW;
+        var y = padT + (1 - (w.weight_grams - minVal) / range) * chartH;
+        points.push({x:x, y:y, val:w.weight_grams, date:w.date});
+      });
+
+      var svg = '<svg viewBox="0 0 '+W+' '+H+'" xmlns="http://www.w3.org/2000/svg">';
+
+      // Grid lines
+      var gridSteps = 4;
+      for(var i=0; i<=gridSteps; i++){
+        var gy = padT + (i/gridSteps)*chartH;
+        var gVal = maxVal - (i/gridSteps)*range;
+        svg += '<line x1="'+padL+'" y1="'+gy+'" x2="'+(W-padR)+'" y2="'+gy+'" stroke="#e0d8d0" stroke-width="0.5"/>';
+        svg += '<text x="'+(padL-5)+'" y="'+(gy+4)+'" text-anchor="end" font-size="8" fill="#aaa">'+gVal.toFixed(0)+'g</text>';
+      }
+
+      // Axis
+      svg += '<line x1="'+padL+'" y1="'+padT+'" x2="'+padL+'" y2="'+(H-padB)+'" stroke="#ccc" stroke-width="1"/>';
+      svg += '<line x1="'+padL+'" y1="'+(H-padB)+'" x2="'+(W-padR)+'" y2="'+(H-padB)+'" stroke="#ccc" stroke-width="1"/>';
+
+      // Date labels
+      if(weights.length > 1){
+        svg += '<text x="'+padL+'" y="'+(H-padB+14)+'" font-size="7" fill="#aaa">'+weights[0].date+'</text>';
+        svg += '<text x="'+(W-padR)+'" y="'+(H-padB+14)+'" text-anchor="end" font-size="7" fill="#aaa">'+weights[weights.length-1].date+'</text>';
+      }
+
+      // Area fill
+      if(points.length > 1){
+        var areaPath = 'M'+points[0].x+','+points[0].y;
+        for(var i=1;i<points.length;i++) areaPath+=' L'+points[i].x+','+points[i].y;
+        areaPath += ' L'+points[points.length-1].x+','+(H-padB)+' L'+points[0].x+','+(H-padB)+' Z';
+        svg += '<path d="'+areaPath+'" fill="rgba(183,196,160,0.2)"/>';
+      }
+
+      // Line
+      if(points.length > 1){
+        var linePath = 'M'+points[0].x+','+points[0].y;
+        for(var i=1;i<points.length;i++) linePath+=' L'+points[i].x+','+points[i].y;
+        svg += '<path d="'+linePath+'" fill="none" stroke="var(--sage)" stroke-width="2" stroke-linejoin="round"/>';
+      }
+
+      // Points
+      points.forEach(function(p){
+        svg += '<circle cx="'+p.x+'" cy="'+p.y+'" r="3.5" fill="var(--sage)" stroke="#fff" stroke-width="1.5"><title>'+p.date+': '+p.val.toFixed(1)+'g</title></circle>';
+      });
+
+      svg += '</svg>';
+      return svg;
+    },
+
+    _buildGrowthMetrics: function(){
+      var weights = this._weights.slice().sort(function(a,b){
+        return new Date(a.date) - new Date(b.date);
+      });
+      var currentWeight = weights.length > 0 ? weights[weights.length-1].weight_grams : null;
+      var avgDailyGain = '&mdash;';
+      var daysToBW = '&mdash;';
+      var butcherWeight = 200; // grams
+
+      if(weights.length >= 2){
+        var first = weights[0];
+        var last = weights[weights.length-1];
+        var days = daysBetween(new Date(first.date+'T00:00:00'), new Date(last.date+'T00:00:00'));
+        if(days > 0){
+          var gain = (last.weight_grams - first.weight_grams) / days;
+          avgDailyGain = gain.toFixed(1) + 'g';
+          if(gain > 0 && currentWeight < butcherWeight){
+            daysToBW = Math.ceil((butcherWeight - currentWeight) / gain);
+          } else if(currentWeight >= butcherWeight){
+            daysToBW = 'Ready';
+          }
+        }
+      }
+
+      var html = '<div class="growth-metrics">';
+      html += '<div class="gm-card"><div class="gm-val">'+(currentWeight ? currentWeight.toFixed(1)+'g' : '&mdash;')+'</div><div class="gm-lbl">Current Weight</div></div>';
+      html += '<div class="gm-card"><div class="gm-val">'+avgDailyGain+'</div><div class="gm-lbl">Avg Daily Gain</div></div>';
+      html += '<div class="gm-card"><div class="gm-val">'+daysToBW+'</div><div class="gm-lbl">Days to 200g</div></div>';
+      html += '<div class="gm-card"><div class="gm-val">'+weights.length+'</div><div class="gm-lbl">Weight Records</div></div>';
+      html += '</div>';
+      return html;
+    },
+
+    openWeightModal: function(){
+      var today = new Date().toISOString().split('T')[0];
+      var html = '<div class="modal-overlay" id="weight-modal-overlay" onclick="if(event.target===this)Page.BirdDetail.closeWeightModal()">' +
+        '<div class="modal"><h3>Log Weight for Bird #'+this._birdId+'</h3>' +
+        '<label>Weight (grams)</label><input id="mw-weight" type="number" step="0.1" min="0" placeholder="e.g. 185.5">' +
+        '<label>Date</label><input id="mw-date" type="date" value="'+today+'">' +
+        '<label>Notes (optional)</label><textarea id="mw-notes" placeholder="Optional notes"></textarea>' +
+        '<div class="modal-actions"><button class="btn-cancel" onclick="Page.BirdDetail.closeWeightModal()">Cancel</button><button class="btn-primary" onclick="Page.BirdDetail.submitWeight()">Save</button></div>' +
+        '</div></div>';
+      document.body.insertAdjacentHTML('beforeend', html);
+    },
+    closeWeightModal: function(){
+      var ov = document.getElementById('weight-modal-overlay');
+      if(ov) ov.remove();
+    },
+    submitWeight: async function(){
+      var weight = parseFloat(document.getElementById('mw-weight').value);
+      var date = document.getElementById('mw-date').value;
+      var notes = document.getElementById('mw-notes').value.trim() || null;
+      if(isNaN(weight) || !date){ toast('Weight and date are required','error'); return; }
+      var result = await API.post('/api/birds/'+this._birdId+'/weight', {
+        weight_grams: weight,
+        date: date,
+        notes: notes
+      });
+      this.closeWeightModal();
+      if(result){ toast('Weight logged: '+weight+'g'); }
+      else { toast('Failed to log weight','error'); }
+      this._load();
+    },
+    updateStatus: async function(status){
+      await API.put('/api/birds/'+this._birdId, {status: status});
+      toast('Bird #'+this._birdId+' marked as '+status);
+      this._load();
+    },
+    scheduleProcessing: async function(){
+      var today = new Date().toISOString().split('T')[0];
+      var result = await API.post('/api/processing', {
+        bird_id: this._birdId,
+        reason: 'Manual',
+        scheduled_date: today,
+        status: 'Scheduled'
+      });
+      if(result){ toast('Bird #'+this._birdId+' scheduled for processing'); }
+      else { toast('Failed to schedule processing','error'); }
+    }
+  };
+
+  /* ---------------------------------------------------------
+     CLUTCH PAGE
+     --------------------------------------------------------- */
   Page.Clutches = {
     _clutches: [],
     render: function(app){
       app.innerHTML =
         '<div class="page-top"><div class="page-title">&#x1F95A; Clutches</div><button class="btn-primary" onclick="Page.Clutches.openModal()">+ Add Clutch</button></div>' +
-        '<div id="clutch-list"></div>' +
-        '<div class="timeline-section" id="clutch-timeline-section"></div>';
+        '<div id="clutch-timeline-section"></div>' +
+        '<div id="clutch-list">'+loadingHTML()+'</div>';
     },
     start: function(){
       this._load();
@@ -880,18 +1449,77 @@
       if(bl) _bloodlines = bl;
       var data = await API.get('/api/clutches');
       if(data) this._clutches = data;
-      this._renderList();
       this._renderTimeline();
+      this._renderList();
     },
+
+    _renderTimeline: function(){
+      var el = document.getElementById('clutch-timeline-section');
+      if(!el) return;
+      var incubating = this._clutches.filter(function(c){ return c.status==='Incubating'; });
+      if(incubating.length===0){ el.innerHTML=''; return; }
+
+      var now = new Date();
+      // Find date range
+      var allDates = [];
+      incubating.forEach(function(c){
+        allDates.push(new Date(c.set_date+'T00:00:00'));
+        allDates.push(new Date(c.expected_hatch_date+'T00:00:00'));
+      });
+      var minDate = new Date(Math.min.apply(null, allDates));
+      var maxDate = new Date(Math.max.apply(null, allDates));
+      // Add 1 day padding
+      minDate.setDate(minDate.getDate() - 1);
+      maxDate.setDate(maxDate.getDate() + 1);
+      var totalDays = daysBetween(minDate, maxDate);
+      if(totalDays < 1) totalDays = 1;
+
+      var barHeight = 26;
+      var barGap = 6;
+      var totalH = incubating.length * (barHeight + barGap) + 22;
+
+      var html = '<div class="timeline-wrap"><h3>Incubation Timeline</h3>';
+      html += '<div class="timeline-gantt" style="height:'+totalH+'px;position:relative">';
+
+      // Today line
+      var todayPct = ((now - minDate) / (maxDate - minDate)) * 100;
+      if(todayPct >= 0 && todayPct <= 100){
+        html += '<div class="timeline-today" style="left:'+todayPct.toFixed(1)+'%"><span class="timeline-today-label">Today</span></div>';
+      }
+
+      incubating.forEach(function(c, i){
+        var setD = new Date(c.set_date+'T00:00:00');
+        var hatchD = new Date(c.expected_hatch_date+'T00:00:00');
+        var leftPct = ((setD - minDate) / (maxDate - minDate)) * 100;
+        var widthPct = ((hatchD - setD) / (maxDate - minDate)) * 100;
+        var elapsed = Math.max(0, (now - setD) / 86400000);
+        var pct = Math.min(100, (elapsed/17)*100);
+        var bg = pct >= 70 ? 'var(--dusty-rose)' : pct >= 40 ? 'var(--warning)' : 'var(--sage)';
+        var top = 22 + i * (barHeight + barGap);
+        var blName = bloodlineName(c.bloodline_id);
+        html += '<div class="timeline-gantt-bar" style="left:'+leftPct.toFixed(1)+'%;width:'+Math.max(widthPct,3).toFixed(1)+'%;top:'+top+'px;height:'+barHeight+'px;background:'+bg+'" title="Clutch #'+c.id+(blName?' - '+blName:'')+'">';
+        html += '#'+c.id;
+        html += '</div>';
+      });
+
+      // Date axis
+      html += '</div>';
+      html += '<div class="timeline-date-axis"><span>'+minDate.toISOString().split('T')[0]+'</span><span>'+maxDate.toISOString().split('T')[0]+'</span></div>';
+      html += '</div>';
+
+      el.innerHTML = html;
+    },
+
     _renderList: function(){
       var el = document.getElementById('clutch-list');
       if(!el) return;
-      if(this._clutches.length===0){ el.innerHTML='<div class="no-data">No clutches yet</div>'; return; }
+      if(this._clutches.length===0){
+        el.innerHTML = emptyState('&#x1F95A;','No clutches yet','+ Add Clutch','Page.Clutches.openModal()');
+        return;
+      }
       var now = new Date();
       var html='<div class="clutch-grid">';
-      var self = this;
 
-      // Sort: incubating first, then by set_date desc
       var sorted = this._clutches.slice().sort(function(a,b){
         if(a.status==='Incubating' && b.status!=='Incubating') return -1;
         if(a.status!=='Incubating' && b.status==='Incubating') return 1;
@@ -904,66 +1532,81 @@
         var setD = new Date(c.set_date+'T00:00:00');
         var hatchD = new Date(c.expected_hatch_date+'T00:00:00');
         var elapsed = Math.max(0,(now-setD)/86400000);
-        var remaining = Math.max(0,Math.ceil((hatchD-now)/86400000));
+        var day = Math.min(Math.floor(elapsed), 17);
         var pct = Math.min(100,(elapsed/17)*100);
-        var cls='early';
-        if(pct>=70) cls='late';
-        else if(pct>=40) cls='mid';
 
+        var blName = bloodlineName(c.bloodline_id);
         var eggs = c.eggs_set;
         var fertile = c.eggs_fertile!=null ? c.eggs_fertile : '?';
         var hatched = c.eggs_hatched!=null ? c.eggs_hatched : '?';
 
-        // Bloodline name
-        var blName='';
-        _bloodlines.forEach(function(bl){ if(bl.id===c.bloodline_id) blName=bl.name; });
+        // Ring color
+        var ringColor = pct >= 70 ? 'var(--dusty-rose)' : pct >= 40 ? 'var(--warning)' : 'var(--sage)';
+        var circumference = 2 * Math.PI * 40; // r=40
+        var dashLen = isIncubating ? (pct / 100) * circumference : circumference;
 
-        var card = '<div class="clutch-page-card'+muted+'">';
-        card += '<h4>Clutch #'+c.id+(blName?' &mdash; '+blName:'')+'</h4>';
+        html += '<div class="clutch-card'+muted+'">';
 
+        // Ring
+        html += '<div class="clutch-ring-wrap">';
+        html += '<svg viewBox="0 0 100 100" width="80" height="80">';
+        html += '<circle cx="50" cy="50" r="40" fill="none" stroke="#e0d8d0" stroke-width="7"/>';
+        html += '<circle cx="50" cy="50" r="40" fill="none" stroke="'+ringColor+'" stroke-width="7" stroke-linecap="round" stroke-dasharray="'+dashLen.toFixed(1)+' '+circumference.toFixed(1)+'" transform="rotate(-90 50 50)"/>';
         if(isIncubating){
-          card += '<div class="progress-bar"><div class="progress-fill '+cls+'" style="width:'+pct.toFixed(0)+'%"></div></div>';
-          card += '<div class="clutch-info"><span>Day '+Math.floor(elapsed)+' of 17</span><span>'+remaining+' days left</span></div>';
+          html += '<text x="50" y="46" text-anchor="middle" font-size="16" font-weight="700" fill="var(--charcoal)">'+day+'</text>';
+          html += '<text x="50" y="62" text-anchor="middle" font-size="9" fill="#aaa">of 17</text>';
+        } else {
+          html += '<text x="50" y="54" text-anchor="middle" font-size="11" font-weight="600" fill="#aaa">'+c.status+'</text>';
+        }
+        html += '</svg></div>';
+
+        // Body
+        html += '<div class="clutch-card-body">';
+        html += '<h4>Clutch #'+c.id+(blName ? ' &mdash; '+blName : '')+'</h4>';
+
+        // Egg counts
+        html += '<div class="clutch-egg-counts">';
+        html += '<span><span class="egg-num">'+eggs+'</span><span class="egg-lbl">Set</span></span>';
+        html += '<span><span class="egg-num">'+fertile+'</span><span class="egg-lbl">Fertile</span></span>';
+        html += '<span><span class="egg-num">'+hatched+'</span><span class="egg-lbl">Hatched</span></span>';
+        html += '</div>';
+
+        // Key dates
+        if(isIncubating){
+          var candleDate = addDays(c.set_date, 7);
+          var lockdownDate = addDays(c.set_date, 14);
+          var hatchDate = c.expected_hatch_date;
+          var events = [
+            {name:'Set', date:c.set_date, past: now >= setD},
+            {name:'Candle', date:candleDate, past: now >= new Date(candleDate+'T00:00:00')},
+            {name:'Lockdown', date:lockdownDate, past: now >= new Date(lockdownDate+'T00:00:00')},
+            {name:'Hatch', date:hatchDate, past: now >= hatchD}
+          ];
+          // Find next upcoming
+          var nextIdx = -1;
+          for(var i=0;i<events.length;i++){
+            if(!events[i].past){ nextIdx = i; break; }
+          }
+          html += '<div class="clutch-dates">';
+          events.forEach(function(ev, idx){
+            var cls = idx === nextIdx ? ' highlight' : '';
+            html += '<span class="'+cls+'" style="margin-right:.6rem">'+(idx===nextIdx?'&#x25B6; ':'')+ev.name+': '+ev.date+'</span>';
+          });
+          html += '</div>';
+
+          html += '<div class="clutch-actions">';
+          html += '<button class="status-btn" onclick="event.stopPropagation();Page.Clutches.showCandling('+c.id+')">Record Candling</button>';
+          html += '<button class="status-btn" onclick="event.stopPropagation();Page.Clutches.showHatch('+c.id+')">Record Hatch</button>';
+          html += '</div>';
+          html += '<div id="clutch-inline-'+c.id+'"></div>';
         }
 
-        card += '<div class="clutch-stats"><span>Set: '+eggs+'</span><span>Fertile: '+fertile+'</span><span>Hatched: '+hatched+'</span><span>Status: '+c.status+'</span></div>';
-
-        if(isIncubating){
-          card += '<div class="clutch-actions">';
-          card += '<button class="status-btn" onclick="Page.Clutches.showCandling('+c.id+')">Record Candling</button>';
-          card += '<button class="status-btn" onclick="Page.Clutches.showHatch('+c.id+')">Record Hatch</button>';
-          card += '</div>';
-          card += '<div id="clutch-inline-'+c.id+'"></div>';
-        }
-
-        card += '</div>';
-        html += card;
+        html += '</div></div>';
       });
       html += '</div>';
       el.innerHTML = html;
     },
-    _renderTimeline: function(){
-      var el = document.getElementById('clutch-timeline-section');
-      if(!el) return;
-      var incubating = this._clutches.filter(function(c){ return c.status==='Incubating'; });
-      if(incubating.length===0){ el.innerHTML=''; return; }
 
-      var now = new Date();
-      var html='<h3>Incubation Timeline</h3><div class="timeline">';
-      incubating.forEach(function(c){
-        var setD = new Date(c.set_date+'T00:00:00');
-        var elapsed = Math.max(0,Math.floor((now-setD)/86400000));
-        var day = Math.min(elapsed,17);
-        var pct = (day/17)*100;
-        var h = Math.max(30, (pct/100)*120);
-        var cls='var(--sage)';
-        if(pct>=70) cls='var(--dusty-rose)';
-        else if(pct>=40) cls='var(--warning)';
-        html+='<div class="timeline-bar" style="height:'+h+'px;background:'+cls+';width:40px"><span class="timeline-label">#'+c.id+'</span>'+day+'</div>';
-      });
-      html += '</div>';
-      el.innerHTML = html;
-    },
     showCandling: function(id){
       var el = document.getElementById('clutch-inline-'+id);
       if(!el) return;
@@ -977,13 +1620,15 @@
     recordCandling: async function(id){
       var count = parseInt(document.getElementById('candle-count-'+id).value);
       if(isNaN(count)) return;
-      await API.put('/api/clutches/'+id, {eggs_fertile: count});
+      var result = await API.put('/api/clutches/'+id, {eggs_fertile: count});
+      if(result) toast('Candling recorded: '+count+' fertile');
       this._load();
     },
     recordHatch: async function(id){
       var count = parseInt(document.getElementById('hatch-count-'+id).value);
       if(isNaN(count)) return;
-      await API.put('/api/clutches/'+id, {eggs_hatched: count, status: 'Hatched'});
+      var result = await API.put('/api/clutches/'+id, {eggs_hatched: count, status: 'Hatched'});
+      if(result) toast('Hatch recorded: '+count+' chicks!');
       this._load();
     },
     openModal: function(){
@@ -1012,24 +1657,306 @@
       var setDate = document.getElementById('mc-date').value;
       var notes = document.getElementById('mc-notes').value.trim() || null;
 
-      if(!eggs || !setDate){ alert('Eggs count and set date are required'); return; }
+      if(!eggs || !setDate){ toast('Eggs count and set date are required','error'); return; }
 
-      await API.post('/api/clutches', {
+      var result = await API.post('/api/clutches', {
         breeding_pair_id: null,
         bloodline_id: bloodline ? parseInt(bloodline) : null,
-        eggs_set: eggs,
-        eggs_fertile: null,
-        eggs_hatched: null,
-        set_date: setDate,
-        status: 'Incubating',
-        notes: notes
+        eggs_set: eggs, eggs_fertile: null, eggs_hatched: null,
+        set_date: setDate, status: 'Incubating', notes: notes
       });
       this.closeModal();
+      if(result) toast('Clutch #'+result.id+' created');
+      else toast('Failed to create clutch','error');
       this._load();
     }
   };
 
-  // ===== Cameras Page =====
+  /* ---------------------------------------------------------
+     BREEDING PAGE
+     --------------------------------------------------------- */
+  Page.Breeding = {
+    _tab: 'groups',
+    _groups: [],
+    _suggestions: [],
+    render: function(app){
+      app.innerHTML =
+        '<div class="page-top"><div class="page-title">&#x1F48D; Breeding</div></div>' +
+        '<div class="tabs">' +
+          '<div class="tab active" id="tab-groups" onclick="Page.Breeding.switchTab(\'groups\')">Groups</div>' +
+          '<div class="tab" id="tab-suggestions" onclick="Page.Breeding.switchTab(\'suggestions\')">Pair Suggestions</div>' +
+        '</div>' +
+        '<div id="breeding-content">'+loadingHTML()+'</div>';
+    },
+    start: function(){
+      this._tab = 'groups';
+      this._load();
+      addInterval(this._load.bind(this), 60000);
+    },
+    stop: function(){},
+    _load: async function(){
+      var bl = await API.get('/api/bloodlines');
+      if(bl) _bloodlines = bl;
+      var birds = await API.get('/api/birds');
+      if(birds) _birds = birds;
+      this._groups = await API.get('/api/breeding-groups') || [];
+      this._suggestions = await API.get('/api/breeding/suggest') || [];
+      this._renderContent();
+    },
+    switchTab: function(tab){
+      this._tab = tab;
+      document.getElementById('tab-groups').classList.toggle('active', tab==='groups');
+      document.getElementById('tab-suggestions').classList.toggle('active', tab==='suggestions');
+      this._renderContent();
+    },
+    _renderContent: function(){
+      var el = document.getElementById('breeding-content');
+      if(!el) return;
+      if(this._tab === 'groups') this._renderGroups(el);
+      else this._renderSuggestions(el);
+    },
+    _renderGroups: function(el){
+      if(this._groups.length === 0){
+        el.innerHTML = emptyState('&#x1F48D;','No breeding groups yet','','');
+        return;
+      }
+      var html = '';
+      this._groups.forEach(function(g){
+        var male = findBird(g.male_id);
+        var femaleCount = g.female_ids ? g.female_ids.length : 0;
+        var ratioOk = femaleCount >= 3 && femaleCount <= 5;
+        var ratioWarn = femaleCount >= 2 && femaleCount <= 6;
+        var ratioCls = ratioOk ? 'good' : ratioWarn ? 'warn' : 'bad';
+        var ratioText = '1:'+femaleCount;
+
+        html += '<div class="breed-group-card">';
+        html += '<h4>'+g.name+' <span class="ratio-badge '+ratioCls+'">'+ratioText+'</span></h4>';
+
+        // Male
+        html += '<div style="font-size:.78rem;color:#888;margin-bottom:.3rem">MALE</div>';
+        html += '<div class="breed-birds">';
+        if(male){
+          html += '<span class="breed-bird-chip">'+bandDot(male.band_color, 10)+' '+birdLink(male.id)+' <span style="color:#888;font-size:.72rem">'+bloodlineName(male.bloodline_id)+'</span></span>';
+        } else {
+          html += '<span class="breed-bird-chip">'+birdLink(g.male_id)+'</span>';
+        }
+        html += '</div>';
+
+        // Females
+        html += '<div style="font-size:.78rem;color:#888;margin:.4rem 0 .3rem">FEMALES</div>';
+        html += '<div class="breed-birds">';
+        if(g.female_ids && g.female_ids.length > 0){
+          g.female_ids.forEach(function(fid){
+            var fb = findBird(fid);
+            if(fb){
+              html += '<span class="breed-bird-chip">'+bandDot(fb.band_color, 10)+' '+birdLink(fb.id)+' <span style="color:#888;font-size:.72rem">'+bloodlineName(fb.bloodline_id)+'</span></span>';
+            } else {
+              html += '<span class="breed-bird-chip">'+birdLink(fid)+'</span>';
+            }
+          });
+        } else {
+          html += '<span style="font-size:.8rem;color:#aaa;font-style:italic">No females assigned</span>';
+        }
+        html += '</div>';
+
+        if(g.start_date) html += '<div style="font-size:.72rem;color:#aaa;margin-top:.4rem">Started: '+g.start_date+'</div>';
+        html += '</div>';
+      });
+      el.innerHTML = html;
+    },
+    _renderSuggestions: function(el){
+      if(this._suggestions.length === 0){
+        el.innerHTML = emptyState('&#x1F48D;','Need at least 1 male and 1 female for pairing suggestions','','');
+        return;
+      }
+      var safest = this._suggestions.filter(function(p){return p.safe}).slice(0,10);
+      var risky = this._suggestions.filter(function(p){return !p.safe}).slice(0,5);
+      var html = '';
+
+      if(safest.length > 0){
+        html += '<div style="font-size:.78rem;color:#999;margin-bottom:.4rem;text-transform:uppercase;letter-spacing:.04em;font-weight:600">Safe Pairings</div>';
+        safest.forEach(function(p){
+          var mBird = findBird(p.male_id);
+          var fBird = findBird(p.female_id);
+          html += '<div class="pair-row safe-pair">';
+          html += '<div class="pair-info">';
+          if(mBird) html += bandDot(mBird.band_color, 12)+' ';
+          html += birdLink(p.male_id, 'Male #'+p.male_id);
+          if(mBird) html += ' <span style="font-size:.75rem;color:#888">'+bloodlineName(mBird.bloodline_id)+'</span>';
+          html += ' &times; ';
+          if(fBird) html += bandDot(fBird.band_color, 12)+' ';
+          html += birdLink(p.female_id, 'Female #'+p.female_id);
+          if(fBird) html += ' <span style="font-size:.75rem;color:#888">'+bloodlineName(fBird.bloodline_id)+'</span>';
+          html += '</div>';
+          html += '<span class="coeff safe">'+p.coefficient.toFixed(3)+'</span>';
+          html += '</div>';
+        });
+      }
+
+      if(risky.length > 0){
+        html += '<div style="font-size:.78rem;color:#999;margin:.8rem 0 .4rem;text-transform:uppercase;letter-spacing:.04em;font-weight:600">Risky Pairings</div>';
+        risky.forEach(function(p){
+          var mBird = findBird(p.male_id);
+          var fBird = findBird(p.female_id);
+          html += '<div class="pair-row risky-pair">';
+          html += '<div class="pair-info">';
+          if(mBird) html += bandDot(mBird.band_color, 12)+' ';
+          html += birdLink(p.male_id, 'Male #'+p.male_id);
+          if(mBird) html += ' <span style="font-size:.75rem;color:#888">'+bloodlineName(mBird.bloodline_id)+'</span>';
+          html += ' &times; ';
+          if(fBird) html += bandDot(fBird.band_color, 12)+' ';
+          html += birdLink(p.female_id, 'Female #'+p.female_id);
+          if(fBird) html += ' <span style="font-size:.75rem;color:#888">'+bloodlineName(fBird.bloodline_id)+'</span>';
+          html += '</div>';
+          html += '<span class="coeff risky">'+p.coefficient.toFixed(3)+'</span>';
+          html += '</div>';
+        });
+      }
+
+      if(!html) html = '<div class="no-data">No pair data available</div>';
+      el.innerHTML = html;
+    }
+  };
+
+  /* ---------------------------------------------------------
+     PROCESSING PAGE (Kanban)
+     --------------------------------------------------------- */
+  Page.Processing = {
+    _cullRecs: [],
+    _processing: [],
+    render: function(app){
+      app.innerHTML =
+        '<div class="page-top"><div class="page-title">&#x1FA93; Processing</div></div>' +
+        '<div id="processing-board">'+loadingHTML()+'</div>';
+    },
+    start: function(){
+      this._load();
+      addInterval(this._load.bind(this), 30000);
+    },
+    stop: function(){},
+    _load: async function(){
+      var bl = await API.get('/api/bloodlines');
+      if(bl) _bloodlines = bl;
+      var birds = await API.get('/api/birds');
+      if(birds) _birds = birds;
+      this._cullRecs = await API.get('/api/flock/cull-recommendations') || [];
+      this._processing = await API.get('/api/processing') || [];
+      this._renderBoard();
+    },
+    _renderBoard: function(){
+      var el = document.getElementById('processing-board');
+      if(!el) return;
+
+      // Separate processing into scheduled and completed
+      var scheduled = this._processing.filter(function(p){ return p.status === 'Scheduled'; });
+      var completed = this._processing.filter(function(p){ return p.status === 'Completed'; });
+
+      // Filter cull recs to exclude birds already in processing
+      var processedBirdIds = {};
+      this._processing.forEach(function(p){ processedBirdIds[p.bird_id] = true; });
+      var recommended = this._cullRecs.filter(function(r){ return !processedBirdIds[r.bird_id]; });
+
+      var html = '<div class="kanban">';
+
+      // Recommended column
+      html += '<div class="kanban-col">';
+      html += '<div class="kanban-col-header" style="color:var(--warning)">&#x26A0;&#xFE0F; Recommended <span class="col-count">'+recommended.length+'</span></div>';
+      if(recommended.length === 0){
+        html += '<div class="no-data" style="padding:.5rem;font-size:.8rem">No recommendations</div>';
+      }
+      recommended.forEach(function(r){
+        var bird = findBird(r.bird_id);
+        var reason = formatCullReason(r.reason);
+        html += '<div class="kanban-card">';
+        html += '<div class="kanban-card-header">';
+        if(bird) html += bandDot(bird.band_color, 12)+' ';
+        html += birdLink(r.bird_id);
+        if(bird) html += ' <span style="font-size:.72rem;color:#888">'+bloodlineName(bird.bloodline_id)+'</span>';
+        html += '</div>';
+        html += '<div class="kanban-card-reason">'+reason+'</div>';
+        html += '<div class="kanban-card-actions"><button class="btn-primary" style="font-size:.72rem;padding:.2rem .5rem" onclick="Page.Processing.scheduleFromRec('+r.bird_id+',\''+reason.replace(/'/g,"\\'")+'\')">Schedule</button></div>';
+        html += '</div>';
+      });
+      html += '</div>';
+
+      // Scheduled column
+      html += '<div class="kanban-col">';
+      html += '<div class="kanban-col-header" style="color:var(--blue)">&#x1F4C5; Scheduled <span class="col-count">'+scheduled.length+'</span></div>';
+      if(scheduled.length === 0){
+        html += '<div class="no-data" style="padding:.5rem;font-size:.8rem">Nothing scheduled</div>';
+      }
+      scheduled.forEach(function(p){
+        var bird = findBird(p.bird_id);
+        html += '<div class="kanban-card">';
+        html += '<div class="kanban-card-header">';
+        if(bird) html += bandDot(bird.band_color, 12)+' ';
+        html += birdLink(p.bird_id);
+        if(bird) html += ' <span style="font-size:.72rem;color:#888">'+bloodlineName(bird.bloodline_id)+'</span>';
+        html += '</div>';
+        html += '<div class="kanban-card-reason">'+(p.reason||'&mdash;')+'</div>';
+        html += '<div class="kanban-card-date">Scheduled: '+(p.scheduled_date||'&mdash;')+'</div>';
+        html += '<div class="kanban-card-actions"><button class="btn-primary" style="font-size:.72rem;padding:.2rem .5rem" onclick="Page.Processing.markCompleted('+p.id+','+p.bird_id+')">Complete</button></div>';
+        html += '</div>';
+      });
+      html += '</div>';
+
+      // Completed column
+      html += '<div class="kanban-col">';
+      html += '<div class="kanban-col-header" style="color:var(--safe)">&#x2705; Completed <span class="col-count">'+completed.length+'</span></div>';
+      if(completed.length === 0){
+        html += '<div class="no-data" style="padding:.5rem;font-size:.8rem">No completed records</div>';
+      }
+      completed.slice(0, 20).forEach(function(p){
+        var bird = findBird(p.bird_id);
+        html += '<div class="kanban-card" style="opacity:.8">';
+        html += '<div class="kanban-card-header">';
+        if(bird) html += bandDot(bird.band_color, 12)+' ';
+        html += birdLink(p.bird_id);
+        html += '</div>';
+        html += '<div class="kanban-card-reason">'+(p.reason||'&mdash;')+'</div>';
+        if(p.final_weight_grams) html += '<div class="kanban-card-date">Final: '+p.final_weight_grams.toFixed(0)+'g</div>';
+        html += '<div class="kanban-card-date">'+(p.processed_date||'&mdash;')+'</div>';
+        html += '</div>';
+      });
+      html += '</div>';
+
+      html += '</div>';
+      el.innerHTML = html;
+    },
+
+    scheduleFromRec: async function(birdId, reason){
+      var today = new Date().toISOString().split('T')[0];
+      var result = await API.post('/api/processing', {
+        bird_id: birdId,
+        reason: reason,
+        scheduled_date: today,
+        status: 'Scheduled'
+      });
+      if(result){ toast('Bird #'+birdId+' scheduled for processing'); }
+      else { toast('Failed to schedule','error'); }
+      this._load();
+    },
+
+    markCompleted: async function(procId, birdId){
+      var today = new Date().toISOString().split('T')[0];
+      var result = await API.put('/api/processing/'+procId, {
+        status: 'Completed',
+        processed_date: today
+      });
+      if(result){
+        toast('Bird #'+birdId+' processing completed');
+        // Also mark bird as Culled
+        await API.put('/api/birds/'+birdId, {status: 'Culled'});
+      } else {
+        toast('Failed to complete','error');
+      }
+      this._load();
+    }
+  };
+
+  /* ---------------------------------------------------------
+     CAMERAS PAGE
+     --------------------------------------------------------- */
   Page.Cameras = {
     _cameras: [],
     _summaries: {},
@@ -1037,7 +1964,7 @@
     render: function(app){
       app.innerHTML =
         '<div class="page-top"><div class="page-title">&#x1F3A5; Cameras</div><button class="btn-primary" onclick="Page.Cameras.openModal()">+ Add Camera</button></div>' +
-        '<div id="cameras-list"></div>';
+        '<div id="cameras-list">'+loadingHTML()+'</div>';
     },
     start: function(){
       this._load();
@@ -1048,7 +1975,6 @@
       var cams = await API.get('/api/cameras');
       if(cams) this._cameras = cams; else this._cameras = [];
 
-      // Fetch detection summaries and last frame for each camera
       var self = this;
       var promises = this._cameras.map(async function(cam){
         var summary = await API.get('/api/cameras/'+cam.id+'/detections/summary');
@@ -1064,7 +1990,7 @@
       var el = document.getElementById('cameras-list');
       if(!el) return;
       if(this._cameras.length===0){
-        el.innerHTML='<div class="no-data">No cameras registered yet. Use the CLI or button above to add one.</div>';
+        el.innerHTML = emptyState('&#x1F3A5;','No cameras registered yet','+ Add Camera','Page.Cameras.openModal()');
         return;
       }
       var self = this;
@@ -1078,33 +2004,27 @@
         html+='<div class="camera-card">';
         html+='<div class="camera-card-header"><h4>'+cam.name+'</h4><span class="camera-status-badge '+statusCls+'">'+cam.status+'</span></div>';
         html+='<div class="camera-meta"><span>'+cam.location+'</span><span>'+cam.feed_url+'</span></div>';
-
-        // Live feed placeholder
-        html+='<div class="camera-feed-placeholder">Live feed — connect Pi to enable</div>';
-
-        // Last capture info
+        html+='<div class="camera-feed-placeholder">Live feed &mdash; connect Pi to enable</div>';
         html+='<div class="camera-meta"><span>Last capture: '+lastTs+'</span>';
         if(lastStage) html+='<span>Stage: '+lastStage+'</span>';
         html+='</div>';
 
-        // Detection summary
         var summary = self._summaries[cam.id] || [];
         if(summary.length>0){
           var maxCount = Math.max.apply(null, summary.map(function(s){return s.count}));
-          html+='<div class="detection-summary"><div class="detection-summary-title">Recent Detections (last 60 min)</div>';
+          html+='<div class="detection-summary"><div class="detection-summary-title">Recent Detections</div>';
           summary.forEach(function(s){
             var pct = maxCount>0 ? (s.count/maxCount)*100 : 0;
             html+='<div class="detection-bar">';
             html+='<span class="detection-bar-label">'+s.label+'</span>';
             html+='<div style="flex:1;background:var(--beige);border-radius:3px;height:6px"><div class="detection-bar-fill" style="width:'+pct.toFixed(0)+'%"></div></div>';
-            html+='<span class="detection-bar-count">'+s.count+' ('+( s.avg_confidence*100).toFixed(0)+'%)</span>';
+            html+='<span class="detection-bar-count">'+s.count+' ('+(s.avg_confidence*100).toFixed(0)+'%)</span>';
             html+='</div>';
           });
           html+='</div>';
         } else {
           html+='<div class="no-data" style="padding:.4rem;font-size:.8rem">No detections yet</div>';
         }
-
         html+='</div>';
       });
       html+='</div>';
@@ -1128,19 +2048,20 @@
       var name = document.getElementById('mc-cam-name').value.trim();
       var loc = document.getElementById('mc-cam-loc').value.trim();
       var url = document.getElementById('mc-cam-url').value.trim();
-      if(!name || !loc || !url){ alert('All fields are required'); return; }
-      await API.post('/api/cameras', {
-        name: name,
-        location: loc,
-        feed_url: url,
-        status: 'Active'
+      if(!name || !loc || !url){ toast('All fields are required','error'); return; }
+      var result = await API.post('/api/cameras', {
+        name: name, location: loc, feed_url: url, status: 'Active'
       });
       this.closeModal();
+      if(result) toast('Camera "'+name+'" added');
+      else toast('Failed to add camera','error');
       this._load();
     }
   };
 
-  // ===== Boot =====
+  /* =========================================================
+     Boot
+     ========================================================= */
   Router.init();
 })();
 </script>
