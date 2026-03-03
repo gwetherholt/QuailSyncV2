@@ -1,11 +1,13 @@
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use quailsync_common::AlertConfig;
-use quailsync_server::{build_app, init_db, AppState};
+use quailsync_server::{auto_backup_if_needed, build_app, init_db, AppState};
 use rusqlite::Connection;
 
 #[tokio::main]
 async fn main() {
+    auto_backup_if_needed();
+
     let conn = Connection::open("quailsync.db").expect("failed to open database");
     init_db(&conn);
     println!("[db] SQLite initialized (quailsync.db)");

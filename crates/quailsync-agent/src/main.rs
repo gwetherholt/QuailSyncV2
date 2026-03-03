@@ -59,7 +59,8 @@ fn mock_system_metrics() -> TelemetryPayload {
 
 #[tokio::main]
 async fn main() {
-    let url = "ws://127.0.0.1:3000/ws";
+    let host = std::env::var("QUAILSYNC_SERVER").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
+    let url = format!("ws://{host}/ws");
     println!("quailsync-agent connecting to {url}...");
 
     let (ws_stream, _) = connect_async(url).await.expect("failed to connect");
