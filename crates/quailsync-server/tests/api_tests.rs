@@ -12,10 +12,13 @@ async fn spawn_test_server() -> String {
     let conn = Connection::open_in_memory().expect("in-memory sqlite");
     init_db(&conn);
 
+    let (live_tx, _) = tokio::sync::broadcast::channel::<String>(64);
+
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         agent_connected: Arc::new(AtomicBool::new(false)),
         alert_config: quailsync_common::AlertConfig::default(),
+        live_tx,
     };
 
     let app = build_app(state);

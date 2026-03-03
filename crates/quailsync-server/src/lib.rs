@@ -1,4 +1,5 @@
 use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex};
+use tokio::sync::broadcast;
 
 use axum::{
     extract::{
@@ -45,6 +46,7 @@ pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
     pub agent_connected: Arc<AtomicBool>,
     pub alert_config: AlertConfig,
+    pub live_tx: broadcast::Sender<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -408,6 +410,8 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                     if let TelemetryPayload::Brooder(ref reading) = payload {
                         check_brooder_alerts(&conn, reading, &state.alert_config);
                     }
+                    // Broadcast to live dashboard clients
+                    let _ = state.live_tx.send(text.to_string());
                 }
                 Err(e) => eprintln!("[ws] bad payload: {e}"),
             },
@@ -420,6 +424,45 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     }
 
     state.agent_connected.store(false, Ordering::Relaxed);
+}
+
+// ---------------------------------------------------------------------------
+// Live WebSocket (dashboard clients subscribe to telemetry broadcasts)
+// ---------------------------------------------------------------------------
+
+async fn ws_live_handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
+    ws.on_upgrade(move |socket| handle_live_socket(socket, state))
+}
+
+async fn handle_live_socket(mut socket: WebSocket, state: AppState) {
+    println!("[ws/live] dashboard client connected");
+    let mut rx = state.live_tx.subscribe();
+
+    loop {
+        tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Ok(text) => {
+                        if socket.send(Message::Text(text.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        eprintln!("[ws/live] client lagged, skipped {n} messages");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            msg = socket.recv() => {
+                match msg {
+                    Some(Ok(Message::Close(_))) | None => break,
+                    _ => {} // ignore client-sent messages
+                }
+            }
+        }
+    }
+
+    println!("[ws/live] dashboard client disconnected");
 }
 
 fn print_payload(payload: &TelemetryPayload) {
@@ -2707,6 +2750,7 @@ pub fn build_app(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/ws", get(ws_handler))
+        .route("/ws/live", get(ws_live_handler))
         .route("/api/brooder/latest", get(brooder_latest))
         .route("/api/brooder/history", get(brooder_history))
         .route("/api/system/latest", get(system_latest))

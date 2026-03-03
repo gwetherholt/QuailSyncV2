@@ -3,6 +3,7 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use quailsync_common::AlertConfig;
 use quailsync_server::{auto_backup_if_needed, build_app, init_db, AppState};
 use rusqlite::Connection;
+use tokio::sync::broadcast;
 
 fn ensure_tls_certs() {
     let cert_path = std::path::Path::new("certs/quailsync.crt");
@@ -76,10 +77,13 @@ async fn main() {
         alert_config.humidity_max,
     );
 
+    let (live_tx, _) = broadcast::channel::<String>(64);
+
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         agent_connected: Arc::new(AtomicBool::new(false)),
         alert_config,
+        live_tx,
     };
 
     let app = build_app(state);
