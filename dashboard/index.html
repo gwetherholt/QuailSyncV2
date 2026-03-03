@@ -807,11 +807,8 @@
     _liveWs.onmessage = function(evt){
       try {
         var msg = JSON.parse(evt.data);
-        if(msg.Brooder){
-          // If we're on the dashboard page, refresh brooder panel immediately
-          if(Router.current === 'dashboard' && Pages.dashboard && Pages.dashboard._pollBrooder){
-            Pages.dashboard._pollBrooder();
-          }
+        if(msg.Brooder && Page.Dashboard._updateFromWs){
+          Page.Dashboard._updateFromWs(msg.Brooder);
         }
       } catch(e){}
     };
@@ -933,7 +930,77 @@
     },
     stop: function(){},
 
+    // Sparkline temp cache: { brooderId: [temps...] } — seeded by _pollBrooder, appended by live WS
+    _sparkCache: {},
+
+    _buildSparkBars: function(temps, maxBars, barHeight){
+      var pts = temps.slice(-maxBars);
+      if(pts.length===0) return '';
+      var tMin=Math.min.apply(null,pts), tMax=Math.max.apply(null,pts);
+      var range=tMax-tMin||1;
+      var bars='';
+      pts.forEach(function(t){
+        var h=Math.max(3,((t-tMin)/range)*barHeight);
+        bars+='<div class="spark-bar" style="height:'+h+'px" title="'+t.toFixed(1)+'\u00b0F"></div>';
+      });
+      return bars;
+    },
+
+    _checkAlert: function(temp, hum){
+      // Mirror server AlertConfig::default() — temp 95-100°F, humidity 40-60%
+      if(temp < 95 || temp > 100) return 'Temperature '+temp.toFixed(1)+'\u00b0F out of range (95-100)';
+      if(hum < 40 || hum > 60) return 'Humidity '+hum.toFixed(1)+'% out of range (40-60)';
+      return null;
+    },
+
+    // Called from /ws/live onmessage — update one brooder card instantly from WS payload
+    _updateFromWs: function(reading){
+      var temp = reading.temperature_celsius;
+      var hum = reading.humidity_percent;
+      var bid = reading.brooder_id || 'legacy';
+
+      // Try to find the specific brooder card; fall back to legacy single-panel
+      var card = document.querySelector('[data-brooder-id="'+bid+'"]');
+      if(!card) card = document.querySelector('[data-brooder-id="legacy"]');
+      if(!card) return;
+
+      // Update temp + humidity values
+      var tempEl = card.querySelector('[data-field="temp"]');
+      var humEl = card.querySelector('[data-field="hum"]');
+      if(tempEl) tempEl.innerHTML = temp.toFixed(1)+'&deg;F';
+      if(humEl) humEl.innerHTML = hum.toFixed(1)+'%';
+
+      // Update sparkline cache + rebuild
+      var key = String(bid);
+      if(!this._sparkCache[key]) this._sparkCache[key] = [];
+      this._sparkCache[key].push(temp);
+      var maxBars = bid==='legacy' ? 30 : 20;
+      var barH = bid==='legacy' ? 32 : 28;
+      if(this._sparkCache[key].length > maxBars + 10) this._sparkCache[key] = this._sparkCache[key].slice(-maxBars);
+      var sparkEl = card.querySelector('[data-field="spark"]');
+      if(sparkEl) sparkEl.innerHTML = this._buildSparkBars(this._sparkCache[key], maxBars, barH);
+
+      // Update alert state
+      var alertMsg = this._checkAlert(temp, hum);
+      var alertEl = card.querySelector('[data-field="alert"]');
+      if(alertMsg){
+        card.style.borderLeft = '4px solid var(--danger)';
+        if(alertEl) alertEl.innerHTML = alertMsg;
+        else {
+          var div = document.createElement('div');
+          div.setAttribute('data-field','alert');
+          div.style.cssText = 'font-size:.7rem;color:var(--danger);margin-top:.3rem';
+          div.textContent = alertMsg;
+          card.appendChild(div);
+        }
+      } else {
+        card.style.borderLeft = '4px solid var(--safe)';
+        if(alertEl) alertEl.innerHTML = '';
+      }
+    },
+
     _pollBrooder: async function(){
+      var self = Page.Dashboard;
       var el = document.getElementById('d-brooder');
       if(!el) return;
       var brooders = await API.get('/api/brooders');
@@ -945,14 +1012,8 @@
         var hum=latest.humidity_percent.toFixed(1);
         var pts=history.slice().reverse().slice(-30);
         var temps=pts.map(function(p){return p.temperature_celsius});
-        var tMin=Math.min.apply(null,temps), tMax=Math.max.apply(null,temps);
-        var range=tMax-tMin||1;
-        var bars='';
-        temps.forEach(function(t){
-          var h=Math.max(4,((t-tMin)/range)*32);
-          bars+='<div class="spark-bar" style="height:'+h+'px" title="'+t.toFixed(1)+'\u00b0F"></div>';
-        });
-        el.innerHTML='<div class="reading-row"><div><span class="reading-label">Temperature</span><br><span class="reading-value">'+temp+'&deg;F</span></div><div style="text-align:right"><span class="reading-label">Humidity</span><br><span class="reading-value">'+hum+'%</span></div></div><div class="sparkline">'+bars+'</div>';
+        self._sparkCache['legacy'] = temps.slice();
+        el.innerHTML='<div data-brooder-id="legacy" style="border-left:4px solid var(--safe)"><div class="reading-row"><div><span class="reading-label">Temperature</span><br><span class="reading-value" data-field="temp">'+temp+'&deg;F</span></div><div style="text-align:right"><span class="reading-label">Humidity</span><br><span class="reading-value" data-field="hum">'+hum+'%</span></div></div><div class="sparkline" data-field="spark">'+self._buildSparkBars(temps,30,32)+'</div><div data-field="alert"></div></div>';
         return;
       }
       // Multi-brooder
@@ -965,23 +1026,20 @@
         var alertBorder = (status && status.has_alert) ? 'border-left:4px solid var(--danger)' : 'border-left:4px solid var(--safe)';
         var tempStr = status && status.latest_temp!=null ? status.latest_temp.toFixed(1)+'&deg;F' : '--';
         var humStr = status && status.latest_humidity!=null ? status.latest_humidity.toFixed(1)+'%' : '--';
-        var alertHtml = (status && status.has_alert) ? '<div style="font-size:.7rem;color:var(--danger);margin-top:.3rem">'+status.alert_message+'</div>' : '';
-        var sparkHtml='';
+        var alertHtml = (status && status.has_alert) ? status.alert_message : '';
+        // Seed sparkline cache from REST data
+        var sparkTemps = [];
         if(readings && readings.length>0){
           var pts=readings.slice().reverse().slice(-20);
-          var temps=pts.map(function(p){return p.temperature_celsius});
-          var tMin=Math.min.apply(null,temps),tMax=Math.max.apply(null,temps);
-          var range=tMax-tMin||1;
-          temps.forEach(function(t){
-            var h=Math.max(3,((t-tMin)/range)*28);
-            sparkHtml+='<div class="spark-bar" style="height:'+h+'px" title="'+t.toFixed(1)+'\u00b0F"></div>';
-          });
+          sparkTemps=pts.map(function(p){return p.temperature_celsius});
         }
-        html+='<div style="background:var(--cream);border-radius:var(--radius);padding:.75rem;'+alertBorder+'">';
+        self._sparkCache[String(b.id)] = sparkTemps.slice();
+        html+='<div data-brooder-id="'+b.id+'" style="background:var(--cream);border-radius:var(--radius);padding:.75rem;'+alertBorder+'">';
         html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem"><strong style="font-size:.88rem">'+b.name+'</strong><span style="font-size:.62rem;padding:2px 6px;border-radius:8px;'+stageCls+'">'+b.life_stage+'</span></div>';
-        html+='<div class="reading-row" style="margin-bottom:.2rem"><div><span class="reading-label">Temp</span><br><span class="reading-value">'+tempStr+'</span></div><div style="text-align:right"><span class="reading-label">Hum</span><br><span class="reading-value">'+humStr+'</span></div></div>';
-        if(sparkHtml) html+='<div class="sparkline">'+sparkHtml+'</div>';
-        html+=alertHtml+'</div>';
+        html+='<div class="reading-row" style="margin-bottom:.2rem"><div><span class="reading-label">Temp</span><br><span class="reading-value" data-field="temp">'+tempStr+'</span></div><div style="text-align:right"><span class="reading-label">Hum</span><br><span class="reading-value" data-field="hum">'+humStr+'</span></div></div>';
+        html+='<div class="sparkline" data-field="spark">'+self._buildSparkBars(sparkTemps,20,28)+'</div>';
+        html+='<div data-field="alert" style="font-size:.7rem;color:var(--danger);margin-top:.3rem">'+alertHtml+'</div>';
+        html+='</div>';
       }
       html+='</div>';
       el.innerHTML=html;
