@@ -790,6 +790,46 @@
   pollStatus();
 
   /* =========================================================
+     Live WebSocket — receive telemetry broadcasts in real-time
+     ========================================================= */
+  var _liveWs = null;
+  var _liveReconnectDelay = 1000;
+
+  function connectLiveWs(){
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    var url = proto + '//' + location.host + '/ws/live';
+    _liveWs = new WebSocket(url);
+
+    _liveWs.onopen = function(){
+      _liveReconnectDelay = 1000;
+    };
+
+    _liveWs.onmessage = function(evt){
+      try {
+        var msg = JSON.parse(evt.data);
+        if(msg.Brooder){
+          // If we're on the dashboard page, refresh brooder panel immediately
+          if(Router.current === 'dashboard' && Pages.dashboard && Pages.dashboard._pollBrooder){
+            Pages.dashboard._pollBrooder();
+          }
+        }
+      } catch(e){}
+    };
+
+    _liveWs.onclose = function(){
+      setTimeout(function(){
+        _liveReconnectDelay = Math.min(_liveReconnectDelay * 2, 30000);
+        connectLiveWs();
+      }, _liveReconnectDelay);
+    };
+
+    _liveWs.onerror = function(){
+      _liveWs.close();
+    };
+  }
+  connectLiveWs();
+
+  /* =========================================================
      Router
      ========================================================= */
   var Router = window.Router = {
