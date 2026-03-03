@@ -4,11 +4,12 @@ use colored::Colorize;
 use qrcode::QrCode;
 use quailsync_common::{
     Alert, Bird, BirdStatus, Bloodline, BreedingGroup, Brooder, BrooderReading, CameraFeed,
-    CameraStatus, Clutch, ClutchStatus, CreateBird, CreateBloodline, CreateBreedingGroup,
-    CreateBrooder, CreateCameraFeed, CreateClutch, CreateProcessingRecord, CreateWeightRecord,
-    CullReason, CullRecommendation, FrameCapture, InbreedingCoefficient, LifeStage,
-    ProcessingRecord, ProcessingReason, ProcessingStatus, Sex, Severity, SystemMetrics,
-    UpdateClutch, UpdateProcessingRecord, WeightRecord, COTURNIX_BUTCHER_WEIGHT_GRAMS,
+    CameraStatus, ChickGroup, ChickMortalityLog, Clutch, ClutchStatus, CreateBird,
+    CreateBloodline, CreateBreedingGroup, CreateBrooder, CreateCameraFeed, CreateChickGroup,
+    CreateClutch, CreateProcessingRecord, CreateWeightRecord, CullReason, CullRecommendation,
+    FrameCapture, InbreedingCoefficient, LifeStage, MortalityRequest, ProcessingRecord,
+    ProcessingReason, ProcessingStatus, Sex, Severity, SystemMetrics, UpdateClutch,
+    UpdateProcessingRecord, WeightRecord, COTURNIX_BUTCHER_WEIGHT_GRAMS,
 };
 use serde::Deserialize;
 
@@ -80,6 +81,16 @@ enum Commands {
     Brooder {
         #[command(subcommand)]
         action: BrooderAction,
+    },
+    /// Manage chick groups (nursery)
+    ChickGroup {
+        #[command(subcommand)]
+        action: ChickGroupAction,
+    },
+    /// Database backup management
+    Backup {
+        #[command(subcommand)]
+        action: BackupAction,
     },
 }
 
@@ -191,6 +202,54 @@ enum BrooderAction {
 }
 
 #[derive(Subcommand)]
+enum ChickGroupAction {
+    /// Create a new chick group
+    Create {
+        #[arg(long)]
+        bloodline: i64,
+        #[arg(long)]
+        count: u32,
+        #[arg(long)]
+        hatch_date: Option<String>,
+        #[arg(long)]
+        clutch: Option<i64>,
+        #[arg(long)]
+        brooder: Option<i64>,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// List all chick groups
+    List,
+    /// Log mortality for a chick group
+    Mortality {
+        #[arg(long)]
+        id: i64,
+        #[arg(long)]
+        count: u32,
+        #[arg(long)]
+        reason: String,
+    },
+    /// Graduate a chick group (use dashboard for full banding workflow)
+    Graduate {
+        #[arg(long)]
+        id: i64,
+    },
+}
+
+#[derive(Subcommand)]
+enum BackupAction {
+    /// Create a database backup
+    Create,
+    /// List all backups
+    List,
+    /// Restore a backup
+    Restore {
+        #[arg(long)]
+        filename: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum BloodlineAction {
     /// Add a new bloodline
     Add {
@@ -225,6 +284,8 @@ enum BirdAction {
         generation: u32,
         #[arg(long)]
         notes: Option<String>,
+        #[arg(long)]
+        nfc: Option<String>,
     },
     /// List all birds
     List,
@@ -281,6 +342,16 @@ enum ClutchAction {
         status: Option<String>,
         #[arg(long)]
         notes: Option<String>,
+        #[arg(long)]
+        stillborn: Option<u32>,
+        #[arg(long)]
+        quit: Option<u32>,
+        #[arg(long)]
+        infertile: Option<u32>,
+        #[arg(long)]
+        damaged: Option<u32>,
+        #[arg(long)]
+        hatch_notes: Option<String>,
     },
     /// Show incubation schedule for active clutches
     Schedule,
@@ -546,6 +617,7 @@ async fn cmd_bird_add(
     father: Option<i64>,
     generation: u32,
     notes: Option<String>,
+    nfc: Option<String>,
 ) -> anyhow::Result<()> {
     let hatch = match hatch_date {
         Some(s) => chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")?,
@@ -561,6 +633,7 @@ async fn cmd_bird_add(
         generation,
         status: BirdStatus::Active,
         notes,
+        nfc_tag_id: nfc,
     };
     let resp = reqwest::Client::new()
         .post(format!("{base}/api/birds"))
@@ -765,6 +838,27 @@ async fn cmd_clutch_list(base: &str) -> anyhow::Result<()> {
             format!("{:?}", c.status),
             remaining,
         );
+
+        // Show hatch metrics for hatched clutches
+        if c.status == ClutchStatus::Hatched {
+            let details: Vec<String> = [
+                c.eggs_stillborn.map(|n| format!("stillborn:{n}")),
+                c.eggs_quit.map(|n| format!("quit:{n}")),
+                c.eggs_infertile.map(|n| format!("infertile:{n}")),
+                c.eggs_damaged.map(|n| format!("damaged:{n}")),
+            ]
+            .iter()
+            .filter_map(|x| x.clone())
+            .collect();
+            if !details.is_empty() {
+                println!("       {}", details.join(", ").dimmed());
+            }
+            if let Some(ref hn) = c.hatch_notes {
+                if !hn.is_empty() {
+                    println!("       note: {}", hn.dimmed());
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -776,6 +870,11 @@ async fn cmd_clutch_update(
     hatched: Option<u32>,
     status_str: Option<String>,
     notes: Option<String>,
+    stillborn: Option<u32>,
+    quit: Option<u32>,
+    infertile: Option<u32>,
+    damaged: Option<u32>,
+    hatch_notes: Option<String>,
 ) -> anyhow::Result<()> {
     // If hatched count is provided and no explicit status, auto-set to Hatched
     let status = match (&status_str, &hatched) {
@@ -794,6 +893,11 @@ async fn cmd_clutch_update(
         eggs_hatched: hatched,
         status,
         notes,
+        eggs_stillborn: stillborn,
+        eggs_quit: quit,
+        eggs_infertile: infertile,
+        eggs_damaged: damaged,
+        hatch_notes,
     };
 
     let resp = reqwest::Client::new()
@@ -1154,6 +1258,7 @@ async fn cmd_processing_complete(
         .json(&quailsync_common::UpdateBird {
             status: Some(BirdStatus::Culled),
             notes: None,
+            nfc_tag_id: None,
         })
         .send()
         .await;
@@ -1676,6 +1781,215 @@ async fn cmd_brooder_qr(base: &str, id: i64) -> anyhow::Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Chick group commands
+// ---------------------------------------------------------------------------
+
+async fn cmd_chick_group_create(
+    base: &str,
+    bloodline: i64,
+    count: u32,
+    hatch_date: Option<String>,
+    clutch: Option<i64>,
+    brooder: Option<i64>,
+    notes: Option<String>,
+) -> anyhow::Result<()> {
+    let hatch = match hatch_date {
+        Some(s) => NaiveDate::parse_from_str(&s, "%Y-%m-%d")?,
+        None => Local::now().date_naive(),
+    };
+    let body = CreateChickGroup {
+        clutch_id: clutch,
+        bloodline_id: bloodline,
+        brooder_id: brooder,
+        initial_count: count,
+        hatch_date: hatch,
+        notes,
+    };
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/chick-groups"))
+        .json(&body)
+        .send()
+        .await?;
+    let group: ChickGroup = resp.json().await?;
+    println!(
+        "{} chick group #{} — {} chicks, bloodline #{}, hatched {}",
+        "Created".green().bold(),
+        group.id,
+        group.initial_count,
+        group.bloodline_id,
+        group.hatch_date,
+    );
+    Ok(())
+}
+
+async fn cmd_chick_group_list(base: &str) -> anyhow::Result<()> {
+    let groups: Vec<ChickGroup> = reqwest::get(format!("{base}/api/chick-groups"))
+        .await?
+        .json()
+        .await?;
+
+    if groups.is_empty() {
+        println!("{}", "No chick groups yet.".dimmed());
+        return Ok(());
+    }
+
+    println!("{}", "Chick Groups (Nursery)".bold().underline());
+    println!();
+    println!(
+        "  {:<5} {:<10} {:<10} {:<10} {:<12} {:<12} {}",
+        "ID".bold(),
+        "Blood.".bold(),
+        "Count".bold(),
+        "Brooder".bold(),
+        "Hatch Date".bold(),
+        "Status".bold(),
+        "Mortality".bold(),
+    );
+    println!("  {}", "-".repeat(75));
+
+    for g in &groups {
+        let count_str = format!("{}/{}", g.current_count, g.initial_count);
+        let brooder_str = g
+            .brooder_id
+            .map(|id| format!("#{id}"))
+            .unwrap_or_else(|| "-".to_string());
+        let mortality_pct = if g.initial_count > 0 {
+            ((g.initial_count - g.current_count) as f64 / g.initial_count as f64) * 100.0
+        } else {
+            0.0
+        };
+        println!(
+            "  {:<5} {:<10} {:<10} {:<10} {:<12} {:<12} {:.0}%",
+            g.id,
+            format!("#{}", g.bloodline_id),
+            count_str,
+            brooder_str,
+            g.hatch_date,
+            format!("{:?}", g.status),
+            mortality_pct,
+        );
+    }
+    Ok(())
+}
+
+async fn cmd_chick_group_mortality(
+    base: &str,
+    id: i64,
+    count: u32,
+    reason: String,
+) -> anyhow::Result<()> {
+    let body = MortalityRequest { count, reason };
+    let resp = reqwest::Client::new()
+        .put(format!("{base}/api/chick-groups/{id}/mortality"))
+        .json(&body)
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        let text = resp.text().await?;
+        anyhow::bail!("mortality log failed: {text}");
+    }
+
+    let log: ChickMortalityLog = resp.json().await?;
+    println!(
+        "{} mortality logged for group #{}: {} lost ({})",
+        "Recorded".green().bold(),
+        log.group_id,
+        log.count,
+        log.reason,
+    );
+    Ok(())
+}
+
+async fn cmd_chick_group_graduate(_base: &str, id: i64) -> anyhow::Result<()> {
+    println!(
+        "{} Graduation requires per-bird banding details (sex, band color, NFC tag).",
+        "Note:".yellow().bold(),
+    );
+    println!("  Use the {} at #/nursery for the full banding workflow.", "dashboard".bold());
+    println!("  Group #{id} can be graduated from the Nursery page.");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Backup commands
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct BackupInfo {
+    filename: String,
+    size_bytes: u64,
+    created: String,
+}
+
+async fn cmd_backup_create(base: &str) -> anyhow::Result<()> {
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/backup"))
+        .send()
+        .await?;
+    let info: BackupInfo = resp.json().await?;
+    println!(
+        "{} backup: {} ({:.1} KB)",
+        "Created".green().bold(),
+        info.filename,
+        info.size_bytes as f64 / 1024.0,
+    );
+    Ok(())
+}
+
+async fn cmd_backup_list(base: &str) -> anyhow::Result<()> {
+    let backups: Vec<BackupInfo> = reqwest::get(format!("{base}/api/backups"))
+        .await?
+        .json()
+        .await?;
+
+    if backups.is_empty() {
+        println!("{}", "No backups yet.".dimmed());
+        return Ok(());
+    }
+
+    println!("{}", "Database Backups".bold().underline());
+    println!();
+    println!(
+        "  {:<40} {:>10} {}",
+        "Filename".bold(),
+        "Size".bold(),
+        "Created".bold(),
+    );
+    println!("  {}", "-".repeat(70));
+
+    for b in &backups {
+        println!(
+            "  {:<40} {:>8.1}KB {}",
+            b.filename,
+            b.size_bytes as f64 / 1024.0,
+            b.created,
+        );
+    }
+    Ok(())
+}
+
+async fn cmd_backup_restore(base: &str, filename: String) -> anyhow::Result<()> {
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/restore"))
+        .json(&serde_json::json!({ "filename": filename }))
+        .send()
+        .await?;
+
+    if resp.status().is_success() {
+        println!(
+            "{} Database restored from {}. Restart the server to apply.",
+            "Restored".green().bold(),
+            filename,
+        );
+    } else {
+        let text = resp.text().await?;
+        anyhow::bail!("restore failed: {text}");
+    }
+    Ok(())
+}
+
 async fn cmd_camera_point(base: &str, id: i64, brooder: i64) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     client
@@ -1713,9 +2027,9 @@ async fn main() {
         },
         Commands::Bird { action } => match action {
             BirdAction::Add {
-                band, sex, bloodline, hatch_date, mother, father, generation, notes,
+                band, sex, bloodline, hatch_date, mother, father, generation, notes, nfc,
             } => {
-                cmd_bird_add(base, band, sex, bloodline, hatch_date, mother, father, generation, notes).await
+                cmd_bird_add(base, band, sex, bloodline, hatch_date, mother, father, generation, notes, nfc).await
             }
             BirdAction::List => cmd_bird_list(base).await,
             BirdAction::Weigh { id, grams, notes } => cmd_bird_weigh(base, id, grams, notes).await,
@@ -1731,8 +2045,8 @@ async fn main() {
             } => cmd_clutch_add(base, bloodline, eggs, set_date, pair, notes).await,
             ClutchAction::List => cmd_clutch_list(base).await,
             ClutchAction::Update {
-                id, fertile, hatched, status, notes,
-            } => cmd_clutch_update(base, id, fertile, hatched, status, notes).await,
+                id, fertile, hatched, status, notes, stillborn, quit, infertile, damaged, hatch_notes,
+            } => cmd_clutch_update(base, id, fertile, hatched, status, notes, stillborn, quit, infertile, damaged, hatch_notes).await,
             ClutchAction::Schedule => cmd_clutch_schedule(base).await,
         },
         Commands::Breeding { action } => match action {
@@ -1768,6 +2082,21 @@ async fn main() {
             }
             BrooderAction::List => cmd_brooder_list(base).await,
             BrooderAction::Qr { id } => cmd_brooder_qr(base, id).await,
+        },
+        Commands::ChickGroup { action } => match action {
+            ChickGroupAction::Create { bloodline, count, hatch_date, clutch, brooder, notes } => {
+                cmd_chick_group_create(base, bloodline, count, hatch_date, clutch, brooder, notes).await
+            }
+            ChickGroupAction::List => cmd_chick_group_list(base).await,
+            ChickGroupAction::Mortality { id, count, reason } => {
+                cmd_chick_group_mortality(base, id, count, reason).await
+            }
+            ChickGroupAction::Graduate { id } => cmd_chick_group_graduate(base, id).await,
+        },
+        Commands::Backup { action } => match action {
+            BackupAction::Create => cmd_backup_create(base).await,
+            BackupAction::List => cmd_backup_list(base).await,
+            BackupAction::Restore { filename } => cmd_backup_restore(base, filename).await,
         },
     };
 

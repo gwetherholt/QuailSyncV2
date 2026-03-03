@@ -129,6 +129,8 @@ pub struct Bird {
     pub generation: u32,
     pub status: BirdStatus,
     pub notes: Option<String>,
+    #[serde(default)]
+    pub nfc_tag_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,6 +155,11 @@ pub struct Clutch {
     pub expected_hatch_date: NaiveDate,
     pub status: ClutchStatus,
     pub notes: Option<String>,
+    pub eggs_stillborn: Option<u32>,
+    pub eggs_quit: Option<u32>,
+    pub eggs_infertile: Option<u32>,
+    pub eggs_damaged: Option<u32>,
+    pub hatch_notes: Option<String>,
 }
 
 // --- Create structs (POST bodies, no id) ---
@@ -175,6 +182,8 @@ pub struct CreateBird {
     pub generation: u32,
     pub status: BirdStatus,
     pub notes: Option<String>,
+    #[serde(default)]
+    pub nfc_tag_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,6 +211,7 @@ pub struct CreateClutch {
 pub struct UpdateBird {
     pub status: Option<BirdStatus>,
     pub notes: Option<String>,
+    pub nfc_tag_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -210,6 +220,11 @@ pub struct UpdateClutch {
     pub eggs_hatched: Option<u32>,
     pub status: Option<ClutchStatus>,
     pub notes: Option<String>,
+    pub eggs_stillborn: Option<u32>,
+    pub eggs_quit: Option<u32>,
+    pub eggs_infertile: Option<u32>,
+    pub eggs_damaged: Option<u32>,
+    pub hatch_notes: Option<String>,
 }
 
 // =========================================================================
@@ -425,6 +440,68 @@ pub struct CreateBrooder {
     pub bloodline_id: Option<i64>,
     pub life_stage: LifeStage,
     pub qr_code: String,
+    pub notes: Option<String>,
+}
+
+// =========================================================================
+// Chick groups (nursery stage)
+// =========================================================================
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChickGroupStatus {
+    Active,
+    Graduated,
+    Lost,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChickGroup {
+    pub id: i64,
+    pub clutch_id: Option<i64>,
+    pub bloodline_id: i64,
+    pub brooder_id: Option<i64>,
+    pub initial_count: u32,
+    pub current_count: u32,
+    pub hatch_date: NaiveDate,
+    pub status: ChickGroupStatus,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateChickGroup {
+    pub clutch_id: Option<i64>,
+    pub bloodline_id: i64,
+    pub brooder_id: Option<i64>,
+    pub initial_count: u32,
+    pub hatch_date: NaiveDate,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChickMortalityLog {
+    pub id: i64,
+    pub group_id: i64,
+    pub count: u32,
+    pub reason: String,
+    pub date: NaiveDate,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MortalityRequest {
+    pub count: u32,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraduateRequest {
+    pub birds: Vec<GraduateBird>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraduateBird {
+    pub sex: Sex,
+    pub band_color: Option<String>,
+    pub nfc_tag_id: Option<String>,
     pub notes: Option<String>,
 }
 

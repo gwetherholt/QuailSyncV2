@@ -419,6 +419,13 @@
   .clutch-egg-counts .egg-num{font-size:1.1rem;font-weight:700}
   .clutch-egg-counts .egg-lbl{font-size:.65rem;color:#999;text-transform:uppercase}
   .clutch-actions{display:flex;gap:.4rem;margin-top:.5rem;flex-wrap:wrap}
+  .hatch-metrics{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem;font-size:.8rem}
+  .hatch-metrics span{padding:2px 8px;border-radius:6px;background:var(--beige)}
+  .metric-good{color:#2d7a3a;background:#d4edda!important}
+  .metric-warn{color:#856404;background:#fff3cd!important}
+  .metric-bad{color:#a94442;background:#f8d7da!important}
+  .btn-danger{background:var(--dusty-rose);color:#fff;border:none;padding:.45rem 1rem;border-radius:8px;cursor:pointer;font-weight:600}
+  .btn-danger:hover{opacity:.85}
   .inline-form{
     margin-top:.5rem;padding:.5rem;background:var(--beige);border-radius:8px;
     display:flex;gap:.4rem;align-items:flex-end;flex-wrap:wrap;
@@ -596,6 +603,9 @@
     <a class="sidebar-item" data-route="#/clutches" onclick="Router.navigate('#/clutches')">
       <span class="icon">&#x1F95A;</span><span class="label">Clutches</span>
     </a>
+    <a class="sidebar-item" data-route="#/nursery" onclick="Router.navigate('#/nursery')">
+      <span class="icon">&#x1F424;</span><span class="label">Nursery</span>
+    </a>
     <a class="sidebar-item" data-route="#/breeding" onclick="Router.navigate('#/breeding')">
       <span class="icon">&#x1F48D;</span><span class="label">Breeding</span>
     </a>
@@ -604,6 +614,12 @@
     </a>
     <a class="sidebar-item" data-route="#/cameras" onclick="Router.navigate('#/cameras')">
       <span class="icon">&#x1F3A5;</span><span class="label">Cameras</span>
+    </a>
+    <a class="sidebar-item" data-route="#/nfc/scan" onclick="Router.navigate('#/nfc/scan')">
+      <span class="icon">&#x1F4F1;</span><span class="label">Scan NFC</span>
+    </a>
+    <a class="sidebar-item" data-route="#/settings" onclick="Router.navigate('#/settings')">
+      <span class="icon">&#x2699;&#xFE0F;</span><span class="label">Settings</span>
     </a>
   </div>
   <div class="sidebar-footer">
@@ -789,6 +805,7 @@
         // Highlight nav
         var navRoute = hash;
         if(hash.indexOf('#/flock/bird/') === 0) navRoute = '#/flock';
+        if(hash.indexOf('#/nfc/') === 0) navRoute = '#/nfc/scan';
         document.querySelectorAll('.sidebar-item').forEach(function(el){
           el.classList.toggle('active', el.getAttribute('data-route') === navRoute);
         });
@@ -804,6 +821,9 @@
         } else if(hash === '#/clutches'){
           hdr.textContent = 'Clutch Tracker';
           Router.current = Page.Clutches;
+        } else if(hash === '#/nursery'){
+          hdr.textContent = 'Nursery';
+          Router.current = Page.Nursery;
         } else if(hash === '#/breeding'){
           hdr.textContent = 'Breeding';
           Router.current = Page.Breeding;
@@ -813,6 +833,12 @@
         } else if(hash === '#/cameras'){
           hdr.textContent = 'Cameras';
           Router.current = Page.Cameras;
+        } else if(hash === '#/nfc/scan'){
+          hdr.textContent = 'Scan NFC';
+          Router.current = Page.NfcScan;
+        } else if(hash === '#/settings'){
+          hdr.textContent = 'Settings';
+          Router.current = Page.Settings;
         } else {
           hdr.textContent = 'Dashboard';
           Router.current = Page.Dashboard;
@@ -1231,6 +1257,7 @@
       html += '<dt>Hatch Date</dt><dd>'+b.hatch_date+'</dd>';
       html += '<dt>Mother</dt><dd>'+(b.mother_id ? birdLink(b.mother_id) : 'Unknown')+'</dd>';
       html += '<dt>Father</dt><dd>'+(b.father_id ? birdLink(b.father_id) : 'Unknown')+'</dd>';
+      if(b.nfc_tag_id) html += '<dt>NFC Tag</dt><dd>'+b.nfc_tag_id+'</dd>';
       html += '</dl>';
       html += '</div></div>';
 
@@ -1601,6 +1628,23 @@
           html += '<div id="clutch-inline-'+c.id+'"></div>';
         }
 
+        // Hatch metrics for hatched clutches
+        if(c.status === 'Hatched' && c.eggs_hatched != null){
+          html += '<div class="hatch-metrics">';
+          var fertile = c.eggs_fertile != null ? c.eggs_fertile : c.eggs_set;
+          var fertilityRate = (fertile / c.eggs_set * 100);
+          var hatchOfFertile = fertile > 0 ? (c.eggs_hatched / fertile * 100) : 0;
+          var fcls = fertilityRate >= 80 ? 'metric-good' : fertilityRate >= 60 ? 'metric-warn' : 'metric-bad';
+          var hcls = hatchOfFertile >= 75 ? 'metric-good' : hatchOfFertile >= 55 ? 'metric-warn' : 'metric-bad';
+          html += '<span class="'+fcls+'">Fertility: '+fertilityRate.toFixed(0)+'%</span>';
+          html += '<span class="'+hcls+'">Hatch: '+hatchOfFertile.toFixed(0)+'%</span>';
+          if(c.eggs_stillborn) html += '<span class="metric-bad">Stillborn: '+c.eggs_stillborn+'</span>';
+          if(c.eggs_quit) html += '<span class="metric-warn">Quit: '+c.eggs_quit+'</span>';
+          if(c.eggs_infertile) html += '<span>Infertile: '+c.eggs_infertile+'</span>';
+          if(c.eggs_damaged) html += '<span>Damaged: '+c.eggs_damaged+'</span>';
+          html += '</div>';
+        }
+
         html += '</div></div>';
       });
       html += '</div>';
@@ -1613,9 +1657,24 @@
       el.innerHTML='<div class="inline-form"><label>Fertile eggs</label><input type="number" id="candle-count-'+id+'" min="0"><button class="btn-primary" onclick="Page.Clutches.recordCandling('+id+')">Save</button><button class="btn-cancel" onclick="document.getElementById(\'clutch-inline-'+id+'\').innerHTML=\'\'">Cancel</button></div>';
     },
     showHatch: function(id){
-      var el = document.getElementById('clutch-inline-'+id);
-      if(!el) return;
-      el.innerHTML='<div class="inline-form"><label>Hatched count</label><input type="number" id="hatch-count-'+id+'" min="0"><button class="btn-primary" onclick="Page.Clutches.recordHatch('+id+')">Save</button><button class="btn-cancel" onclick="document.getElementById(\'clutch-inline-'+id+'\').innerHTML=\'\'">Cancel</button></div>';
+      var clutch = this._clutches.find(function(c){ return c.id === id; });
+      var eggs = clutch ? clutch.eggs_set : 0;
+      var fertile = clutch && clutch.eggs_fertile != null ? clutch.eggs_fertile : '';
+      var html = '<div class="modal-overlay" id="hatch-modal-overlay" onclick="if(event.target===this)Page.Clutches.closeHatchModal()">' +
+        '<div class="modal"><h3>Record Hatch &mdash; Clutch #'+id+'</h3>' +
+        '<label>Hatched Count</label><input id="mh-hatched" type="number" min="0" max="'+eggs+'" placeholder="How many chicks?">' +
+        '<label>Stillborn</label><input id="mh-stillborn" type="number" min="0" value="0">' +
+        '<label>Quit (died in shell)</label><input id="mh-quit" type="number" min="0" value="0">' +
+        '<label>Infertile (clear eggs)</label><input id="mh-infertile" type="number" min="0" value="'+(fertile || 0)+'">' +
+        '<label>Damaged</label><input id="mh-damaged" type="number" min="0" value="0">' +
+        '<label>Hatch Notes</label><textarea id="mh-notes" placeholder="Optional notes about the hatch"></textarea>' +
+        '<div class="modal-actions"><button class="btn-cancel" onclick="Page.Clutches.closeHatchModal()">Cancel</button><button class="btn-primary" onclick="Page.Clutches.submitHatch('+id+')">Record Hatch</button></div>' +
+        '</div></div>';
+      document.body.insertAdjacentHTML('beforeend', html);
+    },
+    closeHatchModal: function(){
+      var ov = document.getElementById('hatch-modal-overlay');
+      if(ov) ov.remove();
     },
     recordCandling: async function(id){
       var count = parseInt(document.getElementById('candle-count-'+id).value);
@@ -1624,12 +1683,88 @@
       if(result) toast('Candling recorded: '+count+' fertile');
       this._load();
     },
-    recordHatch: async function(id){
-      var count = parseInt(document.getElementById('hatch-count-'+id).value);
-      if(isNaN(count)) return;
-      var result = await API.put('/api/clutches/'+id, {eggs_hatched: count, status: 'Hatched'});
-      if(result) toast('Hatch recorded: '+count+' chicks!');
+    submitHatch: async function(id){
+      var hatched = parseInt(document.getElementById('mh-hatched').value);
+      if(isNaN(hatched)){ toast('Hatched count is required','error'); return; }
+      var stillborn = parseInt(document.getElementById('mh-stillborn').value) || 0;
+      var quit = parseInt(document.getElementById('mh-quit').value) || 0;
+      var infertile = parseInt(document.getElementById('mh-infertile').value) || 0;
+      var damaged = parseInt(document.getElementById('mh-damaged').value) || 0;
+      var notes = document.getElementById('mh-notes').value.trim() || null;
+
+      var body = {
+        eggs_hatched: hatched, status: 'Hatched',
+        eggs_stillborn: stillborn, eggs_quit: quit,
+        eggs_infertile: infertile, eggs_damaged: damaged,
+        hatch_notes: notes
+      };
+
+      var clutch = this._clutches.find(function(c){ return c.id === id; });
+      // If fertile not set yet, compute from remaining
+      if(clutch && clutch.eggs_fertile == null){
+        body.eggs_fertile = clutch.eggs_set - infertile;
+      }
+
+      var result = await API.put('/api/clutches/'+id, body);
+      this.closeHatchModal();
+      if(result){
+        toast('Hatch recorded: '+hatched+' chicks!');
+        // Offer to create chick group if hatched > 0
+        if(hatched > 0 && clutch){
+          this._showChickGroupPrompt(id, hatched, clutch.bloodline_id);
+        } else {
+          this._load();
+        }
+      }
+    },
+    _showChickGroupPrompt: async function(clutchId, hatched, bloodlineId){
+      var brooders = await API.get('/api/brooders') || [];
+      var brOpts = '<option value="">-- No brooder --</option>';
+      brooders.forEach(function(b){
+        brOpts += '<option value="'+b.id+'">'+b.name+' ('+b.life_stage+')</option>';
+      });
+      var html = '<div class="modal-overlay" id="chickgroup-prompt-overlay" onclick="if(event.target===this)Page.Clutches.closeChickGroupPrompt()">' +
+        '<div class="modal"><h3>Create Chick Group?</h3>' +
+        '<p>'+hatched+' chicks hatched from Clutch #'+clutchId+'. Create a nursery group to track them?</p>' +
+        '<label>Assign to Brooder</label><select id="mcg-brooder">'+brOpts+'</select>' +
+        '<input type="hidden" id="mcg-clutch" value="'+clutchId+'">' +
+        '<input type="hidden" id="mcg-count" value="'+hatched+'">' +
+        '<input type="hidden" id="mcg-bloodline" value="'+(bloodlineId||'')+'">' +
+        '<div class="modal-actions"><button class="btn-cancel" onclick="Page.Clutches.closeChickGroupPrompt()">Skip</button><button class="btn-primary" onclick="Page.Clutches.submitChickGroup()">Create Group</button></div>' +
+        '</div></div>';
+      document.body.insertAdjacentHTML('beforeend', html);
+    },
+    closeChickGroupPrompt: function(){
+      var ov = document.getElementById('chickgroup-prompt-overlay');
+      if(ov) ov.remove();
       this._load();
+    },
+    submitChickGroup: async function(){
+      var clutchId = parseInt(document.getElementById('mcg-clutch').value);
+      var count = parseInt(document.getElementById('mcg-count').value);
+      var bloodline = parseInt(document.getElementById('mcg-bloodline').value);
+      var brooder = document.getElementById('mcg-brooder').value;
+      var today = new Date().toISOString().split('T')[0];
+
+      if(!bloodline){ toast('Clutch has no bloodline — set it first','error'); return; }
+
+      var body = {
+        clutch_id: clutchId,
+        bloodline_id: bloodline,
+        brooder_id: brooder ? parseInt(brooder) : null,
+        initial_count: count,
+        hatch_date: today,
+        notes: null
+      };
+      var result = await API.post('/api/chick-groups', body);
+      this.closeChickGroupPrompt();
+      if(result){
+        toast('Chick group #'+result.id+' created with '+count+' chicks!');
+        Router.navigate('#/nursery');
+      } else {
+        toast('Failed to create chick group','error');
+        this._load();
+      }
     },
     openModal: function(){
       var blOpts = '<option value="">-- None --</option>';
@@ -2056,6 +2191,335 @@
       if(result) toast('Camera "'+name+'" added');
       else toast('Failed to add camera','error');
       this._load();
+    }
+  };
+
+  /* ---------------------------------------------------------
+     NURSERY PAGE
+     --------------------------------------------------------- */
+  Page.Nursery = {
+    _groups: [],
+    render: function(app){
+      app.innerHTML = '<div class="page-top-bar"><h2>Nursery</h2><button class="btn-primary" onclick="Page.Nursery.openCreateModal()">+ New Group</button></div>' +
+        '<div id="nursery-list">'+loadingHTML()+'</div>';
+    },
+    start: function(){ this._load(); },
+    stop: function(){},
+    _load: async function(){
+      this._groups = await API.get('/api/chick-groups') || [];
+      this._renderList();
+    },
+    _renderList: function(){
+      var el = document.getElementById('nursery-list');
+      if(!el) return;
+      if(this._groups.length === 0){
+        el.innerHTML = emptyState('&#x1F424;','No chick groups yet','+ New Group','Page.Nursery.openCreateModal()');
+        return;
+      }
+      var now = new Date();
+      var html = '<div class="clutch-grid">';
+      this._groups.forEach(function(g){
+        var hatchD = new Date(g.hatch_date+'T00:00:00');
+        var ageDays = Math.floor((now - hatchD) / 86400000);
+        var mortalityPct = g.initial_count > 0 ? ((g.initial_count - g.current_count) / g.initial_count * 100) : 0;
+        var blName = bloodlineName(g.bloodline_id);
+        var statusCls = g.status === 'Active' ? 'active' : g.status === 'Graduated' ? 'sold' : 'deceased';
+
+        html += '<div class="clutch-card'+(g.status !== 'Active' ? ' muted' : '')+'">';
+        html += '<div class="clutch-card-body">';
+        html += '<h4>Group #'+g.id+(blName ? ' &mdash; '+blName : '')+' <span class="status-badge '+statusCls+'">'+g.status+'</span></h4>';
+
+        html += '<div class="clutch-egg-counts">';
+        html += '<span><span class="egg-num">'+g.current_count+'/'+g.initial_count+'</span><span class="egg-lbl">Chicks</span></span>';
+        html += '<span><span class="egg-num">'+ageDays+'d</span><span class="egg-lbl">Age</span></span>';
+        html += '<span><span class="egg-num">'+mortalityPct.toFixed(0)+'%</span><span class="egg-lbl">Mortality</span></span>';
+        html += '</div>';
+
+        html += '<div style="font-size:.85rem;color:#888;margin:.4rem 0">';
+        html += 'Hatched: '+g.hatch_date;
+        if(g.brooder_id) html += ' &bull; Brooder #'+g.brooder_id;
+        if(g.clutch_id) html += ' &bull; Clutch #'+g.clutch_id;
+        html += '</div>';
+
+        if(g.status === 'Active'){
+          html += '<div class="clutch-actions">';
+          html += '<button class="status-btn" onclick="Page.Nursery.openMortalityModal('+g.id+')">Log Mortality</button>';
+          if(ageDays >= 28){
+            html += '<button class="btn-primary" onclick="Page.Nursery.openGraduateModal('+g.id+')">Band This Group</button>';
+          } else {
+            html += '<button class="btn-secondary" disabled title="Available at 28+ days (currently '+ageDays+'d)">Band ('+ageDays+'/28d)</button>';
+          }
+          html += '</div>';
+        }
+
+        html += '</div></div>';
+      });
+      html += '</div>';
+      el.innerHTML = html;
+    },
+    openCreateModal: async function(){
+      var bloodlines = await API.get('/api/bloodlines') || [];
+      var brooders = await API.get('/api/brooders') || [];
+      var blOpts = ''; bloodlines.forEach(function(bl){ blOpts += '<option value="'+bl.id+'">'+bl.name+'</option>'; });
+      var brOpts = '<option value="">-- None --</option>';
+      brooders.forEach(function(b){ brOpts += '<option value="'+b.id+'">'+b.name+'</option>'; });
+      var today = new Date().toISOString().split('T')[0];
+      var html = '<div class="modal-overlay" id="nursery-modal-overlay" onclick="if(event.target===this)Page.Nursery.closeModal()">' +
+        '<div class="modal"><h3>New Chick Group</h3>' +
+        '<label>Bloodline</label><select id="mn-bloodline">'+blOpts+'</select>' +
+        '<label>Chick Count</label><input id="mn-count" type="number" min="1" value="12">' +
+        '<label>Hatch Date</label><input id="mn-hatch" type="date" value="'+today+'">' +
+        '<label>Brooder</label><select id="mn-brooder">'+brOpts+'</select>' +
+        '<label>Notes</label><textarea id="mn-notes" placeholder="Optional"></textarea>' +
+        '<div class="modal-actions"><button class="btn-cancel" onclick="Page.Nursery.closeModal()">Cancel</button><button class="btn-primary" onclick="Page.Nursery.submitCreate()">Create</button></div>' +
+        '</div></div>';
+      document.body.insertAdjacentHTML('beforeend', html);
+    },
+    closeModal: function(){
+      var ov = document.getElementById('nursery-modal-overlay');
+      if(ov) ov.remove();
+    },
+    submitCreate: async function(){
+      var bloodline = parseInt(document.getElementById('mn-bloodline').value);
+      var count = parseInt(document.getElementById('mn-count').value);
+      var hatch = document.getElementById('mn-hatch').value;
+      var brooder = document.getElementById('mn-brooder').value;
+      var notes = document.getElementById('mn-notes').value.trim() || null;
+      if(!bloodline || !count || !hatch){ toast('Bloodline, count, and hatch date required','error'); return; }
+      var result = await API.post('/api/chick-groups', {
+        bloodline_id: bloodline, initial_count: count, hatch_date: hatch,
+        brooder_id: brooder ? parseInt(brooder) : null, clutch_id: null, notes: notes
+      });
+      this.closeModal();
+      if(result) toast('Chick group #'+result.id+' created');
+      else toast('Failed to create group','error');
+      this._load();
+    },
+    openMortalityModal: function(id){
+      var html = '<div class="modal-overlay" id="mort-modal-overlay" onclick="if(event.target===this)Page.Nursery.closeMortalityModal()">' +
+        '<div class="modal"><h3>Log Mortality &mdash; Group #'+id+'</h3>' +
+        '<label>Count Lost</label><input id="mm-count" type="number" min="1" value="1">' +
+        '<label>Reason</label><input id="mm-reason" type="text" placeholder="e.g. found dead, weak, etc.">' +
+        '<div class="modal-actions"><button class="btn-cancel" onclick="Page.Nursery.closeMortalityModal()">Cancel</button><button class="btn-primary" onclick="Page.Nursery.submitMortality('+id+')">Log</button></div>' +
+        '</div></div>';
+      document.body.insertAdjacentHTML('beforeend', html);
+    },
+    closeMortalityModal: function(){
+      var ov = document.getElementById('mort-modal-overlay');
+      if(ov) ov.remove();
+    },
+    submitMortality: async function(id){
+      var count = parseInt(document.getElementById('mm-count').value);
+      var reason = document.getElementById('mm-reason').value.trim();
+      if(!count || !reason){ toast('Count and reason required','error'); return; }
+      var result = await API.put('/api/chick-groups/'+id+'/mortality', {count: count, reason: reason});
+      this.closeMortalityModal();
+      if(result) toast(count+' mortality logged');
+      else toast('Failed to log mortality','error');
+      this._load();
+    },
+    openGraduateModal: async function(id){
+      var group = this._groups.find(function(g){ return g.id === id; });
+      if(!group) return;
+      var n = group.current_count;
+      var rows = '';
+      for(var i=0; i<n; i++){
+        rows += '<tr>' +
+          '<td>'+(i+1)+'</td>' +
+          '<td><select class="grad-sex"><option value="Unknown">Unknown</option><option value="Male">Male</option><option value="Female">Female</option></select></td>' +
+          '<td><input type="text" class="grad-band" placeholder="Band color"></td>' +
+          '<td><input type="text" class="grad-nfc" placeholder="NFC tag (optional)"></td>' +
+          '<td><input type="text" class="grad-notes" placeholder="Notes"></td>' +
+          '</tr>';
+      }
+      var html = '<div class="modal-overlay" id="grad-modal-overlay" onclick="if(event.target===this)Page.Nursery.closeGraduateModal()">' +
+        '<div class="modal" style="max-width:700px"><h3>Band Group #'+id+' &mdash; '+n+' Chicks</h3>' +
+        '<div style="background:var(--beige);padding:.6rem;border-radius:8px;margin-bottom:.75rem;font-size:.85rem">' +
+        '<strong>Quick fill:</strong> Mark remaining as ' +
+        '<select id="qf-sex"><option value="Female">Female</option><option value="Male">Male</option><option value="Unknown">Unknown</option></select>' +
+        ' with band color <input id="qf-band" type="text" style="width:80px" placeholder="color"> ' +
+        '<button class="status-btn" onclick="Page.Nursery._quickFill()">Apply</button></div>' +
+        '<div style="max-height:350px;overflow-y:auto"><table class="data-table" style="width:100%"><thead><tr><th>#</th><th>Sex</th><th>Band</th><th>NFC</th><th>Notes</th></tr></thead>' +
+        '<tbody id="grad-tbody">'+rows+'</tbody></table></div>' +
+        '<div id="grad-error" style="color:var(--dusty-rose);font-size:.85rem;margin-top:.4rem"></div>' +
+        '<div class="modal-actions"><button class="btn-cancel" onclick="Page.Nursery.closeGraduateModal()">Cancel</button><button class="btn-primary" onclick="Page.Nursery.submitGraduate('+id+')">Graduate &amp; Create Birds</button></div>' +
+        '</div></div>';
+      document.body.insertAdjacentHTML('beforeend', html);
+    },
+    closeGraduateModal: function(){
+      var ov = document.getElementById('grad-modal-overlay');
+      if(ov) ov.remove();
+    },
+    _quickFill: function(){
+      var sex = document.getElementById('qf-sex').value;
+      var band = document.getElementById('qf-band').value.trim();
+      var rows = document.querySelectorAll('#grad-tbody tr');
+      rows.forEach(function(row){
+        var sexSel = row.querySelector('.grad-sex');
+        var bandInp = row.querySelector('.grad-band');
+        if(sexSel.value === 'Unknown') sexSel.value = sex;
+        if(!bandInp.value && band) bandInp.value = band;
+      });
+    },
+    submitGraduate: async function(id){
+      var errEl = document.getElementById('grad-error');
+      var rows = document.querySelectorAll('#grad-tbody tr');
+      var birds = [];
+      var maleBands = [];
+      var hasDup = false;
+      rows.forEach(function(row){
+        var sex = row.querySelector('.grad-sex').value;
+        var band = row.querySelector('.grad-band').value.trim() || null;
+        var nfc = row.querySelector('.grad-nfc').value.trim() || null;
+        var notes = row.querySelector('.grad-notes').value.trim() || null;
+        birds.push({sex: sex, band_color: band, nfc_tag_id: nfc, notes: notes});
+        if(sex === 'Male' && band){
+          if(maleBands.indexOf(band) >= 0) hasDup = true;
+          maleBands.push(band);
+        }
+      });
+      if(hasDup){
+        if(errEl) errEl.textContent = 'Duplicate band colors among males! Each male needs a unique band.';
+        return;
+      }
+      var result = await API.put('/api/chick-groups/'+id+'/graduate', {birds: birds});
+      this.closeGraduateModal();
+      if(result){
+        toast('Graduated '+birds.length+' birds!');
+        Router.navigate('#/flock');
+      } else {
+        toast('Graduation failed','error');
+        this._load();
+      }
+    }
+  };
+
+  /* ---------------------------------------------------------
+     NFC SCAN PAGE
+     --------------------------------------------------------- */
+  Page.NfcScan = {
+    render: function(app){
+      var hasWebNfc = 'NDEFReader' in window;
+      var html = '<div class="page-top-bar"><h2>NFC Tag Scanner</h2></div>';
+      html += '<div class="panel"><div class="panel-body" style="text-align:center;padding:2rem">';
+      if(hasWebNfc){
+        html += '<p>Tap an NFC tag to look up the bird.</p>';
+        html += '<button class="btn-primary" id="nfc-scan-btn" onclick="Page.NfcScan.startScan()">Start Scanning</button>';
+        html += '<div id="nfc-scan-status" style="margin-top:1rem"></div>';
+      } else {
+        html += '<p style="color:#888">Web NFC is not available in this browser.<br>Requires Android Chrome over HTTPS.</p>';
+      }
+      html += '<hr style="margin:1.5rem 0">';
+      html += '<p>Or enter a tag ID manually:</p>';
+      html += '<div style="display:flex;gap:.5rem;justify-content:center;align-items:center;flex-wrap:wrap">';
+      html += '<input type="text" id="nfc-manual-input" placeholder="NFC Tag ID" style="width:200px">';
+      html += '<button class="btn-primary" onclick="Page.NfcScan.manualLookup()">Look Up</button>';
+      html += '</div>';
+      html += '<div id="nfc-result" style="margin-top:1.5rem"></div>';
+      html += '</div></div>';
+      app.innerHTML = html;
+    },
+    start: function(){},
+    stop: function(){},
+    startScan: async function(){
+      try {
+        var ndef = new NDEFReader();
+        await ndef.scan();
+        document.getElementById('nfc-scan-status').textContent = 'Scanning... hold tag to device';
+        ndef.addEventListener('reading', function(event){
+          var records = event.message.records;
+          var tagId = '';
+          for(var i=0;i<records.length;i++){
+            if(records[i].recordType === 'text'){
+              var dec = new TextDecoder();
+              tagId = dec.decode(records[i].data);
+              break;
+            }
+          }
+          if(!tagId) tagId = event.serialNumber || '';
+          if(tagId) Page.NfcScan._lookup(tagId);
+        });
+      } catch(e) {
+        document.getElementById('nfc-scan-status').innerHTML = '<span style="color:var(--dusty-rose)">Scan error: '+e.message+'</span>';
+      }
+    },
+    manualLookup: function(){
+      var tag = document.getElementById('nfc-manual-input').value.trim();
+      if(!tag){ toast('Enter a tag ID','error'); return; }
+      this._lookup(tag);
+    },
+    _lookup: async function(tagId){
+      var resultEl = document.getElementById('nfc-result');
+      if(resultEl) resultEl.innerHTML = loadingHTML();
+      var bird = await API.get('/api/nfc/'+encodeURIComponent(tagId));
+      if(bird){
+        toast('Found bird #'+bird.id);
+        Router.navigate('#/flock/bird/'+bird.id);
+      } else {
+        if(resultEl) resultEl.innerHTML = '<div style="color:var(--dusty-rose)">No bird found with NFC tag "'+tagId+'"</div>';
+      }
+    }
+  };
+
+  /* ---------------------------------------------------------
+     SETTINGS PAGE
+     --------------------------------------------------------- */
+  Page.Settings = {
+    _backups: [],
+    render: function(app){
+      app.innerHTML = '<div class="page-top-bar"><h2>Settings</h2></div>' +
+        '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F4BE; Database Backups</span></div><div class="panel-body">' +
+        '<button class="btn-primary" onclick="Page.Settings.createBackup()" style="margin-bottom:1rem">Create Backup Now</button>' +
+        '<div id="backup-list">'+loadingHTML()+'</div>' +
+        '</div></div>';
+    },
+    start: function(){ this._load(); },
+    stop: function(){},
+    _load: async function(){
+      this._backups = await API.get('/api/backups') || [];
+      this._renderList();
+    },
+    _renderList: function(){
+      var el = document.getElementById('backup-list');
+      if(!el) return;
+      if(this._backups.length === 0){
+        el.innerHTML = '<div class="no-data">No backups yet. Create one to protect your data.</div>';
+        return;
+      }
+      var html = '<table class="data-table"><thead><tr><th>Filename</th><th>Size</th><th>Created</th><th>Actions</th></tr></thead><tbody>';
+      this._backups.forEach(function(b){
+        var sizeKB = (b.size_bytes / 1024).toFixed(1);
+        var created = b.created ? b.created.split('T')[0]+' '+b.created.split('T')[1].substring(0,5) : '';
+        html += '<tr><td>'+b.filename+'</td><td>'+sizeKB+' KB</td><td>'+created+'</td>';
+        html += '<td><button class="status-btn" onclick="Page.Settings.confirmRestore(\''+b.filename+'\')">Restore</button></td></tr>';
+      });
+      html += '</tbody></table>';
+      el.innerHTML = html;
+    },
+    createBackup: async function(){
+      var result = await API.post('/api/backup', {});
+      if(result) toast('Backup created: '+result.filename);
+      else toast('Backup failed','error');
+      this._load();
+    },
+    confirmRestore: function(filename){
+      var html = '<div class="modal-overlay" id="restore-modal-overlay" onclick="if(event.target===this)Page.Settings.closeRestore()">' +
+        '<div class="modal"><h3>Restore Backup?</h3>' +
+        '<p>This will replace the current database with <strong>'+filename+'</strong>.</p>' +
+        '<p style="color:var(--dusty-rose)">A pre-restore backup will be created automatically. The server must be restarted after restore.</p>' +
+        '<div class="modal-actions"><button class="btn-cancel" onclick="Page.Settings.closeRestore()">Cancel</button><button class="btn-danger" onclick="Page.Settings.doRestore(\''+filename+'\')">Restore</button></div>' +
+        '</div></div>';
+      document.body.insertAdjacentHTML('beforeend', html);
+    },
+    closeRestore: function(){
+      var ov = document.getElementById('restore-modal-overlay');
+      if(ov) ov.remove();
+    },
+    doRestore: async function(filename){
+      var result = await API.post('/api/restore', {filename: filename});
+      this.closeRestore();
+      if(result !== null) toast('Database restored. Restart server to apply.');
+      else toast('Restore failed','error');
     }
   };
 

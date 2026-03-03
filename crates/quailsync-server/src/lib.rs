@@ -14,14 +14,15 @@ use chrono::{DateTime, NaiveDate, Utc};
 use colored::Colorize;
 use quailsync_common::{
     Alert, AlertConfig, Bird, BirdStatus, Bloodline, BreedingGroup, BreedingPair, Brooder,
-    BrooderReading, CameraFeed, CameraStatus, Clutch, ClutchStatus, CreateBird, CreateBloodline,
-    CreateBreedingGroup, CreateBreedingPair, CreateBrooder, CreateCameraFeed, CreateClutch,
-    CreateDetectionResult, CreateFrameCapture, CreateProcessingRecord, CreateWeightRecord,
-    CullReason, CullRecommendation, DetectionResult, FrameCapture, InbreedingCoefficient,
-    LifeStage, ProcessingRecord, ProcessingReason, ProcessingStatus, Sex, Severity, Species,
-    SystemMetrics, TelemetryPayload, UpdateBird, UpdateClutch, UpdateProcessingRecord,
-    WeightRecord, COTURNIX_MIN_BREEDING_WEIGHT_GRAMS, MAX_FEMALES_PER_MALE,
-    MIN_FEMALES_PER_MALE,
+    BrooderReading, CameraFeed, CameraStatus, ChickGroup, ChickGroupStatus, ChickMortalityLog,
+    Clutch, ClutchStatus, CreateBird, CreateBloodline, CreateBreedingGroup, CreateBreedingPair,
+    CreateBrooder, CreateCameraFeed, CreateChickGroup, CreateClutch, CreateDetectionResult,
+    CreateFrameCapture, CreateProcessingRecord, CreateWeightRecord, CullReason,
+    CullRecommendation, DetectionResult, FrameCapture, GraduateRequest, InbreedingCoefficient,
+    LifeStage, MortalityRequest, ProcessingRecord, ProcessingReason, ProcessingStatus, Sex,
+    Severity, Species, SystemMetrics, TelemetryPayload, UpdateBird, UpdateClutch,
+    UpdateProcessingRecord, WeightRecord, COTURNIX_MIN_BREEDING_WEIGHT_GRAMS,
+    MAX_FEMALES_PER_MALE, MIN_FEMALES_PER_MALE,
 };
 use rust_embed::Embed;
 use rusqlite::{params, Connection};
@@ -217,6 +218,42 @@ pub fn init_db(conn: &Connection) {
         );",
     )
     .expect("failed to create tables");
+
+    // --- Idempotent migrations ---
+
+    // Hatch detail columns on clutches
+    conn.execute("ALTER TABLE clutches ADD COLUMN eggs_stillborn INTEGER", []).ok();
+    conn.execute("ALTER TABLE clutches ADD COLUMN eggs_quit INTEGER", []).ok();
+    conn.execute("ALTER TABLE clutches ADD COLUMN eggs_infertile INTEGER", []).ok();
+    conn.execute("ALTER TABLE clutches ADD COLUMN eggs_damaged INTEGER", []).ok();
+    conn.execute("ALTER TABLE clutches ADD COLUMN hatch_notes TEXT", []).ok();
+
+    // NFC tag on birds
+    conn.execute("ALTER TABLE birds ADD COLUMN nfc_tag_id TEXT UNIQUE", []).ok();
+
+    // Chick groups (nursery)
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS chick_groups (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            clutch_id     INTEGER REFERENCES clutches(id),
+            bloodline_id  INTEGER NOT NULL REFERENCES bloodlines(id),
+            brooder_id    INTEGER REFERENCES brooders(id),
+            initial_count INTEGER NOT NULL,
+            current_count INTEGER NOT NULL,
+            hatch_date    TEXT    NOT NULL,
+            status        TEXT    NOT NULL DEFAULT 'Active',
+            notes         TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS chick_mortality_log (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL REFERENCES chick_groups(id),
+            count    INTEGER NOT NULL,
+            reason   TEXT    NOT NULL,
+            date     TEXT    NOT NULL DEFAULT (date('now'))
+        );",
+    )
+    .expect("failed to create chick group tables");
 }
 
 // ---------------------------------------------------------------------------
@@ -683,8 +720,8 @@ async fn create_bird(
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
     conn.execute(
-        "INSERT INTO birds (band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT INTO birds (band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             body.band_color,
             sex_to_str(&body.sex),
@@ -695,6 +732,7 @@ async fn create_bird(
             body.generation,
             bird_status_to_str(&body.status),
             body.notes,
+            body.nfc_tag_id,
         ],
     )
     .unwrap();
@@ -712,6 +750,7 @@ async fn create_bird(
             generation: body.generation,
             status: body.status,
             notes: body.notes,
+            nfc_tag_id: body.nfc_tag_id,
         }),
     )
 }
@@ -719,7 +758,7 @@ async fn create_bird(
 async fn list_birds(State(state): State<AppState>) -> Json<Vec<Bird>> {
     let conn = acquire_db(&state);
     let mut stmt = conn
-        .prepare("SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes FROM birds ORDER BY id")
+        .prepare("SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id FROM birds ORDER BY id")
         .unwrap();
     let rows: Vec<Bird> = stmt
         .query_map([], |row| {
@@ -737,6 +776,7 @@ async fn list_birds(State(state): State<AppState>) -> Json<Vec<Bird>> {
                 generation: row.get(7)?,
                 status: str_to_bird_status(&status_str),
                 notes: row.get(9)?,
+                nfc_tag_id: row.get(10)?,
             })
         })
         .unwrap()
@@ -779,10 +819,17 @@ async fn update_bird(
         )
         .unwrap();
     }
+    if let Some(ref nfc) = body.nfc_tag_id {
+        conn.execute(
+            "UPDATE birds SET nfc_tag_id = ?1 WHERE id = ?2",
+            params![nfc, id],
+        )
+        .unwrap();
+    }
 
     let bird = conn
         .query_row(
-            "SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes FROM birds WHERE id = ?1",
+            "SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id FROM birds WHERE id = ?1",
             params![id],
             |row| {
                 let sex_str: String = row.get(2)?;
@@ -799,12 +846,48 @@ async fn update_bird(
                     generation: row.get(7)?,
                     status: str_to_bird_status(&status_str),
                     notes: row.get(9)?,
+                    nfc_tag_id: row.get(10)?,
                 })
             },
         )
         .unwrap();
 
     (StatusCode::OK, Json(Some(bird))).into_response()
+}
+
+// --- NFC lookup ---
+
+async fn get_bird_by_nfc(
+    State(state): State<AppState>,
+    Path(tag_id): Path<String>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+    let bird = conn.query_row(
+        "SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id FROM birds WHERE nfc_tag_id = ?1",
+        params![tag_id],
+        |row| {
+            let sex_str: String = row.get(2)?;
+            let hatch_str: String = row.get(4)?;
+            let status_str: String = row.get(8)?;
+            Ok(Bird {
+                id: row.get(0)?,
+                band_color: row.get(1)?,
+                sex: str_to_sex(&sex_str),
+                bloodline_id: row.get(3)?,
+                hatch_date: NaiveDate::parse_from_str(&hatch_str, "%Y-%m-%d").unwrap_or_default(),
+                mother_id: row.get(5)?,
+                father_id: row.get(6)?,
+                generation: row.get(7)?,
+                status: str_to_bird_status(&status_str),
+                notes: row.get(9)?,
+                nfc_tag_id: row.get(10)?,
+            })
+        },
+    );
+    match bird {
+        Ok(b) => (StatusCode::OK, Json(Some(b))).into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, Json(None::<Bird>)).into_response(),
+    }
 }
 
 // --- Breeding Pairs ---
@@ -902,6 +985,11 @@ async fn create_clutch(
             expected_hatch_date: expected,
             status: body.status,
             notes: body.notes,
+            eggs_stillborn: None,
+            eggs_quit: None,
+            eggs_infertile: None,
+            eggs_damaged: None,
+            hatch_notes: None,
         }),
     )
 }
@@ -909,7 +997,7 @@ async fn create_clutch(
 async fn list_clutches(State(state): State<AppState>) -> Json<Vec<Clutch>> {
     let conn = acquire_db(&state);
     let mut stmt = conn
-        .prepare("SELECT id, breeding_pair_id, bloodline_id, eggs_set, eggs_fertile, eggs_hatched, set_date, expected_hatch_date, status, notes FROM clutches ORDER BY id")
+        .prepare("SELECT id, breeding_pair_id, bloodline_id, eggs_set, eggs_fertile, eggs_hatched, set_date, expected_hatch_date, status, notes, eggs_stillborn, eggs_quit, eggs_infertile, eggs_damaged, hatch_notes FROM clutches ORDER BY id")
         .unwrap();
     let rows: Vec<Clutch> = stmt
         .query_map([], |row| {
@@ -927,6 +1015,11 @@ async fn list_clutches(State(state): State<AppState>) -> Json<Vec<Clutch>> {
                 expected_hatch_date: NaiveDate::parse_from_str(&exp_str, "%Y-%m-%d").unwrap_or_default(),
                 status: str_to_clutch_status(&status_str),
                 notes: row.get(9)?,
+                eggs_stillborn: row.get(10)?,
+                eggs_quit: row.get(11)?,
+                eggs_infertile: row.get(12)?,
+                eggs_damaged: row.get(13)?,
+                hatch_notes: row.get(14)?,
             })
         })
         .unwrap()
@@ -983,10 +1076,45 @@ async fn update_clutch(
         )
         .unwrap();
     }
+    if let Some(stillborn) = body.eggs_stillborn {
+        conn.execute(
+            "UPDATE clutches SET eggs_stillborn = ?1 WHERE id = ?2",
+            params![stillborn, id],
+        )
+        .unwrap();
+    }
+    if let Some(quit) = body.eggs_quit {
+        conn.execute(
+            "UPDATE clutches SET eggs_quit = ?1 WHERE id = ?2",
+            params![quit, id],
+        )
+        .unwrap();
+    }
+    if let Some(infertile) = body.eggs_infertile {
+        conn.execute(
+            "UPDATE clutches SET eggs_infertile = ?1 WHERE id = ?2",
+            params![infertile, id],
+        )
+        .unwrap();
+    }
+    if let Some(damaged) = body.eggs_damaged {
+        conn.execute(
+            "UPDATE clutches SET eggs_damaged = ?1 WHERE id = ?2",
+            params![damaged, id],
+        )
+        .unwrap();
+    }
+    if let Some(ref hatch_notes) = body.hatch_notes {
+        conn.execute(
+            "UPDATE clutches SET hatch_notes = ?1 WHERE id = ?2",
+            params![hatch_notes, id],
+        )
+        .unwrap();
+    }
 
     let clutch = conn
         .query_row(
-            "SELECT id, breeding_pair_id, bloodline_id, eggs_set, eggs_fertile, eggs_hatched, set_date, expected_hatch_date, status, notes FROM clutches WHERE id = ?1",
+            "SELECT id, breeding_pair_id, bloodline_id, eggs_set, eggs_fertile, eggs_hatched, set_date, expected_hatch_date, status, notes, eggs_stillborn, eggs_quit, eggs_infertile, eggs_damaged, hatch_notes FROM clutches WHERE id = ?1",
             params![id],
             |row| {
                 let set_str: String = row.get(6)?;
@@ -1003,6 +1131,11 @@ async fn update_clutch(
                     expected_hatch_date: NaiveDate::parse_from_str(&exp_str, "%Y-%m-%d").unwrap_or_default(),
                     status: str_to_clutch_status(&status_str),
                     notes: row.get(9)?,
+                    eggs_stillborn: row.get(10)?,
+                    eggs_quit: row.get(11)?,
+                    eggs_infertile: row.get(12)?,
+                    eggs_damaged: row.get(13)?,
+                    hatch_notes: row.get(14)?,
                 })
             },
         )
@@ -2135,6 +2268,402 @@ async fn update_camera_brooder(
 }
 
 // ---------------------------------------------------------------------------
+// Chick groups (nursery)
+// ---------------------------------------------------------------------------
+
+#[allow(dead_code)]
+fn chick_group_status_to_str(s: &ChickGroupStatus) -> &'static str {
+    match s {
+        ChickGroupStatus::Active => "Active",
+        ChickGroupStatus::Graduated => "Graduated",
+        ChickGroupStatus::Lost => "Lost",
+    }
+}
+
+fn str_to_chick_group_status(s: &str) -> ChickGroupStatus {
+    match s {
+        "Graduated" => ChickGroupStatus::Graduated,
+        "Lost" => ChickGroupStatus::Lost,
+        _ => ChickGroupStatus::Active,
+    }
+}
+
+async fn create_chick_group(
+    State(state): State<AppState>,
+    Json(body): Json<CreateChickGroup>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+    conn.execute(
+        "INSERT INTO chick_groups (clutch_id, bloodline_id, brooder_id, initial_count, current_count, hatch_date, status, notes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'Active', ?7)",
+        params![
+            body.clutch_id,
+            body.bloodline_id,
+            body.brooder_id,
+            body.initial_count,
+            body.initial_count,
+            body.hatch_date.to_string(),
+            body.notes,
+        ],
+    )
+    .unwrap();
+    let id = conn.last_insert_rowid();
+    (
+        StatusCode::CREATED,
+        Json(ChickGroup {
+            id,
+            clutch_id: body.clutch_id,
+            bloodline_id: body.bloodline_id,
+            brooder_id: body.brooder_id,
+            initial_count: body.initial_count,
+            current_count: body.initial_count,
+            hatch_date: body.hatch_date,
+            status: ChickGroupStatus::Active,
+            notes: body.notes,
+        }),
+    )
+}
+
+async fn list_chick_groups(State(state): State<AppState>) -> Json<Vec<ChickGroup>> {
+    let conn = acquire_db(&state);
+    let mut stmt = conn
+        .prepare("SELECT id, clutch_id, bloodline_id, brooder_id, initial_count, current_count, hatch_date, status, notes FROM chick_groups ORDER BY status='Active' DESC, id DESC")
+        .unwrap();
+    let rows: Vec<ChickGroup> = stmt
+        .query_map([], |row| {
+            let hatch_str: String = row.get(6)?;
+            let status_str: String = row.get(7)?;
+            Ok(ChickGroup {
+                id: row.get(0)?,
+                clutch_id: row.get(1)?,
+                bloodline_id: row.get(2)?,
+                brooder_id: row.get(3)?,
+                initial_count: row.get(4)?,
+                current_count: row.get(5)?,
+                hatch_date: NaiveDate::parse_from_str(&hatch_str, "%Y-%m-%d").unwrap_or_default(),
+                status: str_to_chick_group_status(&status_str),
+                notes: row.get(8)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+    Json(rows)
+}
+
+async fn get_chick_group(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+    let group = conn.query_row(
+        "SELECT id, clutch_id, bloodline_id, brooder_id, initial_count, current_count, hatch_date, status, notes FROM chick_groups WHERE id = ?1",
+        params![id],
+        |row| {
+            let hatch_str: String = row.get(6)?;
+            let status_str: String = row.get(7)?;
+            Ok(ChickGroup {
+                id: row.get(0)?,
+                clutch_id: row.get(1)?,
+                bloodline_id: row.get(2)?,
+                brooder_id: row.get(3)?,
+                initial_count: row.get(4)?,
+                current_count: row.get(5)?,
+                hatch_date: NaiveDate::parse_from_str(&hatch_str, "%Y-%m-%d").unwrap_or_default(),
+                status: str_to_chick_group_status(&status_str),
+                notes: row.get(8)?,
+            })
+        },
+    );
+    match group {
+        Ok(g) => (StatusCode::OK, Json(Some(g))).into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, Json(None::<ChickGroup>)).into_response(),
+    }
+}
+
+async fn log_mortality(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<MortalityRequest>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+
+    let current: u32 = match conn.query_row(
+        "SELECT current_count FROM chick_groups WHERE id = ?1 AND status = 'Active'",
+        params![id],
+        |row| row.get(0),
+    ) {
+        Ok(c) => c,
+        Err(_) => return (StatusCode::NOT_FOUND, "chick group not found or not active").into_response(),
+    };
+
+    if body.count > current {
+        return (StatusCode::BAD_REQUEST, "mortality count exceeds current count").into_response();
+    }
+
+    let new_count = current - body.count;
+    let today = chrono::Local::now().date_naive();
+
+    conn.execute(
+        "INSERT INTO chick_mortality_log (group_id, count, reason, date) VALUES (?1, ?2, ?3, ?4)",
+        params![id, body.count, body.reason, today.to_string()],
+    )
+    .unwrap();
+
+    conn.execute(
+        "UPDATE chick_groups SET current_count = ?1 WHERE id = ?2",
+        params![new_count, id],
+    )
+    .unwrap();
+
+    if new_count == 0 {
+        conn.execute(
+            "UPDATE chick_groups SET status = 'Lost' WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+    }
+
+    let log_id = conn.last_insert_rowid();
+    Json(ChickMortalityLog {
+        id: log_id,
+        group_id: id,
+        count: body.count,
+        reason: body.reason,
+        date: today,
+    })
+    .into_response()
+}
+
+async fn graduate_chick_group(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<GraduateRequest>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+
+    let group = conn.query_row(
+        "SELECT id, clutch_id, bloodline_id, brooder_id, initial_count, current_count, hatch_date, status, notes FROM chick_groups WHERE id = ?1",
+        params![id],
+        |row| {
+            let hatch_str: String = row.get(6)?;
+            let status_str: String = row.get(7)?;
+            Ok(ChickGroup {
+                id: row.get(0)?,
+                clutch_id: row.get(1)?,
+                bloodline_id: row.get(2)?,
+                brooder_id: row.get(3)?,
+                initial_count: row.get(4)?,
+                current_count: row.get(5)?,
+                hatch_date: NaiveDate::parse_from_str(&hatch_str, "%Y-%m-%d").unwrap_or_default(),
+                status: str_to_chick_group_status(&status_str),
+                notes: row.get(8)?,
+            })
+        },
+    );
+
+    let group = match group {
+        Ok(g) => g,
+        Err(_) => return (StatusCode::NOT_FOUND, "chick group not found").into_response(),
+    };
+
+    if group.status != ChickGroupStatus::Active {
+        return (StatusCode::BAD_REQUEST, "group is not active").into_response();
+    }
+
+    let mut birds_created = Vec::new();
+    for gb in &body.birds {
+        conn.execute(
+            "INSERT INTO birds (band_color, sex, bloodline_id, hatch_date, generation, status, notes, nfc_tag_id)
+             VALUES (?1, ?2, ?3, ?4, 1, 'Active', ?5, ?6)",
+            params![
+                gb.band_color,
+                sex_to_str(&gb.sex),
+                group.bloodline_id,
+                group.hatch_date.to_string(),
+                gb.notes,
+                gb.nfc_tag_id,
+            ],
+        )
+        .unwrap();
+        let bird_id = conn.last_insert_rowid();
+        birds_created.push(Bird {
+            id: bird_id,
+            band_color: gb.band_color.clone(),
+            sex: gb.sex.clone(),
+            bloodline_id: group.bloodline_id,
+            hatch_date: group.hatch_date,
+            mother_id: None,
+            father_id: None,
+            generation: 1,
+            status: BirdStatus::Active,
+            notes: gb.notes.clone(),
+            nfc_tag_id: gb.nfc_tag_id.clone(),
+        });
+    }
+
+    conn.execute(
+        "UPDATE chick_groups SET status = 'Graduated' WHERE id = ?1",
+        params![id],
+    )
+    .unwrap();
+
+    Json(birds_created).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Database backup
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct BackupInfo {
+    filename: String,
+    size_bytes: u64,
+    created: String,
+}
+
+async fn create_backup() -> impl IntoResponse {
+    let backup_dir = std::path::Path::new("backups");
+    if !backup_dir.exists() {
+        std::fs::create_dir_all(backup_dir).ok();
+    }
+
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let filename = format!("quailsync_{}.db", timestamp);
+    let dest = backup_dir.join(&filename);
+
+    match std::fs::copy("quailsync.db", &dest) {
+        Ok(_) => {
+            let meta = std::fs::metadata(&dest).ok();
+            let size = meta.map(|m| m.len()).unwrap_or(0);
+            (
+                StatusCode::CREATED,
+                Json(BackupInfo {
+                    filename,
+                    size_bytes: size,
+                    created: chrono::Local::now().to_rfc3339(),
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Backup failed: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+async fn list_backups() -> Json<Vec<BackupInfo>> {
+    let backup_dir = std::path::Path::new("backups");
+    let mut backups = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(backup_dir) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                let fname = entry.file_name().to_string_lossy().to_string();
+                if fname.ends_with(".db") {
+                    let created = meta
+                        .modified()
+                        .ok()
+                        .map(|t| {
+                            let dt: chrono::DateTime<chrono::Local> = t.into();
+                            dt.to_rfc3339()
+                        })
+                        .unwrap_or_default();
+                    backups.push(BackupInfo {
+                        filename: fname,
+                        size_bytes: meta.len(),
+                        created,
+                    });
+                }
+            }
+        }
+    }
+
+    backups.sort_by(|a, b| b.created.cmp(&a.created));
+    Json(backups)
+}
+
+#[derive(Deserialize)]
+struct RestoreRequest {
+    filename: String,
+}
+
+async fn restore_backup(Json(body): Json<RestoreRequest>) -> impl IntoResponse {
+    let backup_dir = std::path::Path::new("backups");
+    let source = backup_dir.join(&body.filename);
+
+    if !source.exists() {
+        return (StatusCode::NOT_FOUND, "Backup file not found").into_response();
+    }
+
+    // Create a pre-restore backup
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let pre_restore = backup_dir.join(format!("quailsync_pre_restore_{}.db", timestamp));
+    std::fs::copy("quailsync.db", &pre_restore).ok();
+
+    match std::fs::copy(&source, "quailsync.db") {
+        Ok(_) => (StatusCode::OK, "Database restored. Restart server to apply.").into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Restore failed: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+/// Creates an auto-backup if none exists or the latest is older than 24 hours.
+pub fn auto_backup_if_needed() {
+    let backup_dir = std::path::Path::new("backups");
+    if !backup_dir.exists() {
+        std::fs::create_dir_all(backup_dir).ok();
+    }
+
+    let db_path = std::path::Path::new("quailsync.db");
+    if !db_path.exists() {
+        return;
+    }
+
+    let should_backup = match std::fs::read_dir(backup_dir) {
+        Ok(entries) => {
+            let latest = entries
+                .flatten()
+                .filter(|e| {
+                    e.file_name()
+                        .to_string_lossy()
+                        .ends_with(".db")
+                })
+                .filter_map(|e| e.metadata().ok()?.modified().ok())
+                .max();
+
+            match latest {
+                Some(t) => {
+                    let age = std::time::SystemTime::now()
+                        .duration_since(t)
+                        .unwrap_or_default();
+                    age.as_secs() > 86400
+                }
+                None => true,
+            }
+        }
+        Err(_) => true,
+    };
+
+    if should_backup {
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let dest = backup_dir.join(format!("quailsync_auto_{}.db", timestamp));
+        match std::fs::copy("quailsync.db", &dest) {
+            Ok(_) => println!(
+                "[backup] Auto-backup created: {}",
+                dest.display()
+            ),
+            Err(e) => eprintln!("[backup] Auto-backup failed: {e}"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard: embedded static files
 // ---------------------------------------------------------------------------
 
@@ -2201,6 +2730,14 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/cameras/{id}/detections/summary", get(camera_detection_summary))
         .route("/api/frames", get(list_frames).post(create_frame))
         .route("/api/frames/{id}/detections", axum::routing::post(create_frame_detections))
+        .route("/api/nfc/{tag_id}", get(get_bird_by_nfc))
+        .route("/api/chick-groups", get(list_chick_groups).post(create_chick_group))
+        .route("/api/chick-groups/{id}", get(get_chick_group))
+        .route("/api/chick-groups/{id}/mortality", axum::routing::put(log_mortality))
+        .route("/api/chick-groups/{id}/graduate", axum::routing::put(graduate_chick_group))
+        .route("/api/backup", axum::routing::post(create_backup))
+        .route("/api/backups", get(list_backups))
+        .route("/api/restore", axum::routing::post(restore_backup))
         .fallback(static_handler)
         .with_state(state)
 }
