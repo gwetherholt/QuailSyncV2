@@ -130,7 +130,8 @@ pub fn init_db(conn: &Connection) {
             father_id       INTEGER REFERENCES birds(id),
             generation      INTEGER NOT NULL DEFAULT 1,
             status          TEXT    NOT NULL DEFAULT 'Active',
-            notes           TEXT
+            notes           TEXT,
+            nfc_tag_id      TEXT    UNIQUE
         );
 
         CREATE TABLE IF NOT EXISTS breeding_pairs (
@@ -152,7 +153,12 @@ pub fn init_db(conn: &Connection) {
             set_date            TEXT    NOT NULL,
             expected_hatch_date TEXT    NOT NULL,
             status              TEXT    NOT NULL DEFAULT 'Incubating',
-            notes               TEXT
+            notes               TEXT,
+            eggs_stillborn      INTEGER,
+            eggs_quit           INTEGER,
+            eggs_infertile      INTEGER,
+            eggs_damaged        INTEGER,
+            hatch_notes         TEXT
         );
 
         CREATE TABLE IF NOT EXISTS weight_records (

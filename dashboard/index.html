@@ -359,6 +359,20 @@
     font-size:.85rem;cursor:pointer;
   }
 
+  /* ---------- NFC Page ---------- */
+  @keyframes nfcPulse{0%,100%{opacity:1}50%{opacity:.4}}
+  .nfc-pulse{animation:nfcPulse 1.5s ease-in-out infinite;font-weight:600;color:var(--sage-dark)}
+  .nfc-section-divider{border:none;border-top:1px solid #e0d8d0;margin:1.5rem 0}
+  .nfc-form label{display:block;font-size:.8rem;font-weight:600;margin-bottom:.2rem;margin-top:.6rem;color:#666}
+  .nfc-form input,.nfc-form select,.nfc-form textarea{
+    width:100%;padding:.45rem .6rem;border:1px solid #d0c8c0;
+    border-radius:8px;font-size:.85rem;font-family:inherit;background:#fff;
+  }
+  .nfc-form textarea{resize:vertical;min-height:60px}
+  .nfc-form .tag-row{display:flex;gap:.5rem;align-items:center}
+  .nfc-form .tag-row input{flex:1}
+  .nfc-form .tag-row button{white-space:nowrap;padding:.45rem .7rem;font-size:.8rem;border-radius:8px;border:1px solid #d0c8c0;background:var(--beige);cursor:pointer}
+
   /* ---------- Bird Detail ---------- */
   .bird-profile{
     display:flex;gap:1.5rem;align-items:flex-start;
@@ -2398,74 +2412,478 @@
      NFC SCAN PAGE
      --------------------------------------------------------- */
   Page.NfcScan = {
+    _ac: null, /* active AbortController — one operation at a time */
+
+    _cancelActive: function(){
+      if(this._ac){ this._ac.abort(); this._ac = null; }
+    },
+
+    _generateTagId: function(){
+      var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      var code = '';
+      for(var i=0;i<6;i++) code += chars.charAt(Math.floor(Math.random()*chars.length));
+      return 'QUAIL-' + code;
+    },
+    _loadBloodlines: async function(){
+      var bl = await API.get('/api/bloodlines');
+      if(bl) _bloodlines = bl;
+      var sel = document.getElementById('nfc-bloodline');
+      if(!sel) return;
+      var opts = '';
+      _bloodlines.forEach(function(b){ opts+='<option value="'+b.id+'">'+b.name+'</option>'; });
+      sel.innerHTML = opts;
+    },
+    _getRecordBytes: function(record){
+      if(!record.data) return new Uint8Array(0);
+      /* DataView: respect byteOffset + byteLength to avoid reading outside the view */
+      if(record.data.buffer) return new Uint8Array(record.data.buffer, record.data.byteOffset, record.data.byteLength);
+      return new Uint8Array(record.data);
+    },
+    _decodeNfcText: function(record){
+      if(record.recordType === 'text'){
+        /* Web NFC API already strips the NDEF language prefix —
+           record.data contains only the text payload */
+        var bytes = Page.NfcScan._getRecordBytes(record);
+        if(bytes.length === 0) return '';
+        return new TextDecoder(record.encoding || 'utf-8').decode(bytes);
+      }
+      if(record.recordType === 'url'){
+        var bytes = Page.NfcScan._getRecordBytes(record);
+        var url = new TextDecoder().decode(bytes);
+        var match = url.match(/QUAIL-[A-Z0-9]{6}/);
+        return match ? match[0] : url;
+      }
+      return '';
+    },
+    _decodeAllRecords: function(records){
+      for(var i=0;i<records.length;i++){
+        var decoded = Page.NfcScan._decodeNfcText(records[i]);
+        if(decoded) return decoded;
+      }
+      return '';
+    },
+    _bytesToHex: function(bytes, max){
+      var hex = [];
+      for(var i=0;i<Math.min(bytes.length,max||50);i++) hex.push(('0'+bytes[i].toString(16)).slice(-2));
+      return hex.join(' ');
+    },
+    _buildDebugHtml: function(event){
+      var records = event.message.records;
+      var sn = event.serialNumber || '(none)';
+      var h = '<div style="background:#f8f8f0;border:1px solid #d0c8c0;border-radius:8px;margin-top:.8rem;text-align:left;font-size:.78rem;overflow:hidden">';
+      h += '<div onclick="var b=this.nextElementSibling;b.style.display=b.style.display===\'none\'?\'block\':\'none\'" '
+        + 'style="padding:.5rem .8rem;cursor:pointer;background:#eee8df;font-weight:600;user-select:none">'
+        + 'Debug Info &#x25BC;</div>';
+      h += '<div style="padding:.6rem .8rem;display:none;font-family:monospace;line-height:1.6;word-break:break-all">';
+      h += '<b>serialNumber:</b> '+sn+'<br>';
+      h += '<b>records.length:</b> '+records.length+'<br>';
+      var finalTagId = Page.NfcScan._decodeAllRecords(records);
+      for(var i=0;i<records.length;i++){
+        var r = records[i];
+        var bytes = Page.NfcScan._getRecordBytes(r);
+        var decoded = Page.NfcScan._decodeNfcText(r);
+        var rawStr = new TextDecoder().decode(bytes);
+        var quailMatch = /^QUAIL-[A-Z0-9]{6}$/.test(decoded);
+        h += '<hr style="border:none;border-top:1px dashed #ccc;margin:.4rem 0">';
+        h += '<b>Record['+i+']</b><br>';
+        h += '&nbsp; recordType: <code>'+r.recordType+'</code><br>';
+        h += '&nbsp; mediaType: <code>'+(r.mediaType||'(none)')+'</code><br>';
+        h += '&nbsp; encoding: <code>'+(r.encoding||'(none)')+'</code><br>';
+        h += '&nbsp; lang: <code>'+(r.lang||'(none)')+'</code><br>';
+        h += '&nbsp; data.byteLength: <code>'+bytes.length+'</code><br>';
+        h += '&nbsp; raw hex: <code>'+Page.NfcScan._bytesToHex(bytes,50)+'</code><br>';
+        h += '&nbsp; raw string: <code>"'+rawStr.substring(0,80)+'"</code><br>';
+        if(r.recordType==='text'){
+          h += '&nbsp; (Web NFC pre-parsed: lang=<code>"'+(r.lang||'')+ '"</code>, encoding=<code>"'+(r.encoding||'utf-8')+'"</code>)<br>';
+        }
+        h += '&nbsp; _decodeNfcText: <code>"'+decoded+'"</code><br>';
+        h += '&nbsp; matches QUAIL pattern: <code>'+quailMatch+'</code><br>';
+      }
+      h += '<hr style="border:none;border-top:1px dashed #ccc;margin:.4rem 0">';
+      h += '<b>Final tag ID:</b> <code>"'+finalTagId+'"</code>';
+      if(!finalTagId) h += ' (fallback serialNumber: <code>'+sn+'</code>)';
+      h += '<br>';
+      h += '<b>Sent to API:</b> <code>/api/nfc/'+(finalTagId||sn)+'</code>';
+      h += '</div></div>';
+      return h;
+    },
+    _prefillRegisterForm: function(tagId){
+      var el = document.getElementById('nfc-tag-id');
+      if(el) el.value = tagId;
+      var section = document.getElementById('nfc-register-section');
+      if(section) section.scrollIntoView({behavior:'smooth'});
+    },
+
+    /* Render countdown + cancel button into a status element.
+       Returns { ac, cleanup } — caller awaits their NFC op, then calls cleanup(). */
+    _timedStatus: function(statusEl, msg, seconds){
+      this._cancelActive();
+      var ac = new AbortController();
+      this._ac = ac;
+      var remaining = seconds;
+      var timedOut = false;
+      function render(){
+        if(!statusEl) return;
+        statusEl.innerHTML = '<span class="nfc-pulse">'+msg+' ('+remaining+'s)</span> '
+          +'<button class="btn-cancel" style="padding:.2rem .6rem;font-size:.8rem;vertical-align:middle" '
+          +'onclick="Page.NfcScan._cancelActive()">Cancel</button>';
+      }
+      render();
+      var iv = setInterval(function(){
+        remaining--;
+        if(remaining<=0){ clearInterval(iv); timedOut=true; ac.abort(); }
+        else render();
+      },1000);
+      return {
+        ac:ac,
+        timedOut:function(){ return timedOut; },
+        cleanup:function(){ clearInterval(iv); }
+      };
+    },
+
     render: function(app){
       var isHttps = location.protocol === 'https:';
       var hasWebNfc = 'NDEFReader' in window;
+      var nfcAvailable = isHttps && hasWebNfc;
       var html = '<div class="page-top-bar"><h2>NFC Tag Scanner</h2></div>';
-      html += '<div class="panel"><div class="panel-body" style="text-align:center;padding:2rem">';
+
+      /* --- HTTPS warning (shown once at top if needed) --- */
       if(!isHttps){
         var httpsUrl = 'https://' + location.hostname + ':3443' + location.pathname + location.hash;
-        html += '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:1rem;margin-bottom:1.5rem;color:#856404">';
+        html += '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:1rem;margin-bottom:1rem;color:#856404">';
         html += '<strong>HTTPS Required for NFC</strong><br>';
-        html += 'For NFC scanning, access this page at<br><a href="'+httpsUrl+'" style="color:#0d6efd;word-break:break-all">'+httpsUrl+'</a><br>from your Android phone.';
+        html += 'For NFC scanning and writing, access this page at<br><a href="'+httpsUrl+'" style="color:#0d6efd;word-break:break-all">'+httpsUrl+'</a><br>from your Android phone.';
         html += '<br><small style="color:#888">You may need to accept the self-signed certificate warning.</small>';
         html += '</div>';
       }
-      if(isHttps && hasWebNfc){
-        html += '<p>Tap an NFC tag to look up the bird.</p>';
+
+      /* --- Section 1: Scan Tag --- */
+      html += '<div class="panel"><div class="panel-header"><span class="panel-header-left">Scan Tag</span></div>';
+      html += '<div class="panel-body" style="text-align:center;padding:1.5rem">';
+      if(nfcAvailable){
+        html += '<p style="margin-bottom:.8rem">Tap an NFC tag to look up the linked bird.</p>';
         html += '<button class="btn-primary" id="nfc-scan-btn" onclick="Page.NfcScan.startScan()">Start Scanning</button>';
         html += '<div id="nfc-scan-status" style="margin-top:1rem"></div>';
-      } else if(isHttps && !hasWebNfc){
+        html += '<div id="nfc-scan-result" style="margin-top:1rem"></div>';
+        html += '<div id="nfc-debug"></div>';
+      } else if(isHttps){
         html += '<p style="color:#888">Web NFC is not available in this browser.<br>Requires Android Chrome.</p>';
+      } else {
+        html += '<p style="color:#888">Enable HTTPS (see above) to scan NFC tags.</p>';
       }
-      html += '<hr style="margin:1.5rem 0">';
-      html += '<p>Or enter a tag ID manually:</p>';
+      /* Manual lookup inline */
+      html += '<div style="margin-top:1.2rem;padding-top:1rem;border-top:1px solid #e0d8d0">';
+      html += '<p style="font-size:.8rem;color:#888;margin-bottom:.5rem">Or look up a tag ID manually:</p>';
       html += '<div style="display:flex;gap:.5rem;justify-content:center;align-items:center;flex-wrap:wrap">';
-      html += '<input type="text" id="nfc-manual-input" placeholder="NFC Tag ID" style="width:200px">';
-      html += '<button class="btn-primary" onclick="Page.NfcScan.manualLookup()">Look Up</button>';
-      html += '</div>';
-      html += '<div id="nfc-result" style="margin-top:1.5rem"></div>';
+      html += '<input type="text" id="nfc-manual-input" placeholder="e.g. QUAIL-ABC123" style="width:180px;padding:.4rem .6rem;border:1px solid #d0c8c0;border-radius:8px;font-size:.85rem;background:#fff">';
+      html += '<button class="btn-primary" style="padding:.4rem .8rem;font-size:.85rem" onclick="Page.NfcScan.manualLookup()">Look Up</button>';
       html += '</div></div>';
+      html += '</div></div>';
+
+      /* --- Section 2: Register New Bird --- */
+      html += '<hr class="nfc-section-divider">';
+      html += '<div class="panel" id="nfc-register-section"><div class="panel-header"><span class="panel-header-left">Register New Bird</span></div>';
+      html += '<div class="panel-body"><p style="color:#888;font-size:.85rem;margin-bottom:.8rem">Write an NFC tag and create a bird record in one step.</p>';
+      html += '<div class="nfc-form">';
+      html += '<label>Tag ID</label>';
+      html += '<div class="tag-row"><input type="text" id="nfc-tag-id" value="'+this._generateTagId()+'"><button onclick="document.getElementById(\'nfc-tag-id\').value=Page.NfcScan._generateTagId()">Regenerate</button></div>';
+      html += '<label>Sex</label><select id="nfc-sex"><option value="Male">Male</option><option value="Female">Female</option><option value="Unknown">Unknown</option></select>';
+      html += '<label>Band Color</label><input type="text" id="nfc-band" placeholder="e.g. red, blue">';
+      html += '<label>Bloodline</label><select id="nfc-bloodline"><option value="">Loading...</option></select>';
+      var today = new Date().toISOString().split('T')[0];
+      html += '<label>Hatch Date</label><input type="date" id="nfc-hatch" value="'+today+'">';
+      html += '<label>Generation</label><input type="number" id="nfc-gen" value="1" min="1">';
+      html += '<label>Notes</label><textarea id="nfc-notes" placeholder="Optional notes"></textarea>';
+      html += '<div id="nfc-write-status" style="margin-top:.8rem"></div>';
+      html += '<div style="display:flex;gap:.5rem;margin-top:1rem;flex-wrap:wrap">';
+      if(nfcAvailable){
+        html += '<button class="btn-primary" id="nfc-write-btn" onclick="Page.NfcScan.writeAndCreate()" style="flex:1;padding:.6rem">Write Tag &amp; Create Bird</button>';
+        html += '<button class="btn-cancel" onclick="Page.NfcScan.createOnly()" style="flex:1;padding:.6rem">Create Bird Only</button>';
+      } else {
+        html += '<button class="btn-primary" disabled style="flex:1;padding:.6rem;opacity:.5;cursor:not-allowed" title="Requires HTTPS + Android Chrome">Write Tag &amp; Create Bird</button>';
+        html += '<button class="btn-primary" onclick="Page.NfcScan.createOnly()" style="flex:1;padding:.6rem">Create Bird Only</button>';
+        if(!isHttps){
+          html += '<p style="color:#888;font-size:.8rem;margin-top:.5rem;width:100%">NFC write requires HTTPS. You can still create the bird and write the tag manually later.</p>';
+        }
+      }
+      html += '</div>';
+      html += '</div></div></div>';
+
+      /* --- Bottom note --- */
+      html += '<p style="color:#aaa;font-size:.8rem;text-align:center;margin-top:1rem">Need to register a whole group? Use the Nursery page to graduate chick groups with NFC tags on banding day.</p>';
+
       app.innerHTML = html;
     },
-    start: function(){},
-    stop: function(){},
+    start: function(){
+      this._loadBloodlines();
+    },
+    stop: function(){
+      this._cancelActive();
+    },
+
+    /* ========== Section 1: Scan ========== */
     startScan: async function(){
+      var statusEl = document.getElementById('nfc-scan-status');
+      var resultEl = document.getElementById('nfc-scan-result');
+      var debugEl = document.getElementById('nfc-debug');
+      if(resultEl) resultEl.innerHTML = '';
+      if(debugEl) debugEl.innerHTML = '';
+      var t = this._timedStatus(statusEl, 'Scanning\u2026 hold tag to device', 30);
+      var ac = t.ac;
       try {
         var ndef = new NDEFReader();
-        await ndef.scan();
-        document.getElementById('nfc-scan-status').textContent = 'Scanning... hold tag to device';
-        ndef.addEventListener('reading', function(event){
-          var records = event.message.records;
-          var tagId = '';
-          for(var i=0;i<records.length;i++){
-            if(records[i].recordType === 'text'){
-              var dec = new TextDecoder();
-              tagId = dec.decode(records[i].data);
-              break;
-            }
-          }
-          if(!tagId) tagId = event.serialNumber || '';
-          if(tagId) Page.NfcScan._lookup(tagId);
+        await ndef.scan({signal:ac.signal});
+        /* Wait for exactly one reading event or abort */
+        var event = await new Promise(function(resolve,reject){
+          if(ac.signal.aborted){ reject(new DOMException('','AbortError')); return; }
+          ndef.addEventListener('reading',function(e){resolve(e);},{once:true});
+          ndef.addEventListener('readingerror',function(){resolve(null);},{once:true});
+          ac.signal.addEventListener('abort',function(){reject(new DOMException('','AbortError'));});
         });
-      } catch(e) {
-        document.getElementById('nfc-scan-status').innerHTML = '<span style="color:var(--dusty-rose)">Scan error: '+e.message+'</span>';
+        t.cleanup();
+        if(!event){
+          if(statusEl) statusEl.innerHTML='<span style="color:var(--dusty-rose)">Could not read tag. Try repositioning.</span>';
+          return;
+        }
+        /* Show debug info */
+        if(debugEl) debugEl.innerHTML = Page.NfcScan._buildDebugHtml(event);
+        var tagId = Page.NfcScan._decodeAllRecords(event.message.records);
+        if(!tagId) tagId = event.serialNumber||'';
+        if(!tagId){
+          if(statusEl) statusEl.innerHTML='<span style="color:var(--dusty-rose)">Tag had no readable data.</span>';
+          return;
+        }
+        if(statusEl) statusEl.innerHTML='<span style="color:var(--safe)">Read tag: <strong>'+tagId+'</strong></span>';
+        if(/^QUAIL-[A-Z0-9]{6}$/.test(tagId)){
+          Page.NfcScan._scanLookup(tagId);
+        } else {
+          if(resultEl) resultEl.innerHTML='<div style="color:#888;font-size:.85rem">Tag contains non-QuailSync data: "'+tagId+'"</div>';
+        }
+      } catch(e){
+        t.cleanup();
+        if(e.name==='AbortError'){
+          var msg = t.timedOut() ? 'No tag detected \u2014 try again.' : 'Scan cancelled.';
+          if(statusEl) statusEl.innerHTML='<span style="color:var(--dusty-rose)">'+msg+'</span>';
+        } else {
+          if(statusEl) statusEl.innerHTML='<span style="color:var(--dusty-rose)">Scan error: '+e.message+'</span>';
+        }
       }
     },
-    manualLookup: function(){
-      var tag = document.getElementById('nfc-manual-input').value.trim();
-      if(!tag){ toast('Enter a tag ID','error'); return; }
-      this._lookup(tag);
-    },
-    _lookup: async function(tagId){
-      var resultEl = document.getElementById('nfc-result');
+    _scanLookup: async function(tagId){
+      var resultEl = document.getElementById('nfc-scan-result');
       if(resultEl) resultEl.innerHTML = loadingHTML();
       var bird = await API.get('/api/nfc/'+encodeURIComponent(tagId));
       if(bird){
         toast('Found bird #'+bird.id);
         Router.navigate('#/flock/bird/'+bird.id);
       } else {
-        if(resultEl) resultEl.innerHTML = '<div style="color:var(--dusty-rose)">No bird found with NFC tag "'+tagId+'"</div>';
+        if(resultEl){
+          resultEl.innerHTML = '<div style="background:var(--beige);border:1px solid #d0c8c0;border-radius:8px;padding:1rem;text-align:left">'
+            +'<p style="color:var(--dusty-rose);font-weight:600;margin-bottom:.5rem">Tag '+tagId+' is not linked to any bird in the system.</p>'
+            +'<button class="btn-primary" style="font-size:.85rem;padding:.4rem .8rem" '
+            +'onclick="Page.NfcScan._prefillRegisterForm(\''+tagId+'\')">Register New Bird with This Tag</button>'
+            +'</div>';
+        }
+      }
+    },
+    manualLookup: function(){
+      var tag = (document.getElementById('nfc-manual-input').value||'').trim();
+      if(!tag){ toast('Enter a tag ID','error'); return; }
+      this._scanLookup(tag);
+    },
+
+    /* ========== Section 2: Register ========== */
+    _getFormValues: function(){
+      return {
+        tagId: (document.getElementById('nfc-tag-id').value||'').trim(),
+        sex: document.getElementById('nfc-sex').value,
+        band_color: (document.getElementById('nfc-band').value||'').trim()||null,
+        bloodline_id: parseInt(document.getElementById('nfc-bloodline').value),
+        hatch_date: document.getElementById('nfc-hatch').value,
+        generation: parseInt(document.getElementById('nfc-gen').value)||1,
+        notes: (document.getElementById('nfc-notes').value||'').trim()||null
+      };
+    },
+    _resetForm: function(){
+      document.getElementById('nfc-tag-id').value = this._generateTagId();
+      document.getElementById('nfc-sex').value = 'Male';
+      document.getElementById('nfc-band').value = '';
+      document.getElementById('nfc-hatch').value = new Date().toISOString().split('T')[0];
+      document.getElementById('nfc-gen').value = '1';
+      document.getElementById('nfc-notes').value = '';
+      var s = document.getElementById('nfc-write-status');
+      if(s) s.innerHTML = '';
+    },
+    _buildBirdBody: function(v){
+      return {
+        nfc_tag_id:v.tagId, sex:v.sex, band_color:v.band_color,
+        bloodline_id:v.bloodline_id, hatch_date:v.hatch_date,
+        mother_id:null, father_id:null,
+        generation:v.generation, status:'Active', notes:v.notes
+      };
+    },
+    _postBird: async function(body, statusEl){
+      try {
+        var r = await fetch('/api/birds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        if(!r.ok){
+          var errText = await r.text();
+          console.error('POST /api/birds failed:',r.status,errText);
+          if(statusEl) statusEl.innerHTML='<span style="color:var(--dusty-rose)">Server error ('+r.status+'): '+errText.substring(0,200)+'</span>';
+          return null;
+        }
+        return await r.json();
+      } catch(e){
+        console.error('POST /api/birds exception:',e);
+        if(statusEl) statusEl.innerHTML='<span style="color:var(--dusty-rose)">Network error: '+e.message+'</span>';
+        return null;
+      }
+    },
+
+    /* Pre-write: scan tag, read once, check DB. Returns {ok:true/false} */
+    _checkTagBeforeWrite: async function(statusEl){
+      var t = this._timedStatus(statusEl,'Hold tag to phone to check contents',30);
+      var ac = t.ac;
+      try {
+        var ndef = new NDEFReader();
+        await ndef.scan({signal:ac.signal});
+        var existing = await new Promise(function(resolve,reject){
+          if(ac.signal.aborted){ reject(new DOMException('','AbortError')); return; }
+          ndef.addEventListener('reading',function(event){
+            resolve(Page.NfcScan._decodeAllRecords(event.message.records));
+          },{once:true});
+          ndef.addEventListener('readingerror',function(){resolve('');},{once:true});
+          ac.signal.addEventListener('abort',function(){reject(new DOMException('','AbortError'));});
+        });
+        t.cleanup();
+      } catch(e){
+        t.cleanup();
+        if(e.name==='AbortError'){
+          var msg = t.timedOut() ? 'No tag detected \u2014 try again.' : 'Cancelled.';
+          if(statusEl) statusEl.innerHTML='<span style="color:var(--dusty-rose)">'+msg+'</span>';
+        } else {
+          if(statusEl) statusEl.innerHTML='<span style="color:var(--dusty-rose)">Scan error: '+e.message+'</span>';
+        }
+        return {ok:false};
+      }
+      /* Blank or non-QUAIL: safe to proceed */
+      if(!existing || !/^QUAIL-[A-Z0-9]{6}$/.test(existing)){
+        return {ok:true};
+      }
+      /* QUAIL tag — look up in database */
+      if(statusEl) statusEl.innerHTML='<span style="color:var(--warning)">Tag has ID: '+existing+'. Checking database\u2026</span>';
+      var bird = await API.get('/api/nfc/'+encodeURIComponent(existing));
+      if(bird){
+        var blName = bloodlineName(bird.bloodline_id);
+        var desc = bird.band_color ? bird.band_color+' ' : '';
+        desc += bird.sex;
+        if(blName) desc += ', '+blName;
+        if(statusEl) statusEl.innerHTML='<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:.8rem;color:#856404;text-align:left">'
+          +'<strong>Tag is assigned to Bird #'+bird.id+'</strong> ('+desc+')<br>'
+          +'<span style="font-size:.85rem">You must first remove the NFC tag from that bird before reassigning this tag. '
+          +'Go to <a href="#/flock/bird/'+bird.id+'" style="color:#0d6efd;text-decoration:underline">Bird #'+bird.id+'</a> and clear its NFC tag, then try again.</span>'
+          +'</div>';
+        return {ok:false};
+      }
+      /* Orphaned tag — safe */
+      if(statusEl) statusEl.innerHTML='<span style="color:#888">Tag has orphaned ID '+existing+' (no bird in database). Safe to overwrite.</span>';
+      return {ok:true};
+    },
+
+    /* Write Tag & Create Bird — full flow.
+       Critical: ndef.write() must be called directly from the button click
+       handler (user gesture) with no intervening scan() calls. */
+    writeAndCreate: async function(){
+      var v = this._getFormValues();
+      if(!v.bloodline_id||!v.hatch_date){ toast('Bloodline and hatch date are required','error'); return; }
+      if(!v.tagId){ toast('Tag ID is required','error'); return; }
+      var statusEl = document.getElementById('nfc-write-status');
+      var btn = document.getElementById('nfc-write-btn');
+      if(btn) btn.disabled = true;
+
+      /* Step 1: write the tag — immediately from user gesture */
+      console.log('[NFC] writeAndCreate: tagId=',v.tagId);
+      var t = this._timedStatus(statusEl,'Hold tag to the back of your phone to write',30);
+      try {
+        var ndef = new NDEFReader();
+        console.log('[NFC] calling ndef.write() with explicit text record...');
+        await ndef.write(
+          { records: [{ recordType: "text", data: v.tagId }] },
+          { signal: t.ac.signal }
+        );
+        console.log('[NFC] ndef.write() resolved — tag written');
+        t.cleanup();
+      } catch(e){
+        console.error('[NFC] ndef.write() failed:',e.name,e.message);
+        t.cleanup();
+        if(btn) btn.disabled = false;
+        if(e.name==='AbortError'){
+          var msg = t.timedOut() ? 'No tag detected \u2014 try again.' : 'Write cancelled.';
+          if(statusEl) statusEl.innerHTML='<span style="color:var(--dusty-rose)">'+msg+'</span>';
+        } else {
+          if(statusEl) statusEl.innerHTML='<span style="color:var(--dusty-rose)">Tag write failed: '+e.message+'</span>';
+        }
+        return;
+      }
+
+      /* Step 2: verify by reading back (best-effort, won't block on failure) */
+      if(statusEl) statusEl.innerHTML='<span class="nfc-pulse">Tag written! Verifying\u2026</span>';
+      try {
+        console.log('[NFC] starting verification read...');
+        var vNdef = new NDEFReader();
+        await vNdef.scan();
+        var readBack = await new Promise(function(resolve){
+          var vTimer = setTimeout(function(){ resolve(''); },5000);
+          vNdef.addEventListener('reading',function(ev){
+            clearTimeout(vTimer);
+            resolve(Page.NfcScan._decodeAllRecords(ev.message.records));
+          },{once:true});
+          vNdef.addEventListener('readingerror',function(){
+            clearTimeout(vTimer);
+            resolve('');
+          },{once:true});
+        });
+        console.log('[NFC] verification read result:',readBack);
+        if(readBack===v.tagId){
+          if(statusEl) statusEl.innerHTML='<span style="color:var(--safe)">Verified! Read back: <strong>'+readBack+'</strong></span>';
+        } else if(readBack){
+          if(statusEl) statusEl.innerHTML='<span style="color:var(--warning)">Written but read back "'+readBack+'" (expected "'+v.tagId+'")</span>';
+        } else {
+          if(statusEl) statusEl.innerHTML='<span style="color:var(--safe)">Tag written! (verification timed out \u2014 tag may have been removed)</span>';
+        }
+      } catch(e){
+        console.log('[NFC] verification scan failed:',e.message,'(non-fatal)');
+        if(statusEl) statusEl.innerHTML='<span style="color:var(--safe)">Tag written!</span>';
+      }
+
+      /* Step 3: create bird record */
+      if(statusEl) statusEl.innerHTML+='<br><span style="color:var(--sage-dark)">Creating bird record\u2026</span>';
+      console.log('[NFC] POSTing bird with nfc_tag_id:',v.tagId);
+      var body = this._buildBirdBody(v);
+      var result = await this._postBird(body,statusEl);
+      if(btn) btn.disabled = false;
+      if(result){
+        console.log('[NFC] bird created, id:',result.id);
+        toast('Bird #'+result.id+' created and tag written!');
+        this._resetForm();
+      } else {
+        console.error('[NFC] bird creation failed');
+        toast('Tag written but bird creation failed','error');
+      }
+    },
+
+    createOnly: async function(){
+      var v = this._getFormValues();
+      if(!v.bloodline_id||!v.hatch_date){ toast('Bloodline and hatch date are required','error'); return; }
+      if(!v.tagId){ toast('Tag ID is required','error'); return; }
+      var statusEl = document.getElementById('nfc-write-status');
+      if(statusEl) statusEl.innerHTML='<span style="color:var(--sage-dark)">Creating bird\u2026</span>';
+      var body = this._buildBirdBody(v);
+      var result = await this._postBird(body,statusEl);
+      if(result){
+        toast('Bird #'+result.id+' created! Write tag ID "'+v.tagId+'" to the physical tag manually.');
+        this._resetForm();
+      } else {
+        toast('Failed to create bird','error');
       }
     }
   };
