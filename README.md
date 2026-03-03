@@ -1,5 +1,5 @@
 # QuailSync
-<img width="1174" height="947" alt="image" src="https://github.com/user-attachments/assets/ef0b7dc5-2609-44f5-b839-a32de03f7eb0" />
+<img width="1180" height="702" alt="image" src="https://github.com/user-attachments/assets/b77890d8-6fc3-4644-8a27-d5fb7a8f5972" />
 
 A cozy, all-in-one quail farm management system built in Rust. Monitors brooder conditions in real time, tracks your entire flock with colored leg bands, manages clutch incubation from set to hatch, and even helps you pick the safest breeding pairs so your covey stays healthy and happy.
 
@@ -43,19 +43,28 @@ QuailSync is a Rust workspace with four crates and an embedded web dashboard:
 - **Zero-config startup** -- Sensible defaults for all thresholds (95-100 F temp, 40-60% humidity)
 
 ### Flock Management
+<img width="1188" height="344" alt="image" src="https://github.com/user-attachments/assets/1823edd5-db76-4c31-bd57-68580df9d8e1" />
+
 - **Individual bird tracking** -- Register birds with colored leg bands, sex, bloodline, hatch date, generation, and parentage
+  
+  <img width="1171" height="850" alt="image" src="https://github.com/user-attachments/assets/a915f569-f8d0-4640-bb4c-70f7c8d9ff3d" />
+
 - **Bloodline registry** -- Track breeding lines with name, source, and notes
 - **Flock summary** -- At-a-glance stats: total/active birds, male/female counts, birds per bloodline
 - **Status lifecycle** -- Mark birds as Active, Culled, Deceased, or Sold
-<img width="1187" height="483" alt="image" src="https://github.com/user-attachments/assets/8449f6f2-4d4c-4e52-858c-72690489ca3d" />
 
 ### Clutch & Incubation
+<img width="1185" height="494" alt="image" src="https://github.com/user-attachments/assets/83e2ce07-9965-4cff-9a63-c651c3f245f8" />
+
 - **Clutch tracking** -- Log clutches with egg counts, set dates, and automatic 17-day hatch date calculation
 - **Incubation progress** -- Visual progress bars color-coded by stage (green early, orange mid, dusty rose late)
 - **Candling records** -- Update fertile egg counts during incubation
 - **Hatch recording** -- Log final hatch counts and mark clutches as Hatched or Failed
 
 ### Breeding Intelligence
+<img width="1164" height="413" alt="image" src="https://github.com/user-attachments/assets/e2492d71-66ef-4961-b1c8-12bce13c5098" />
+<img width="1096" height="354" alt="image" src="https://github.com/user-attachments/assets/3b0a99ec-b792-4a8f-857f-f047a496d2b8" />
+
 - **Inbreeding-aware pair suggestions** -- Automatically scores every possible male/female pairing by relatedness
 - **Coefficient calculation** -- Considers shared parents and shared bloodlines to compute inbreeding risk
 - **Safe/risky classification** -- Pairs below 0.0625 coefficient are flagged safe; above is risky
@@ -72,7 +81,6 @@ QuailSync is a Rust workspace with four crates and an embedded web dashboard:
 - **Full management suite** -- `status`, `brood`, `system`, `alerts`, `bloodline`, `bird`, `flock`, `clutch`, `breeding` subcommands
 - **Colored terminal output** -- Status indicators, reading tables, and alert history with ANSI colors
 - **Remote server support** -- Point the CLI at any QuailSync server with `--server`
-<img width="1498" height="607" alt="image" src="https://github.com/user-attachments/assets/12add16a-6eb8-44da-836f-baa38ac51bf3" />
 
 
 ## Quick Start
