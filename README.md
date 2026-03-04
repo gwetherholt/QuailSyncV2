@@ -2,7 +2,7 @@
 
 An IoT-powered quail lifecycle management platform — real-time environmental monitoring, live camera feeds, NFC bird tagging, and computer vision detection, built in Rust.
 
-<!-- TODO: hero image / dashboard screenshot -->
+<img width="1180" height="702" alt="557634701-b77890d8-6fc3-4644-8a27-d5fb7a8f5972" src="https://github.com/user-attachments/assets/b1afa4fc-961c-413b-b3ba-00821f493f5e" />
 
 ---
 
@@ -42,6 +42,7 @@ The Pi runs two Python processes — one reading the DHT22 sensor and shipping t
 Three DHT22 sensors (one per brooder box) feed temperature and humidity readings to the server every 5 seconds. The Pi agent converts the raw Celsius readings to Fahrenheit, wraps them in the same JSON envelope the Rust mock agent uses, and ships them over WebSocket. On the server side, every reading gets persisted to SQLite and run through the alert engine — if temp drifts outside 95–100°F or humidity leaves the 40–60% window, an alert fires immediately. The dashboard picks up new readings via a dedicated `/ws/live` broadcast channel and updates the brooder cards in-place without polling. Each brooder card shows the current temp, humidity, a sparkline chart of the last 20 readings, and any active alert.
 
 ### Live Camera
+<img width="606" height="531" alt="livecamera" src="https://github.com/user-attachments/assets/58c60717-4dea-4419-b523-cf14c7f0b3f2" />
 
 An ArduCam Module 3 (IMX708 sensor) connected to the Pi streams MJPEG at 640x480, roughly 10 FPS. The camera process serves the stream at `/stream` and a single-frame capture at `/snapshot`. On the dashboard, each brooder card gets a small live thumbnail that links to the full Cameras page, where you get the full-resolution feed, a snapshot button, and fullscreen mode. The camera URL is stored per-brooder in the database, so if you have multiple Pis you just set each brooder's URL from the settings gear on the Cameras page.
 
@@ -50,7 +51,13 @@ An ArduCam Module 3 (IMX708 sensor) connected to the Pi streams MJPEG at 640x480
 Each brooder box has a printed QR code in the format `brooder-{id}-{bloodline}` (like `brooder-1-texas` or `brooder-3-fernbank`). The camera process scans every frame for QR codes using `pyzbar`, throttled to one scan every 2 seconds so it doesn't tank the frame rate. A stability filter requires 3 consecutive matching detections before it commits to a new brooder ID — this prevents phantom switches from partial reads. When the camera confirms it's looking at a different brooder, it sends a `CameraAssign` message to the server over WebSocket.
 
 ### NFC Bird Tagging
-
+### NFC Bird Tagging
+<table>
+  <tr>
+    <td><img width="306" alt="NFCpullup" src="https://github.com/user-attachments/assets/91da687c-a133-404b-9785-101893f89e02" /></td>
+    <td><img width="306" alt="nfc" src="https://github.com/user-attachments/assets/5a79a0b4-2a87-411a-a610-541f092bba58" /></td>
+  </tr>
+</table>
 Every bird in the flock gets an NTAG215 NFC tag on its leg band, written with a `QUAIL-XXXXXX` identifier (6 random alphanumeric characters). The dashboard's NFC page uses the Web NFC API (Chrome on Android over HTTPS) to read and write tags. Tapping a tagged bird opens its full profile — weight history, lineage, breeding group, notes, everything. Writing a new tag has overwrite protection: if the tag already has a QUAIL ID assigned to another bird, the write is blocked and you get a link to that bird's profile so you can reassign it intentionally. There's also a manual lookup field for when you just want to type in the tag ID.
 
 ### Brooder Management
@@ -58,14 +65,18 @@ Every bird in the flock gets an NTAG215 NFC tag on its leg band, written with a 
 The system supports multiple brooders, each with a name, life stage (Chick, Adolescent, Adult), optional bloodline assignment, and camera URL. The dashboard shows all brooders in a grid with live readings, alert status, and camera thumbnails. Each brooder's QR code ties it to a physical box so the camera always knows which brooder it's pointed at.
 
 ### Flock & Breeding
+<img width="1187" height="483" alt="557065126-8449f6f2-4d4c-4e52-858c-72690489ca3d" src="https://github.com/user-attachments/assets/6460b755-756c-4e41-aa97-1d175ea0f4e4" />
+<img width="1164" height="413" alt="557634980-e2492d71-66ef-4961-b1c8-12bce13c5098" src="https://github.com/user-attachments/assets/dfed3688-052f-4f46-bbd6-6f3275c33e3e" />
 
 Individual bird tracking with colored leg bands, sex, bloodline, hatch date, generation, parentage, and NFC tag. The breeding engine scores every possible male-female pairing by inbreeding coefficient (considering shared parents and shared bloodlines) and flags anything above 0.0625 as risky. Breeding groups enforce a 3-to-5 females-per-male ratio with warnings if you go outside the range. The processing page is a kanban board (Recommended → Scheduled → Completed) for managing culls. Chick groups track nursery batches from hatch through graduation into the main flock.
 
 ### Clutch & Incubation
+<img width="1185" height="494" alt="557634912-83e2ce07-9965-4cff-9a63-c651c3f245f8" src="https://github.com/user-attachments/assets/3f63f6fb-fe96-4c97-8ec3-784a46e33a5d" />
 
 Clutch tracking with automatic 17-day hatch date calculation (Coturnix), visual progress bars color-coded by stage, candling records for fertile egg counts, and detailed hatch outcome logging — eggs hatched, stillborn, quit, infertile, damaged. The clutch cards show ring-style progress indicators and a horizontal timeline of all active incubations.
 
 ### Computer Vision (In Progress)
+<img width="605" height="304" alt="Dashwith livecam" src="https://github.com/user-attachments/assets/50f6e2c7-dc73-4e80-aff7-238a388875f3" />
 
 The detection pipeline infrastructure is built — frame capture, per-frame detection result storage, camera-to-brooder association, and detection summary aggregation are all wired up in the API. The next step is training a YOLOv8 model on Roboflow to do quail counting, with sex identification and behavior detection further down the line.
 
