@@ -1,4 +1,4 @@
-# QuailSync V2
+# 🐣 QuailSync V2
 
 An IoT-powered quail lifecycle management platform — real-time environmental monitoring, live camera feeds, NFC bird tagging, and computer vision detection, built in Rust.
 
@@ -326,4 +326,4 @@ cargo test
 
 Built with Rust, Python, solder, and way too many quail eggs.
 
-[Georgia](https://github.com/GeorgiaK)
+[Georgia](https://github.com/gwetherholt)
