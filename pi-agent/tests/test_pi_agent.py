@@ -35,6 +35,8 @@ except ImportError:
 from pi_agent import (
     BROODER_INTERVAL,
     DEFAULT_SERVER,
+    SENSOR_CONFIG,
+    SENSOR_READ_DELAY,
     SYSTEM_INTERVAL,
     _fmt_bytes,
     build_brooder_payload,
@@ -44,6 +46,14 @@ from pi_agent import (
     read_dht22,
     run_agent,
 )
+
+
+def _make_sensors_list(sensor=None, count=1):
+    """Build a sensors list matching run_agent's expected format."""
+    return [
+        {"brooder_id": i + 1, "gpio_pin": 4 + i, "label": f"test-brooder-{i+1}", "sensor": sensor}
+        for i in range(count)
+    ]
 
 
 # ===========================================================================
@@ -363,7 +373,7 @@ class TestConnectWithBackoff(unittest.TestCase):
             with patch("pi_agent.asyncio.sleep", side_effect=capture_sleep):
                 with self.assertRaises(KeyboardInterrupt):
                     asyncio.get_event_loop().run_until_complete(
-                        connect_with_backoff("ws://localhost:0/ws", 1, None)
+                        connect_with_backoff("ws://localhost:0/ws", _make_sensors_list())
                     )
 
         # Delays should double: 1, 2, 4, 8, 16...
@@ -390,7 +400,7 @@ class TestConnectWithBackoff(unittest.TestCase):
             with patch("pi_agent.asyncio.sleep", side_effect=capture_sleep):
                 with self.assertRaises(KeyboardInterrupt):
                     asyncio.get_event_loop().run_until_complete(
-                        connect_with_backoff("ws://localhost:0/ws", 1, None)
+                        connect_with_backoff("ws://localhost:0/ws", _make_sensors_list())
                     )
 
         # No delay should exceed 60
@@ -429,7 +439,7 @@ class TestConnectWithBackoff(unittest.TestCase):
                 with patch("pi_agent.time.monotonic", side_effect=fake_monotonic):
                     with self.assertRaises(KeyboardInterrupt):
                         asyncio.get_event_loop().run_until_complete(
-                            connect_with_backoff("ws://localhost:0/ws", 1, None)
+                            connect_with_backoff("ws://localhost:0/ws", _make_sensors_list())
                         )
 
         # Calls 1,2 fail fast → delays double: 1, 2
@@ -468,7 +478,7 @@ class TestRunAgent(unittest.TestCase):
 
             with patch("pi_agent.websockets.connect", return_value=ws):
                 try:
-                    await run_agent("ws://localhost:0/ws", 1, None)
+                    await run_agent("ws://localhost:0/ws", _make_sensors_list())
                 except Exception:
                     pass
 
@@ -501,7 +511,7 @@ class TestRunAgent(unittest.TestCase):
 
             with patch("pi_agent.websockets.connect", return_value=ws):
                 try:
-                    await run_agent("ws://localhost:0/ws", 1, sensor)
+                    await run_agent("ws://localhost:0/ws", _make_sensors_list(sensor=sensor))
                 except Exception:
                     pass
 
@@ -590,6 +600,28 @@ class TestConstants(unittest.TestCase):
 
     def test_system_interval_is_30_seconds(self):
         self.assertEqual(SYSTEM_INTERVAL, 30)
+
+    def test_sensor_config_has_3_entries(self):
+        self.assertEqual(len(SENSOR_CONFIG), 3)
+
+    def test_sensor_config_entries_have_required_keys(self):
+        for cfg in SENSOR_CONFIG:
+            self.assertIn("brooder_id", cfg)
+            self.assertIn("gpio_pin", cfg)
+            self.assertIn("label", cfg)
+            self.assertIsInstance(cfg["brooder_id"], int)
+            self.assertIsInstance(cfg["gpio_pin"], int)
+
+    def test_sensor_config_unique_pins(self):
+        pins = [cfg["gpio_pin"] for cfg in SENSOR_CONFIG]
+        self.assertEqual(len(pins), len(set(pins)), "GPIO pins must be unique")
+
+    def test_sensor_config_unique_brooder_ids(self):
+        ids = [cfg["brooder_id"] for cfg in SENSOR_CONFIG]
+        self.assertEqual(len(ids), len(set(ids)), "Brooder IDs must be unique")
+
+    def test_sensor_read_delay(self):
+        self.assertEqual(SENSOR_READ_DELAY, 0.5)
 
 
 # ===========================================================================
@@ -680,6 +712,152 @@ class TestSensorFailurePatterns(unittest.TestCase):
         result = read_dht22(sensor, retries=1)
         self.assertIsNotNone(result)
         self.assertAlmostEqual(result[1], 105.3, places=1)
+
+
+# ===========================================================================
+# 11. MULTI-SENSOR SUPPORT
+# ===========================================================================
+
+
+class TestMultiSensor(unittest.TestCase):
+    """Test multi-sensor iteration and consecutive failure tracking."""
+
+    def _make_mock_sensor(self, temp_c, humidity):
+        """Create a mock sensor with unique spec to avoid PropertyMock class-level conflicts."""
+        sensor = MagicMock(spec=["temperature", "humidity"])
+        sensor.temperature = temp_c
+        sensor.humidity = humidity
+        return sensor
+
+    def test_multiple_sensors_all_send(self):
+        """All 3 sensors should produce separate Brooder payloads."""
+        messages_sent = []
+
+        sensors = [
+            {"brooder_id": 1, "gpio_pin": 4, "label": "b1",
+             "sensor": self._make_mock_sensor(25.0, 50.0)},
+            {"brooder_id": 2, "gpio_pin": 17, "label": "b2",
+             "sensor": self._make_mock_sensor(30.0, 60.0)},
+            {"brooder_id": 3, "gpio_pin": 27, "label": "b3",
+             "sensor": self._make_mock_sensor(35.0, 70.0)},
+        ]
+
+        async def run():
+            ws = AsyncMock()
+
+            async def fake_send(msg):
+                messages_sent.append(msg)
+                if len(messages_sent) >= 4:
+                    raise Exception("stop")
+
+            ws.send = fake_send
+            ws.__aenter__ = AsyncMock(return_value=ws)
+            ws.__aexit__ = AsyncMock(return_value=False)
+
+            async def fast_sleep(d):
+                pass
+
+            with patch("pi_agent.websockets.connect", return_value=ws):
+                with patch("pi_agent.asyncio.sleep", side_effect=fast_sleep):
+                    try:
+                        await run_agent("ws://localhost:0/ws", sensors)
+                    except Exception:
+                        pass
+
+        asyncio.get_event_loop().run_until_complete(run())
+
+        brooder_ids = []
+        for msg in messages_sent:
+            data = json.loads(msg)
+            if "Brooder" in data:
+                brooder_ids.append(data["Brooder"]["brooder_id"])
+
+        self.assertIn(1, brooder_ids)
+        self.assertIn(2, brooder_ids)
+        self.assertIn(3, brooder_ids)
+
+    def test_one_sensor_failure_doesnt_block_others(self):
+        """If sensor 2 fails, sensors 1 and 3 should still send."""
+        messages_sent = []
+
+        good1 = self._make_mock_sensor(25.0, 50.0)
+        good3 = self._make_mock_sensor(25.0, 50.0)
+
+        bad_sensor = MagicMock()
+        type(bad_sensor).temperature = PropertyMock(side_effect=RuntimeError("broken"))
+
+        sensors = [
+            {"brooder_id": 1, "gpio_pin": 4, "label": "good-1", "sensor": good1},
+            {"brooder_id": 2, "gpio_pin": 17, "label": "bad-2", "sensor": bad_sensor},
+            {"brooder_id": 3, "gpio_pin": 27, "label": "good-3", "sensor": good3},
+        ]
+
+        async def run():
+            ws = AsyncMock()
+
+            async def fake_send(msg):
+                messages_sent.append(msg)
+                if len(messages_sent) >= 3:
+                    raise Exception("stop")
+
+            ws.send = fake_send
+            ws.__aenter__ = AsyncMock(return_value=ws)
+            ws.__aexit__ = AsyncMock(return_value=False)
+
+            async def fast_sleep(d):
+                pass
+
+            with patch("pi_agent.websockets.connect", return_value=ws):
+                with patch("pi_agent.asyncio.sleep", side_effect=fast_sleep):
+                    with patch("pi_agent.time.sleep"):
+                        try:
+                            await run_agent("ws://localhost:0/ws", sensors)
+                        except Exception:
+                            pass
+
+        asyncio.get_event_loop().run_until_complete(run())
+
+        brooder_ids = []
+        for msg in messages_sent:
+            data = json.loads(msg)
+            if "Brooder" in data:
+                brooder_ids.append(data["Brooder"]["brooder_id"])
+
+        self.assertIn(1, brooder_ids)
+        self.assertIn(3, brooder_ids)
+        self.assertNotIn(2, brooder_ids)
+
+    def test_none_sensor_skipped(self):
+        """Entries with sensor=None should be silently skipped."""
+        messages_sent = []
+
+        sensors = [
+            {"brooder_id": 1, "gpio_pin": 4, "label": "no-sensor", "sensor": None},
+        ]
+
+        async def run():
+            ws = AsyncMock()
+
+            async def fake_send(msg):
+                messages_sent.append(msg)
+                if len(messages_sent) >= 1:
+                    raise Exception("stop")
+
+            ws.send = fake_send
+            ws.__aenter__ = AsyncMock(return_value=ws)
+            ws.__aexit__ = AsyncMock(return_value=False)
+
+            with patch("pi_agent.websockets.connect", return_value=ws):
+                try:
+                    await run_agent("ws://localhost:0/ws", sensors)
+                except Exception:
+                    pass
+
+        asyncio.get_event_loop().run_until_complete(run())
+
+        for msg in messages_sent:
+            data = json.loads(msg)
+            self.assertNotIn("Brooder", data)
 
 
 if __name__ == "__main__":

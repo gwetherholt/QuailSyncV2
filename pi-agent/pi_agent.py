@@ -39,6 +39,16 @@ except ImportError:
 DEFAULT_SERVER = "ws://192.168.0.228:3000/ws"
 BROODER_INTERVAL = 5      # seconds
 SYSTEM_INTERVAL = 30       # seconds
+SENSOR_READ_DELAY = 0.5    # seconds between reading different sensors
+
+# ── Sensor-to-brooder mapping ────────────────────────────────────────────────
+# Each entry maps a GPIO pin to a brooder ID (integer, matches DB primary key).
+# The "label" is for log output only.
+SENSOR_CONFIG = [
+    {"brooder_id": 1, "gpio_pin": 4,  "label": "brooder-1-texas"},
+    {"brooder_id": 2, "gpio_pin": 17, "label": "brooder-2-pharaoh"},
+    {"brooder_id": 3, "gpio_pin": 27, "label": "brooder-3-fernbank"},
+]
 
 
 # ── Sensor reading ───────────────────────────────────────────────────────────
@@ -119,7 +129,7 @@ def _proc_meminfo():
         for line in f:
             parts = line.split()
             key = parts[0].rstrip(":")
-            info[key] = int(parts[1]) * 1024  # kB → bytes
+            info[key] = int(parts[1]) * 1024  # kB -> bytes
             if key == "MemAvailable":
                 break
     total = info.get("MemTotal", 0)
@@ -169,28 +179,57 @@ def _fmt_bytes(b):
 
 
 # ── Main async loop ──────────────────────────────────────────────────────────
-async def run_agent(server_url, brooder_id, sensor):
+async def run_agent(server_url, sensors):
     """Connect to WebSocket and send telemetry on intervals.
 
-    Returns True if the connection was established (for backoff reset).
+    sensors is a list of dicts: {"brooder_id": int, "label": str, "sensor": obj|None}
     """
     async with websockets.connect(server_url) as ws:
         print(f"{GREEN}[connected]{RESET} WebSocket connected")
 
         last_brooder = 0.0
         last_system = 0.0
+        # Track consecutive failures per sensor (keyed by brooder_id)
+        consecutive_failures = {s["brooder_id"]: 0 for s in sensors}
 
         while True:
             now = time.monotonic()
 
-            # Brooder reading every 5s
-            if sensor and (now - last_brooder) >= BROODER_INTERVAL:
-                reading = read_dht22(sensor)
-                if reading:
-                    temp_f, humidity = reading
-                    payload = build_brooder_payload(temp_f, humidity, brooder_id)
-                    await ws.send(payload)
-                    print(f"{GREEN}[sensor]{RESET}  {temp_f}°F  {humidity}% humidity → sent")
+            # Brooder readings every 5s — iterate all sensors
+            if (now - last_brooder) >= BROODER_INTERVAL:
+                for i, entry in enumerate(sensors):
+                    sensor = entry["sensor"]
+                    bid = entry["brooder_id"]
+                    label = entry["label"]
+
+                    if sensor is None:
+                        continue
+
+                    reading = read_dht22(sensor)
+                    if reading:
+                        temp_f, humidity = reading
+                        payload = build_brooder_payload(temp_f, humidity, bid)
+                        await ws.send(payload)
+                        print(f"{GREEN}[sensor]{RESET}  {label}: {temp_f}°F  {humidity}% humidity -> sent")
+                        consecutive_failures[bid] = 0
+                    else:
+                        consecutive_failures[bid] += 1
+                        if consecutive_failures[bid] >= 3:
+                            print(
+                                f"{RED}[error]{RESET}   "
+                                f"Sensor on GPIO{entry['gpio_pin']} for {label} "
+                                f"has failed {consecutive_failures[bid]} consecutive reads"
+                            )
+                        else:
+                            print(
+                                f"{YELLOW}[warn]{RESET}    "
+                                f"Sensor read failed for {label} (GPIO{entry['gpio_pin']}), skipping"
+                            )
+
+                    # Small delay between sensor reads (not after the last one)
+                    if i < len(sensors) - 1:
+                        await asyncio.sleep(SENSOR_READ_DELAY)
+
                 last_brooder = now
 
             # System metrics every 30s
@@ -211,13 +250,13 @@ async def run_agent(server_url, brooder_id, sensor):
             await asyncio.sleep(0.1)
 
 
-async def connect_with_backoff(server_url, brooder_id, sensor):
+async def connect_with_backoff(server_url, sensors):
     """Reconnection wrapper with exponential backoff."""
     delay = 1
     while True:
         started = time.monotonic()
         try:
-            await run_agent(server_url, brooder_id, sensor)
+            await run_agent(server_url, sensors)
         except (OSError, websockets.ConnectionClosed, websockets.InvalidURI,
                 websockets.InvalidHandshake) as e:
             print(f"{RED}[error]{RESET}   {e}")
@@ -229,46 +268,63 @@ async def connect_with_backoff(server_url, brooder_id, sensor):
         delay = min(delay * 2, 60)
 
 
+# ── GPIO pin name helper ─────────────────────────────────────────────────────
+def _get_board_pin(gpio_num):
+    """Map GPIO number to board pin object (e.g. 4 -> board.D4)."""
+    return getattr(board, f"D{gpio_num}")
+
+
 # ── Entry point ──────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(description="QuailSync Raspberry Pi Agent")
-    parser.add_argument("--brooder-id", type=int, default=1, help="Brooder ID (default: 1)")
     parser.add_argument("--server", type=str, default=None, help="WebSocket server URL")
     args = parser.parse_args()
 
     server_url = args.server or os.environ.get("QUAILSYNC_SERVER", DEFAULT_SERVER)
-    brooder_id = args.brooder_id
 
-    # Init sensor
-    sensor = None
-    if HAS_DHT:
-        try:
-            sensor = adafruit_dht.DHT22(board.D4)
-        except Exception as e:
-            print(f"{YELLOW}[warn]{RESET}    Could not init DHT22: {e}")
-    else:
+    # Init sensors from SENSOR_CONFIG
+    sensors = []
+    for cfg in SENSOR_CONFIG:
+        entry = {
+            "brooder_id": cfg["brooder_id"],
+            "gpio_pin": cfg["gpio_pin"],
+            "label": cfg["label"],
+            "sensor": None,
+        }
+        if HAS_DHT:
+            try:
+                pin = _get_board_pin(cfg["gpio_pin"])
+                entry["sensor"] = adafruit_dht.DHT22(pin)
+                print(f"{GREEN}[init]{RESET}     {cfg['label']}: DHT22 on GPIO{cfg['gpio_pin']}")
+            except Exception as e:
+                print(f"{YELLOW}[warn]{RESET}    Could not init DHT22 on GPIO{cfg['gpio_pin']}: {e}")
+        sensors.append(entry)
+
+    if not HAS_DHT:
         print(f"{YELLOW}[warn]{RESET}    adafruit_dht/board not available — sensor reads disabled")
 
     if not HAS_PSUTIL:
         print(f"{YELLOW}[warn]{RESET}    psutil not available — using /proc fallback for system metrics")
 
     # Startup banner
-    print(f"{GREEN}[QuailSync Agent]{RESET} Brooder #{brooder_id} → {server_url}")
+    labels = ", ".join(cfg["label"] for cfg in SENSOR_CONFIG)
+    print(f"{GREEN}[QuailSync Agent]{RESET} {len(SENSOR_CONFIG)} sensors [{labels}] -> {server_url}")
 
     # Clean shutdown
     loop = asyncio.new_event_loop()
 
     def shutdown(sig, frame):
         print(f"\n{YELLOW}[shutdown]{RESET} Caught signal, exiting...")
-        if sensor:
-            sensor.exit()
+        for entry in sensors:
+            if entry["sensor"]:
+                entry["sensor"].exit()
         loop.stop()
         raise SystemExit(0)
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    loop.run_until_complete(connect_with_backoff(server_url, brooder_id, sensor))
+    loop.run_until_complete(connect_with_backoff(server_url, sensors))
 
 
 if __name__ == "__main__":

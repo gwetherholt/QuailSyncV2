@@ -274,6 +274,24 @@ pub fn init_db(conn: &Connection) {
 fn store_payload(conn: &Connection, payload: &TelemetryPayload) {
     match payload {
         TelemetryPayload::Brooder(r) => {
+            // Auto-create brooder row if it doesn't exist yet
+            if let Some(bid) = r.brooder_id {
+                let exists: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM brooders WHERE id = ?1",
+                        params![bid],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(0);
+                if exists == 0 {
+                    conn.execute(
+                        "INSERT INTO brooders (id, name, life_stage) VALUES (?1, ?2, 'Chick')",
+                        params![bid, format!("Brooder {bid}")],
+                    )
+                    .ok();
+                    println!("[auto] Created brooder #{bid}");
+                }
+            }
             conn.execute(
                 "INSERT INTO brooder_readings (temperature, humidity, timestamp, brooder_id)
                  VALUES (?1, ?2, ?3, ?4)",
