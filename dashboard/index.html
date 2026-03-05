@@ -1036,12 +1036,16 @@
         el.innerHTML='<div data-brooder-id="legacy" style="border-left:4px solid var(--safe)"><div class="reading-row"><div><span class="reading-label">Temperature</span><br><span class="reading-value" data-field="temp">'+temp+'&deg;F</span></div><div style="text-align:right"><span class="reading-label">Humidity</span><br><span class="reading-value" data-field="hum">'+hum+'%</span></div></div><div class="sparkline" data-field="spark">'+self._buildSparkBars(temps,30,32)+'</div><div data-field="alert"></div></div>';
         return;
       }
-      // Multi-brooder
+      // Multi-brooder — fetch all status/readings in parallel
+      var fetches = brooders.map(function(b){
+        return Promise.all([API.get('/api/brooders/'+b.id+'/status'), API.get('/api/brooders/'+b.id+'/readings?minutes=60')]);
+      });
+      var results = await Promise.all(fetches);
       var html='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:.75rem">';
       for(var i=0;i<brooders.length;i++){
         var b=brooders[i];
-        var status = await API.get('/api/brooders/'+b.id+'/status');
-        var readings = await API.get('/api/brooders/'+b.id+'/readings?minutes=60');
+        var status = results[i][0];
+        var readings = results[i][1];
         var stageCls = b.life_stage==='Chick'?'background:#e8c8c8;color:#8b4513' : b.life_stage==='Adolescent'?'background:#d2dcc3;color:#2e5c1e' : 'background:#c8d8e8;color:#2e4a5c';
         var alertBorder = (status && status.has_alert) ? 'border-left:4px solid var(--danger)' : 'border-left:4px solid var(--safe)';
         var tempStr = status && status.latest_temp!=null ? status.latest_temp.toFixed(1)+'&deg;F' : '--';
