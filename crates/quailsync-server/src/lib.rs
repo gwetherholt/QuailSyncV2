@@ -413,7 +413,6 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                     if let TelemetryPayload::Brooder(ref reading) = payload {
                         check_brooder_alerts(&conn, reading, &state.alert_config);
                     }
-                    // Broadcast to live dashboard clients
                     let _ = state.live_tx.send(text.to_string());
                 }
                 Err(e) => eprintln!("[ws] bad payload: {e}"),
@@ -1345,7 +1344,11 @@ async fn breeding_suggest(State(state): State<AppState>) -> Json<Vec<InbreedingC
         }
     }
 
-    results.sort_by(|a, b| a.coefficient.partial_cmp(&b.coefficient).unwrap());
+    results.sort_by(|a, b| {
+        a.coefficient
+            .partial_cmp(&b.coefficient)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     Json(results)
 }
@@ -2126,7 +2129,6 @@ async fn create_brooder(
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
 
-    // Validate bloodline exists if provided
     if let Some(bl_id) = body.bloodline_id {
         let exists = conn
             .query_row(
@@ -2186,7 +2188,6 @@ async fn update_brooder(
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
 
-    // Check brooder exists
     let exists = conn
         .query_row(
             "SELECT COUNT(*) FROM brooders WHERE id = ?1",
@@ -2305,7 +2306,6 @@ async fn brooder_status(
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
 
-    // Fetch the brooder
     let brooder = conn.query_row(
         "SELECT id, name, bloodline_id, life_stage, qr_code, notes, camera_url FROM brooders WHERE id = ?1",
         params![id],
@@ -2328,7 +2328,6 @@ async fn brooder_status(
         Err(_) => return (StatusCode::NOT_FOUND, "brooder not found").into_response(),
     };
 
-    // Latest reading for this brooder
     let latest = conn.query_row(
         "SELECT temperature, humidity FROM brooder_readings WHERE brooder_id = ?1 ORDER BY id DESC LIMIT 1",
         params![id],
@@ -2380,15 +2379,6 @@ async fn update_camera_brooder(
 // ---------------------------------------------------------------------------
 // Chick groups (nursery)
 // ---------------------------------------------------------------------------
-
-#[allow(dead_code)]
-fn chick_group_status_to_str(s: &ChickGroupStatus) -> &'static str {
-    match s {
-        ChickGroupStatus::Active => "Active",
-        ChickGroupStatus::Graduated => "Graduated",
-        ChickGroupStatus::Lost => "Lost",
-    }
-}
 
 fn str_to_chick_group_status(s: &str) -> ChickGroupStatus {
     match s {
@@ -2702,6 +2692,14 @@ struct RestoreRequest {
 
 async fn restore_backup(Json(body): Json<RestoreRequest>) -> impl IntoResponse {
     let backup_dir = std::path::Path::new("backups");
+
+    if body.filename.contains('/')
+        || body.filename.contains('\\')
+        || body.filename.contains("..")
+    {
+        return (StatusCode::BAD_REQUEST, "Invalid filename").into_response();
+    }
+
     let source = backup_dir.join(&body.filename);
 
     if !source.exists() {
