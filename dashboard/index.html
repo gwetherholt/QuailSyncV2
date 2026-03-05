@@ -670,6 +670,12 @@
   'use strict';
 
   /* =========================================================
+     HTML escaping — prevent XSS from user-supplied data
+     ========================================================= */
+  var _escMap = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
+  function escapeHtml(s){ return String(s).replace(/[&<>"']/g, function(c){ return _escMap[c]; }); }
+
+  /* =========================================================
      API helper
      ========================================================= */
   var API = {
@@ -750,13 +756,14 @@
   function bandDot(color, size){
     if(!color) return '';
     var s = size || 14;
-    return '<span class="band-dot" style="width:'+s+'px;height:'+s+'px;background:'+color+'" title="'+color+'"></span>';
+    var safe = escapeHtml(color);
+    return '<span class="band-dot" style="width:'+s+'px;height:'+s+'px;background:'+safe+'" title="'+safe+'"></span>';
   }
 
   function bloodlineName(id){
     var name = '';
     _bloodlines.forEach(function(bl){ if(bl.id===id) name=bl.name; });
-    return name;
+    return escapeHtml(name);
   }
 
   function findBird(id){
@@ -771,12 +778,7 @@
       if(reason.LowWeight) return 'Low weight ('+reason.LowWeight.weight_grams.toFixed(0)+'g)';
       if(reason.HighInbreeding) return 'High inbreeding ('+reason.HighInbreeding.coefficient.toFixed(3)+')';
     }
-    return String(reason);
-  }
-
-  function formatDate(dateStr){
-    if(!dateStr) return '&mdash;';
-    return dateStr;
+    return escapeHtml(String(reason));
   }
 
   function daysBetween(d1, d2){
@@ -1035,7 +1037,6 @@
         return;
       }
       // Multi-brooder
-      var DEFAULT_CAM = 'http://192.168.0.114:8080';
       var html='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:.75rem">';
       for(var i=0;i<brooders.length;i++){
         var b=brooders[i];
@@ -1046,7 +1047,7 @@
         var tempStr = status && status.latest_temp!=null ? status.latest_temp.toFixed(1)+'&deg;F' : '--';
         var humStr = status && status.latest_humidity!=null ? status.latest_humidity.toFixed(1)+'%' : '--';
         var alertHtml = (status && status.has_alert) ? status.alert_message : '';
-        var camBase = b.camera_url || DEFAULT_CAM;
+        var camBase = b.camera_url || Page.Cameras._DEFAULT_CAM;
         // Seed sparkline cache from REST data
         var sparkTemps = [];
         if(readings && readings.length>0){
@@ -1055,13 +1056,13 @@
         }
         self._sparkCache[String(b.id)] = sparkTemps.slice();
         html+='<div data-brooder-id="'+b.id+'" style="background:var(--cream);border-radius:var(--radius);padding:.75rem;'+alertBorder+'">';
-        html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem"><strong style="font-size:.88rem">'+b.name+'</strong><span style="font-size:.62rem;padding:2px 6px;border-radius:8px;'+stageCls+'">'+b.life_stage+'</span></div>';
+        html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem"><strong style="font-size:.88rem">'+escapeHtml(b.name)+'</strong><span style="font-size:.62rem;padding:2px 6px;border-radius:8px;'+stageCls+'">'+escapeHtml(b.life_stage)+'</span></div>';
         html+='<div style="display:flex;gap:.5rem;align-items:flex-start;margin-bottom:.2rem">';
         html+='<div style="flex:1"><div class="reading-row"><div><span class="reading-label">Temp</span><br><span class="reading-value" data-field="temp">'+tempStr+'</span></div><div style="text-align:right"><span class="reading-label">Hum</span><br><span class="reading-value" data-field="hum">'+humStr+'</span></div></div></div>';
         html+='<a onclick="Router.navigate(\'#/cameras\')" title="View camera"><img class="camera-thumb" src="'+camBase+'/stream" width="100" height="75" onerror="this.style.display=\'none\'"></a>';
         html+='</div>';
         html+='<div class="sparkline" data-field="spark">'+self._buildSparkBars(sparkTemps,20,28)+'</div>';
-        html+='<div data-field="alert" style="font-size:.7rem;color:var(--danger);margin-top:.3rem">'+alertHtml+'</div>';
+        html+='<div data-field="alert" style="font-size:.7rem;color:var(--danger);margin-top:.3rem">'+escapeHtml(alertHtml)+'</div>';
         html+='</div>';
       }
       html+='</div>';
@@ -1079,7 +1080,7 @@
       show.forEach(function(a){
         var cls = a.severity==='Critical'?'critical':'warning';
         var time = a.timestamp ? (a.timestamp.split(' ').pop()||'') : '';
-        html+='<div class="alert-item '+cls+'"><span class="alert-time">'+time+'</span>'+a.message+'</div>';
+        html+='<div class="alert-item '+cls+'"><span class="alert-time">'+escapeHtml(time)+'</span>'+escapeHtml(a.message)+'</div>';
       });
       el.innerHTML=html;
       if(viewAll && data.length>5) viewAll.style.display='';
@@ -1273,9 +1274,9 @@
         } else { parents = '&mdash;'; }
 
         var statusCls = b.status.toLowerCase();
-        var statusHtml = '<span class="status-badge '+statusCls+'">'+b.status+'</span>';
+        var statusHtml = '<span class="status-badge '+statusCls+'">'+escapeHtml(b.status)+'</span>';
 
-        html+='<tr onclick="Router.navigate(\'#/flock/bird/'+b.id+'\')" style="cursor:pointer"><td>'+birdLink(b.id)+'</td><td>'+bandHtml+'</td><td>'+b.sex+'</td><td>'+blName+'</td><td>'+b.hatch_date+'</td><td>'+b.generation+'</td><td>'+statusHtml+'</td><td>'+parents+'</td></tr>';
+        html+='<tr onclick="Router.navigate(\'#/flock/bird/'+b.id+'\')" style="cursor:pointer"><td>'+birdLink(b.id)+'</td><td>'+bandHtml+'</td><td>'+escapeHtml(b.sex)+'</td><td>'+blName+'</td><td>'+escapeHtml(b.hatch_date)+'</td><td>'+b.generation+'</td><td>'+statusHtml+'</td><td>'+parents+'</td></tr>';
       });
       tbody.innerHTML = html;
     },
@@ -1381,9 +1382,9 @@
 
       // Profile header
       var html = '<div class="bird-profile">';
-      html += '<div class="band-dot-lg" style="background:'+bandColor+'"></div>';
+      html += '<div class="band-dot-lg" style="background:'+escapeHtml(bandColor)+'"></div>';
       html += '<div class="bird-profile-info">';
-      html += '<h2>Bird #'+b.id+' <span class="status-badge '+statusCls+'">'+b.status+'</span></h2>';
+      html += '<h2>Bird #'+b.id+' <span class="status-badge '+statusCls+'">'+escapeHtml(b.status)+'</span></h2>';
       html += '<dl class="bird-meta-grid">';
       html += '<dt>Sex</dt><dd>'+b.sex+'</dd>';
       html += '<dt>Bloodline</dt><dd>'+blName+'</dd>';
@@ -1392,7 +1393,7 @@
       html += '<dt>Hatch Date</dt><dd>'+b.hatch_date+'</dd>';
       html += '<dt>Mother</dt><dd>'+(b.mother_id ? birdLink(b.mother_id) : 'Unknown')+'</dd>';
       html += '<dt>Father</dt><dd>'+(b.father_id ? birdLink(b.father_id) : 'Unknown')+'</dd>';
-      if(b.nfc_tag_id) html += '<dt>NFC Tag</dt><dd>'+b.nfc_tag_id+'</dd>';
+      if(b.nfc_tag_id) html += '<dt>NFC Tag</dt><dd>'+escapeHtml(b.nfc_tag_id)+'</dd>';
       html += '</dl>';
       html += '</div></div>';
 
@@ -1417,7 +1418,7 @@
 
       // Notes
       html += '<div class="panel" style="margin-bottom:1.25rem"><div class="panel-header"><span class="panel-header-left">&#x1F4DD; Notes</span></div><div class="panel-body">';
-      html += '<div class="bird-notes">'+(b.notes || 'No notes')+'</div>';
+      html += '<div class="bird-notes">'+escapeHtml(b.notes || 'No notes')+'</div>';
       html += '</div></div>';
 
       // Actions
@@ -1659,7 +1660,7 @@
         var bg = pct >= 70 ? 'var(--dusty-rose)' : pct >= 40 ? 'var(--warning)' : 'var(--sage)';
         var top = 22 + i * (barHeight + barGap);
         var blName = bloodlineName(c.bloodline_id);
-        html += '<div class="timeline-gantt-bar" style="left:'+leftPct.toFixed(1)+'%;width:'+Math.max(widthPct,3).toFixed(1)+'%;top:'+top+'px;height:'+barHeight+'px;background:'+bg+'" title="Clutch #'+c.id+(blName?' - '+blName:'')+'">';
+        html += '<div class="timeline-gantt-bar" style="left:'+leftPct.toFixed(1)+'%;width:'+Math.max(widthPct,3).toFixed(1)+'%;top:'+top+'px;height:'+barHeight+'px;background:'+bg+'" title="Clutch #'+c.id+(blName?' - '+escapeHtml(blName):'')+'">';
         html += '#'+c.id;
         html += '</div>';
       });
@@ -1724,7 +1725,7 @@
 
         // Body
         html += '<div class="clutch-card-body">';
-        html += '<h4>Clutch #'+c.id+(blName ? ' &mdash; '+blName : '')+'</h4>';
+        html += '<h4>Clutch #'+c.id+(blName ? ' &mdash; '+escapeHtml(blName) : '')+'</h4>';
 
         // Egg counts
         html += '<div class="clutch-egg-counts">';
@@ -2000,7 +2001,7 @@
         var ratioText = '1:'+femaleCount;
 
         html += '<div class="breed-group-card">';
-        html += '<h4>'+g.name+' <span class="ratio-badge '+ratioCls+'">'+ratioText+'</span></h4>';
+        html += '<h4>'+escapeHtml(g.name)+' <span class="ratio-badge '+ratioCls+'">'+ratioText+'</span></h4>';
 
         // Male
         html += '<div style="font-size:.78rem;color:#888;margin-bottom:.3rem">MALE</div>';
@@ -2143,8 +2144,8 @@
         html += birdLink(r.bird_id);
         if(bird) html += ' <span style="font-size:.72rem;color:#888">'+bloodlineName(bird.bloodline_id)+'</span>';
         html += '</div>';
-        html += '<div class="kanban-card-reason">'+reason+'</div>';
-        html += '<div class="kanban-card-actions"><button class="btn-primary" style="font-size:.72rem;padding:.2rem .5rem" onclick="Page.Processing.scheduleFromRec('+r.bird_id+',\''+reason.replace(/'/g,"\\'")+'\')">Schedule</button></div>';
+        html += '<div class="kanban-card-reason">'+escapeHtml(reason)+'</div>';
+        html += '<div class="kanban-card-actions"><button class="btn-primary" style="font-size:.72rem;padding:.2rem .5rem" onclick="Page.Processing.scheduleFromRec('+r.bird_id+',\''+escapeHtml(reason).replace(/'/g,"\\'")+'\')">Schedule</button></div>';
         html += '</div>';
       });
       html += '</div>';
@@ -2163,7 +2164,7 @@
         html += birdLink(p.bird_id);
         if(bird) html += ' <span style="font-size:.72rem;color:#888">'+bloodlineName(bird.bloodline_id)+'</span>';
         html += '</div>';
-        html += '<div class="kanban-card-reason">'+(p.reason||'&mdash;')+'</div>';
+        html += '<div class="kanban-card-reason">'+escapeHtml(p.reason||'—')+'</div>';
         html += '<div class="kanban-card-date">Scheduled: '+(p.scheduled_date||'&mdash;')+'</div>';
         html += '<div class="kanban-card-actions"><button class="btn-primary" style="font-size:.72rem;padding:.2rem .5rem" onclick="Page.Processing.markCompleted('+p.id+','+p.bird_id+')">Complete</button></div>';
         html += '</div>';
@@ -2183,7 +2184,7 @@
         if(bird) html += bandDot(bird.band_color, 12)+' ';
         html += birdLink(p.bird_id);
         html += '</div>';
-        html += '<div class="kanban-card-reason">'+(p.reason||'&mdash;')+'</div>';
+        html += '<div class="kanban-card-reason">'+escapeHtml(p.reason||'—')+'</div>';
         if(p.final_weight_grams) html += '<div class="kanban-card-date">Final: '+p.final_weight_grams.toFixed(0)+'g</div>';
         html += '<div class="kanban-card-date">'+(p.processed_date||'&mdash;')+'</div>';
         html += '</div>';
@@ -2271,10 +2272,10 @@
         var streamUrl = baseUrl+'/stream';
         var snapUrl = baseUrl+'/snapshot';
         html+='<div class="camera-card" data-brooder-cam="'+b.id+'">';
-        html+='<div class="camera-card-header"><h4>'+b.name+' Camera</h4><div style="display:flex;align-items:center;gap:.4rem"><span class="camera-status-badge active" id="cam-status-'+b.id+'">Live</span><button class="camera-settings-btn" onclick="Page.Cameras.editUrl('+b.id+')" title="Camera settings">&#x2699;</button></div></div>';
-        html+='<div class="camera-feed"><img src="'+streamUrl+'" alt="'+b.name+' feed" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\';var badge=document.getElementById(\'cam-status-'+b.id+'\');if(badge){badge.className=\'camera-status-badge offline\';badge.textContent=\'Offline\'}"><div class="camera-feed-placeholder" style="display:none">Camera offline or unreachable</div></div>';
-        html+='<div class="camera-actions"><button onclick="window.open(\''+snapUrl+'\',\'_blank\')">&#x1F4F8; Snapshot</button><button onclick="Page.Cameras.fullscreen(this)">&#x26F6; Full Screen</button></div>';
-        html+='<div class="camera-meta"><span>'+baseUrl+'</span></div>';
+        html+='<div class="camera-card-header"><h4>'+escapeHtml(b.name)+' Camera</h4><div style="display:flex;align-items:center;gap:.4rem"><span class="camera-status-badge active" id="cam-status-'+b.id+'">Live</span><button class="camera-settings-btn" onclick="Page.Cameras.editUrl('+b.id+')" title="Camera settings">&#x2699;</button></div></div>';
+        html+='<div class="camera-feed"><img src="'+escapeHtml(streamUrl)+'" alt="'+escapeHtml(b.name)+' feed" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\';var badge=document.getElementById(\'cam-status-'+b.id+'\');if(badge){badge.className=\'camera-status-badge offline\';badge.textContent=\'Offline\'}"><div class="camera-feed-placeholder" style="display:none">Camera offline or unreachable</div></div>';
+        html+='<div class="camera-actions"><button onclick="window.open(\''+escapeHtml(snapUrl)+'\',\'_blank\')">&#x1F4F8; Snapshot</button><button onclick="Page.Cameras.fullscreen(this)">&#x26F6; Full Screen</button></div>';
+        html+='<div class="camera-meta"><span>'+escapeHtml(baseUrl)+'</span></div>';
         html+='</div>';
       });
 
@@ -2282,10 +2283,10 @@
       this._cameras.forEach(function(cam){
         var statusCls = cam.status==='Active'?'active':'offline';
         html+='<div class="camera-card">';
-        html+='<div class="camera-card-header"><h4>'+cam.name+'</h4><span class="camera-status-badge '+statusCls+'">'+cam.status+'</span></div>';
-        html+='<div class="camera-feed"><img src="'+cam.feed_url+'/stream" alt="'+cam.name+'" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'"><div class="camera-feed-placeholder" style="display:none">Camera offline or unreachable</div></div>';
-        html+='<div class="camera-actions"><button onclick="window.open(\''+cam.feed_url+'/snapshot\',\'_blank\')">&#x1F4F8; Snapshot</button><button onclick="Page.Cameras.fullscreen(this)">&#x26F6; Full Screen</button></div>';
-        html+='<div class="camera-meta"><span>'+cam.location+'</span><span>'+cam.feed_url+'</span></div>';
+        html+='<div class="camera-card-header"><h4>'+escapeHtml(cam.name)+'</h4><span class="camera-status-badge '+statusCls+'">'+escapeHtml(cam.status)+'</span></div>';
+        html+='<div class="camera-feed"><img src="'+escapeHtml(cam.feed_url)+'/stream" alt="'+escapeHtml(cam.name)+'" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'"><div class="camera-feed-placeholder" style="display:none">Camera offline or unreachable</div></div>';
+        html+='<div class="camera-actions"><button onclick="window.open(\''+escapeHtml(cam.feed_url)+'/snapshot\',\'_blank\')">&#x1F4F8; Snapshot</button><button onclick="Page.Cameras.fullscreen(this)">&#x26F6; Full Screen</button></div>';
+        html+='<div class="camera-meta"><span>'+escapeHtml(cam.location)+'</span><span>'+escapeHtml(cam.feed_url)+'</span></div>';
         html+='</div>';
       });
 
@@ -2306,8 +2307,8 @@
       var b = this._brooders.find(function(x){return x.id===brooderId});
       var current = b ? (b.camera_url||'') : '';
       var html = '<div class="modal-overlay" id="cam-modal-overlay" onclick="if(event.target===this)Page.Cameras.closeModal()">' +
-        '<div class="modal"><h3>Camera Settings &mdash; '+(b?b.name:'Brooder')+'</h3>' +
-        '<label>Camera Base URL</label><input id="mc-cam-url-edit" type="text" value="'+current+'" placeholder="e.g. http://192.168.0.114:8080">' +
+        '<div class="modal"><h3>Camera Settings &mdash; '+(b?escapeHtml(b.name):'Brooder')+'</h3>' +
+        '<label>Camera Base URL</label><input id="mc-cam-url-edit" type="text" value="'+escapeHtml(current)+'" placeholder="e.g. http://192.168.0.114:8080">' +
         '<div style="font-size:.75rem;color:#888;margin-top:.2rem">Stream: {url}/stream &nbsp; Snapshot: {url}/snapshot<br>Leave empty to use default ('+this._DEFAULT_CAM+')</div>' +
         '<div class="modal-actions"><button class="btn-cancel" onclick="Page.Cameras.closeModal()">Cancel</button><button class="btn-primary" onclick="Page.Cameras.saveUrl('+brooderId+')">Save</button></div>' +
         '</div></div>';
@@ -2799,11 +2800,11 @@
           if(statusEl) statusEl.innerHTML='<span style="color:var(--dusty-rose)">Tag had no readable data.</span>';
           return;
         }
-        if(statusEl) statusEl.innerHTML='<span style="color:var(--safe)">Read tag: <strong>'+tagId+'</strong></span>';
+        if(statusEl) statusEl.innerHTML='<span style="color:var(--safe)">Read tag: <strong>'+escapeHtml(tagId)+'</strong></span>';
         if(/^QUAIL-[A-Z0-9]{6}$/.test(tagId)){
           Page.NfcScan._scanLookup(tagId);
         } else {
-          if(resultEl) resultEl.innerHTML='<div style="color:#888;font-size:.85rem">Tag contains non-QuailSync data: "'+tagId+'"</div>';
+          if(resultEl) resultEl.innerHTML='<div style="color:#888;font-size:.85rem">Tag contains non-QuailSync data: "'+escapeHtml(tagId)+'"</div>';
         }
       } catch(e){
         t.cleanup();
@@ -2825,9 +2826,9 @@
       } else {
         if(resultEl){
           resultEl.innerHTML = '<div style="background:var(--beige);border:1px solid #d0c8c0;border-radius:8px;padding:1rem;text-align:left">'
-            +'<p style="color:var(--dusty-rose);font-weight:600;margin-bottom:.5rem">Tag '+tagId+' is not linked to any bird in the system.</p>'
+            +'<p style="color:var(--dusty-rose);font-weight:600;margin-bottom:.5rem">Tag '+escapeHtml(tagId)+' is not linked to any bird in the system.</p>'
             +'<button class="btn-primary" style="font-size:.85rem;padding:.4rem .8rem" '
-            +'onclick="Page.NfcScan._prefillRegisterForm(\''+tagId+'\')">Register New Bird with This Tag</button>'
+            +'onclick="Page.NfcScan._prefillRegisterForm(\''+escapeHtml(tagId)+'\')">Register New Bird with This Tag</button>'
             +'</div>';
         }
       }
@@ -2885,56 +2886,6 @@
       }
     },
 
-    /* Pre-write: scan tag, read once, check DB. Returns {ok:true/false} */
-    _checkTagBeforeWrite: async function(statusEl){
-      var t = this._timedStatus(statusEl,'Hold tag to phone to check contents',30);
-      var ac = t.ac;
-      try {
-        var ndef = new NDEFReader();
-        await ndef.scan({signal:ac.signal});
-        var existing = await new Promise(function(resolve,reject){
-          if(ac.signal.aborted){ reject(new DOMException('','AbortError')); return; }
-          ndef.addEventListener('reading',function(event){
-            resolve(Page.NfcScan._decodeAllRecords(event.message.records));
-          },{once:true});
-          ndef.addEventListener('readingerror',function(){resolve('');},{once:true});
-          ac.signal.addEventListener('abort',function(){reject(new DOMException('','AbortError'));});
-        });
-        t.cleanup();
-      } catch(e){
-        t.cleanup();
-        if(e.name==='AbortError'){
-          var msg = t.timedOut() ? 'No tag detected \u2014 try again.' : 'Cancelled.';
-          if(statusEl) statusEl.innerHTML='<span style="color:var(--dusty-rose)">'+msg+'</span>';
-        } else {
-          if(statusEl) statusEl.innerHTML='<span style="color:var(--dusty-rose)">Scan error: '+e.message+'</span>';
-        }
-        return {ok:false};
-      }
-      /* Blank or non-QUAIL: safe to proceed */
-      if(!existing || !/^QUAIL-[A-Z0-9]{6}$/.test(existing)){
-        return {ok:true};
-      }
-      /* QUAIL tag — look up in database */
-      if(statusEl) statusEl.innerHTML='<span style="color:var(--warning)">Tag has ID: '+existing+'. Checking database\u2026</span>';
-      var bird = await API.get('/api/nfc/'+encodeURIComponent(existing));
-      if(bird){
-        var blName = bloodlineName(bird.bloodline_id);
-        var desc = bird.band_color ? bird.band_color+' ' : '';
-        desc += bird.sex;
-        if(blName) desc += ', '+blName;
-        if(statusEl) statusEl.innerHTML='<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:.8rem;color:#856404;text-align:left">'
-          +'<strong>Tag is assigned to Bird #'+bird.id+'</strong> ('+desc+')<br>'
-          +'<span style="font-size:.85rem">You must first remove the NFC tag from that bird before reassigning this tag. '
-          +'Go to <a href="#/flock/bird/'+bird.id+'" style="color:#0d6efd;text-decoration:underline">Bird #'+bird.id+'</a> and clear its NFC tag, then try again.</span>'
-          +'</div>';
-        return {ok:false};
-      }
-      /* Orphaned tag — safe */
-      if(statusEl) statusEl.innerHTML='<span style="color:#888">Tag has orphaned ID '+existing+' (no bird in database). Safe to overwrite.</span>';
-      return {ok:true};
-    },
-
     /* Write Tag & Create Bird — full flow.
        Critical: ndef.write() must be called directly from the button click
        handler (user gesture) with no intervening scan() calls. */
@@ -2990,9 +2941,9 @@
         });
         console.log('[NFC] verification read result:',readBack);
         if(readBack===v.tagId){
-          if(statusEl) statusEl.innerHTML='<span style="color:var(--safe)">Verified! Read back: <strong>'+readBack+'</strong></span>';
+          if(statusEl) statusEl.innerHTML='<span style="color:var(--safe)">Verified! Read back: <strong>'+escapeHtml(readBack)+'</strong></span>';
         } else if(readBack){
-          if(statusEl) statusEl.innerHTML='<span style="color:var(--warning)">Written but read back "'+readBack+'" (expected "'+v.tagId+'")</span>';
+          if(statusEl) statusEl.innerHTML='<span style="color:var(--warning)">Written but read back "'+escapeHtml(readBack)+'" (expected "'+escapeHtml(v.tagId)+'")</span>';
         } else {
           if(statusEl) statusEl.innerHTML='<span style="color:var(--safe)">Tag written! (verification timed out \u2014 tag may have been removed)</span>';
         }

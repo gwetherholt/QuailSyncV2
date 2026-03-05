@@ -29,6 +29,7 @@ import threading
 import argparse
 import re
 import sys
+import html as html_mod
 
 # Try importing QR scanning library
 try:
@@ -207,7 +208,8 @@ class StreamHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(status).encode())
 
     def _handle_index(self):
-        brooder_label = f"Brooder {current_brooder_id} ({current_bloodline_name})" if current_brooder_id else "No QR detected"
+        safe_name = html_mod.escape(str(current_bloodline_name)) if current_bloodline_name else ""
+        brooder_label = f"Brooder {current_brooder_id} ({safe_name})" if current_brooder_id else "No QR detected"
         qr_status = "enabled" if QR_AVAILABLE else "disabled (install pyzbar)"
         html = f"""<!DOCTYPE html>
 <html>
