@@ -559,7 +559,7 @@
   .camera-meta{font-size:.8rem;color:#777;margin-bottom:.5rem}
   .camera-meta span{margin-right:1rem}
   .camera-feed{position:relative;margin-bottom:.6rem}
-  .camera-feed img{width:100%;border-radius:8px;display:block;background:#000}
+  .camera-feed img{width:100%;border-radius:8px;display:block;background:var(--beige)}
   .camera-feed-placeholder{
     background:var(--beige);border-radius:8px;height:200px;
     display:flex;align-items:center;justify-content:center;
@@ -2235,8 +2235,6 @@
   Page.Cameras = {
     _brooders: [],
     _cameras: [],
-    _DEFAULT_CAM: 'http://192.168.0.114:8080',
-
     render: function(app){
       app.innerHTML =
         '<div class="page-top"><div class="page-title">&#x1F3A5; Cameras</div><button class="btn-primary" onclick="Page.Cameras.openModal()">+ Add Camera</button></div>' +
@@ -2256,30 +2254,27 @@
       this._renderList();
     },
 
-    _camUrl: function(brooder){
-      return brooder.camera_url || this._DEFAULT_CAM;
-    },
-
     _renderList: function(){
       var el = document.getElementById('cameras-list');
       if(!el) return;
-      if(this._brooders.length===0 && this._cameras.length===0){
+      var broodersWithCam = this._brooders.filter(function(b){return !!b.camera_url});
+      if(broodersWithCam.length===0 && this._cameras.length===0){
         el.innerHTML = emptyState('&#x1F3A5;','No cameras configured','+ Add Camera','Page.Cameras.openModal()');
         return;
       }
       var self = this;
       var html='<div class="camera-grid">';
 
-      // Brooder cameras
+      // Brooder cameras (only if camera_url is configured)
       this._brooders.forEach(function(b){
-        var baseUrl = self._camUrl(b);
-        var streamUrl = baseUrl+'/stream';
-        var snapUrl = baseUrl+'/snapshot';
+        if(!b.camera_url) return;
+        var streamUrl = b.camera_url;
+        var snapUrl = streamUrl.replace(/\/stream\/?$/, '/snapshot');
         html+='<div class="camera-card" data-brooder-cam="'+b.id+'">';
         html+='<div class="camera-card-header"><h4>'+escapeHtml(b.name)+' Camera</h4><div style="display:flex;align-items:center;gap:.4rem"><span class="camera-status-badge active" id="cam-status-'+b.id+'">Live</span><button class="camera-settings-btn" onclick="Page.Cameras.editUrl('+b.id+')" title="Camera settings">&#x2699;</button></div></div>';
-        html+='<div class="camera-feed"><img src="'+escapeHtml(streamUrl)+'" alt="'+escapeHtml(b.name)+' feed" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\';var badge=document.getElementById(\'cam-status-'+b.id+'\');if(badge){badge.className=\'camera-status-badge offline\';badge.textContent=\'Offline\'}"><div class="camera-feed-placeholder" style="display:none">Camera offline or unreachable</div></div>';
-        html+='<div class="camera-actions"><button onclick="window.open(\''+escapeHtml(snapUrl)+'\',\'_blank\')">&#x1F4F8; Snapshot</button><button onclick="Page.Cameras.fullscreen(this)">&#x26F6; Full Screen</button></div>';
-        html+='<div class="camera-meta"><span>'+escapeHtml(baseUrl)+'</span></div>';
+        html+='<div class="camera-feed"><img src="'+escapeHtml(streamUrl)+'" alt="'+escapeHtml(b.name)+' feed" style="width:100%;max-height:400px;object-fit:contain;min-height:200px"></div>';
+        html+='<div class="camera-actions"><button onclick="window.open(\''+escapeHtml(snapUrl)+'\',\'_blank\')">&#x1F4F8; Snapshot</button><button onclick="window.open(\''+escapeHtml(streamUrl)+'\',\'_blank\')">&#x26F6; Full Screen</button></div>';
+        html+='<div class="camera-meta"><span>'+escapeHtml(streamUrl)+'</span></div>';
         html+='</div>';
       });
 
@@ -2288,8 +2283,9 @@
         var statusCls = cam.status==='Active'?'active':'offline';
         html+='<div class="camera-card">';
         html+='<div class="camera-card-header"><h4>'+escapeHtml(cam.name)+'</h4><span class="camera-status-badge '+statusCls+'">'+escapeHtml(cam.status)+'</span></div>';
-        html+='<div class="camera-feed"><img src="'+escapeHtml(cam.feed_url)+'/stream" alt="'+escapeHtml(cam.name)+'" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'"><div class="camera-feed-placeholder" style="display:none">Camera offline or unreachable</div></div>';
-        html+='<div class="camera-actions"><button onclick="window.open(\''+escapeHtml(cam.feed_url)+'/snapshot\',\'_blank\')">&#x1F4F8; Snapshot</button><button onclick="Page.Cameras.fullscreen(this)">&#x26F6; Full Screen</button></div>';
+        html+='<div class="camera-feed"><img src="'+escapeHtml(cam.feed_url)+'" alt="'+escapeHtml(cam.name)+'" style="width:100%;max-height:400px;object-fit:contain;min-height:200px"></div>';
+        var camSnapUrl = cam.feed_url.replace(/\/stream\/?$/, '/snapshot');
+        html+='<div class="camera-actions"><button onclick="window.open(\''+escapeHtml(camSnapUrl)+'\',\'_blank\')">&#x1F4F8; Snapshot</button><button onclick="window.open(\''+escapeHtml(cam.feed_url)+'\',\'_blank\')">&#x26F6; Full Screen</button></div>';
         html+='<div class="camera-meta"><span>'+escapeHtml(cam.location)+'</span><span>'+escapeHtml(cam.feed_url)+'</span></div>';
         html+='</div>';
       });
@@ -2312,8 +2308,8 @@
       var current = b ? (b.camera_url||'') : '';
       var html = '<div class="modal-overlay" id="cam-modal-overlay" onclick="if(event.target===this)Page.Cameras.closeModal()">' +
         '<div class="modal"><h3>Camera Settings &mdash; '+(b?escapeHtml(b.name):'Brooder')+'</h3>' +
-        '<label>Camera Base URL</label><input id="mc-cam-url-edit" type="text" value="'+escapeHtml(current)+'" placeholder="e.g. http://192.168.0.114:8080">' +
-        '<div style="font-size:.75rem;color:#888;margin-top:.2rem">Stream: {url}/stream &nbsp; Snapshot: {url}/snapshot<br>Leave empty to use default ('+this._DEFAULT_CAM+')</div>' +
+        '<label>Camera Stream URL</label><input id="mc-cam-url-edit" type="text" value="'+escapeHtml(current)+'" placeholder="e.g. http://192.168.0.114:8080/stream">' +
+        '<div style="font-size:.75rem;color:#888;margin-top:.2rem">Full MJPEG stream URL. Snapshot derived by replacing /stream with /snapshot.<br>Leave empty to hide camera feed for this brooder.</div>' +
         '<div class="modal-actions"><button class="btn-cancel" onclick="Page.Cameras.closeModal()">Cancel</button><button class="btn-primary" onclick="Page.Cameras.saveUrl('+brooderId+')">Save</button></div>' +
         '</div></div>';
       document.body.insertAdjacentHTML('beforeend', html);
