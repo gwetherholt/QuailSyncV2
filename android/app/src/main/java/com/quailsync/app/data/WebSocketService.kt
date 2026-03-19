@@ -1,5 +1,6 @@
 package com.quailsync.app.data
 
+import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonParser
 import com.quailsync.app.BuildConfig
@@ -51,19 +52,23 @@ class WebSocketService(
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                Log.d("QuailSync", "WebSocket connected to $wsUrl/ws/live")
                 _isConnected.value = true
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                Log.d("QuailSync", "WebSocket message: $text")
                 parseMessage(text)
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                Log.d("QuailSync", "WebSocket closing: code=$code reason=$reason")
                 webSocket.close(1000, null)
                 _isConnected.value = false
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                Log.e("QuailSync", "WebSocket failure", t)
                 _isConnected.value = false
                 this@WebSocketService.webSocket = null
             }
@@ -78,7 +83,14 @@ class WebSocketService(
 
     private fun parseMessage(text: String) {
         try {
-            val json = JsonParser().parse(text).asJsonObject
+            val root = JsonParser().parse(text).asJsonObject
+
+            // Unwrap the outer key: {"Brooder": {...}} or {"brooder": {...}}
+            val json = when {
+                root.has("Brooder") -> root.getAsJsonObject("Brooder")
+                root.has("brooder") -> root.getAsJsonObject("brooder")
+                else -> root // fallback: treat as flat object
+            }
 
             val brooderId = when {
                 json.has("brooder_id") -> json.get("brooder_id").asInt
@@ -87,20 +99,24 @@ class WebSocketService(
             }
 
             val temperature = when {
+                json.has("temperature_celsius") && !json.get("temperature_celsius").isJsonNull ->
+                    json.get("temperature_celsius").asDouble
                 json.has("temperature") && !json.get("temperature").isJsonNull ->
                     json.get("temperature").asDouble
                 else -> null
             }
 
             val humidity = when {
+                json.has("humidity_percent") && !json.get("humidity_percent").isJsonNull ->
+                    json.get("humidity_percent").asDouble
                 json.has("humidity") && !json.get("humidity").isJsonNull ->
                     json.get("humidity").asDouble
                 else -> null
             }
 
             val timestamp = when {
-                json.has("recorded_at") -> json.get("recorded_at").asString
                 json.has("timestamp") -> json.get("timestamp").asString
+                json.has("recorded_at") -> json.get("recorded_at").asString
                 else -> null
             }
 
@@ -111,11 +127,12 @@ class WebSocketService(
                 timestamp = timestamp,
             )
 
+            Log.d("QuailSync", "WebSocket parsed reading: brooder=$brooderId temp=$temperature humidity=$humidity")
             _readings.value = _readings.value.toMutableMap().apply {
                 put(brooderId, reading)
             }
-        } catch (_: Exception) {
-            // Ignore malformed messages
+        } catch (e: Exception) {
+            Log.e("QuailSync", "WebSocket parse error", e)
         }
     }
 }

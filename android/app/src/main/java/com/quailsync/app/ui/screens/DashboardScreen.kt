@@ -45,6 +45,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.quailsync.app.data.Brooder
 import com.quailsync.app.data.BrooderAlert
 import com.quailsync.app.data.BrooderReading
+import android.util.Log
 import com.quailsync.app.data.LiveReading
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.WebSocketService
@@ -98,22 +99,35 @@ class DashboardViewModel : ViewModel() {
     private suspend fun loadDataSuspend() {
         try {
             val brooderList = api.getBrooders()
+            Log.d("QuailSync", "Brooders loaded: ${brooderList.size}")
+            brooderList.forEach { b ->
+                Log.d("QuailSync", "  Brooder ${b.id} '${b.name}' latestTemp=${b.latestTemperature} latestHumidity=${b.latestHumidity}")
+            }
             val states = brooderList.map { brooder ->
                 val readings = try {
-                    api.getBrooderReadings(brooder.id)
-                } catch (_: Exception) {
+                    val r = api.getBrooderReadings(brooder.id)
+                    Log.d("QuailSync", "  Readings for brooder ${brooder.id}: ${r.size} items")
+                    r.firstOrNull()?.let { first ->
+                        Log.d("QuailSync", "    Latest reading: temp=${first.temperature} humidity=${first.humidity} at=${first.recordedAt}")
+                    }
+                    r
+                } catch (e: Exception) {
+                    Log.e("QuailSync", "  Failed to load readings for brooder ${brooder.id}", e)
                     emptyList()
                 }
                 val alerts = try {
-                    api.getBrooderAlerts(brooder.id)
-                } catch (_: Exception) {
+                    val a = api.getBrooderAlerts(brooder.id)
+                    Log.d("QuailSync", "  Alerts for brooder ${brooder.id}: ${a.size} items")
+                    a
+                } catch (e: Exception) {
+                    Log.e("QuailSync", "  Failed to load alerts for brooder ${brooder.id}", e)
                     emptyList()
                 }
                 BrooderState(brooder, readings, alerts)
             }
             _brooders.value = states
-        } catch (_: Exception) {
-            // Keep existing data on error
+        } catch (e: Exception) {
+            Log.e("QuailSync", "Failed to load brooders", e)
         } finally {
             _isLoading.value = false
         }
@@ -192,8 +206,12 @@ fun DashboardScreen(viewModel: DashboardViewModel = viewModel()) {
 fun BrooderCard(state: BrooderState, liveReading: LiveReading?) {
     val currentTemp = liveReading?.temperature
         ?: state.readings.firstOrNull()?.temperature
+        ?: state.brooder.latestTemperature
+        ?: state.brooder.latestTemperatureCelsius
     val currentHumidity = liveReading?.humidity
         ?: state.readings.firstOrNull()?.humidity
+        ?: state.brooder.latestHumidity
+        ?: state.brooder.latestHumidityPercent
 
     val previousTemp = if (state.readings.size >= 2) state.readings[1].temperature else null
     val previousHumidity = if (state.readings.size >= 2) state.readings[1].humidity else null

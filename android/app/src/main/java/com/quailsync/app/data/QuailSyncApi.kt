@@ -1,5 +1,6 @@
 package com.quailsync.app.data
 
+import com.google.gson.annotations.SerializedName
 import com.quailsync.app.BuildConfig
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
@@ -7,67 +8,72 @@ import retrofit2.http.GET
 import retrofit2.http.Path
 
 data class Brooder(
-    val id: Int,
-    val name: String,
-    val location: String? = null,
-    val capacity: Int? = null,
-    val status: String? = null,
+    @SerializedName("id") val id: Int,
+    @SerializedName("name") val name: String,
+    @SerializedName("location") val location: String? = null,
+    @SerializedName("capacity") val capacity: Int? = null,
+    @SerializedName("status") val status: String? = null,
+    @SerializedName("latest_temperature") val latestTemperature: Double? = null,
+    @SerializedName("latest_humidity") val latestHumidity: Double? = null,
+    // Alternative field names the server might use
+    @SerializedName("latest_temperature_celsius") val latestTemperatureCelsius: Double? = null,
+    @SerializedName("latest_humidity_percent") val latestHumidityPercent: Double? = null,
 )
 
 data class BrooderReading(
-    val id: Int? = null,
-    val brooder_id: Int,
-    val temperature: Double?,
-    val humidity: Double?,
-    val recorded_at: String? = null,
+    @SerializedName("id") val id: Int? = null,
+    @SerializedName("brooder_id") val brooderId: Int,
+    @SerializedName("temperature_celsius") val temperature: Double?,
+    @SerializedName("humidity_percent") val humidity: Double?,
+    @SerializedName("recorded_at") val recordedAt: String? = null,
 )
 
 data class BrooderAlert(
-    val id: Int? = null,
-    val brooder_id: Int,
-    val alert_type: String,
-    val severity: String? = null,
-    val message: String? = null,
-    val acknowledged: Boolean? = false,
-    val created_at: String? = null,
+    @SerializedName("id") val id: Int? = null,
+    @SerializedName("brooder_id") val brooderId: Int,
+    @SerializedName("alert_type") val alertType: String,
+    @SerializedName("severity") val severity: String? = null,
+    @SerializedName("message") val message: String? = null,
+    @SerializedName("acknowledged") val acknowledged: Boolean? = false,
+    @SerializedName("created_at") val createdAt: String? = null,
 )
 
 data class Bird(
-    val id: Int,
-    val band_id: String? = null,
-    val species: String? = null,
-    val sex: String? = null,
-    val status: String? = null,
-    val hatch_date: String? = null,
-    val bloodline_id: Int? = null,
-    val brooder_id: Int? = null,
-    val notes: String? = null,
+    @SerializedName("id") val id: Int,
+    @SerializedName("band_id") val bandId: String? = null,
+    @SerializedName("species") val species: String? = null,
+    @SerializedName("sex") val sex: String? = null,
+    @SerializedName("status") val status: String? = null,
+    @SerializedName("hatch_date") val hatchDate: String? = null,
+    @SerializedName("bloodline_id") val bloodlineId: Int? = null,
+    @SerializedName("brooder_id") val brooderId: Int? = null,
+    @SerializedName("notes") val notes: String? = null,
 )
 
 data class Bloodline(
-    val id: Int,
-    val name: String,
-    val color: String? = null,
-    val description: String? = null,
+    @SerializedName("id") val id: Int,
+    @SerializedName("name") val name: String,
+    @SerializedName("color") val color: String? = null,
+    @SerializedName("description") val description: String? = null,
 )
 
 data class Clutch(
-    val id: Int,
-    val parent_pair_id: Int? = null,
-    val egg_count: Int? = null,
-    val fertile_count: Int? = null,
-    val hatch_count: Int? = null,
-    val set_date: String? = null,
-    val expected_hatch_date: String? = null,
-    val status: String? = null,
+    @SerializedName("id") val id: Int,
+    @SerializedName("parent_pair_id") val parentPairId: Int? = null,
+    @SerializedName("egg_count") val eggCount: Int? = null,
+    @SerializedName("fertile_count") val fertileCount: Int? = null,
+    @SerializedName("hatch_count") val hatchCount: Int? = null,
+    @SerializedName("set_date") val setDate: String? = null,
+    @SerializedName("expected_hatch_date") val expectedHatchDate: String? = null,
+    @SerializedName("status") val status: String? = null,
 )
 
 data class Camera(
-    val id: Int,
-    val name: String,
-    val url: String? = null,
-    val location: String? = null,
-    val status: String? = null,
+    @SerializedName("id") val id: Int,
+    @SerializedName("name") val name: String,
+    @SerializedName("url") val url: String? = null,
+    @SerializedName("location") val location: String? = null,
+    @SerializedName("status") val status: String? = null,
 )
 
 interface QuailSyncApi {
