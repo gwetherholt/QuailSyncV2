@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""QuailSync Raspberry Pi Agent — reads DHT22 sensor + system metrics, sends over WebSocket."""
+"""QuailSync Raspberry Pi Agent — reads DHT22 via kernel IIO driver + system metrics, sends over WebSocket."""
 
 import argparse
 import asyncio
@@ -23,13 +23,6 @@ except ImportError:
     HAS_PSUTIL = False
 
 try:
-    import adafruit_dht
-    import board
-    HAS_DHT = True
-except (ImportError, NotImplementedError):
-    HAS_DHT = False
-
-try:
     import websockets
 except ImportError:
     print(f"{RED}[error]{RESET}  websockets package required: pip install websockets")
@@ -42,26 +35,28 @@ SYSTEM_INTERVAL = 30       # seconds
 SENSOR_READ_DELAY = 0.5    # seconds between reading different sensors
 
 # ── Sensor-to-brooder mapping ────────────────────────────────────────────────
-# Each entry maps a GPIO pin to a brooder ID (integer, matches DB primary key).
+# Each entry maps a kernel IIO device path to a brooder ID (integer, matches DB primary key).
+# The dht11 dtoverlay creates devices at /sys/bus/iio/devices/iio:deviceN/.
 # The "label" is for log output only.
 SENSOR_CONFIG = [
-    {"brooder_id": 1, "gpio_pin": 4,  "label": "brooder-1-texas"},
-    {"brooder_id": 2, "gpio_pin": 17, "label": "brooder-2-pharaoh"},
-    {"brooder_id": 3, "gpio_pin": 27, "label": "brooder-3-fernbank"},
+    {"brooder_id": 1, "iio_device": "/sys/bus/iio/devices/iio:device0", "label": "brooder-1-texas"},
+    {"brooder_id": 2, "iio_device": "/sys/bus/iio/devices/iio:device1", "label": "brooder-2-pharaoh"},
+    {"brooder_id": 3, "iio_device": "/sys/bus/iio/devices/iio:device2", "label": "brooder-3-fernbank"},
 ]
 
 
 # ── Sensor reading ───────────────────────────────────────────────────────────
-def read_dht22(sensor, retries=3):
-    """Read DHT22, retry on checksum/timing errors. Returns (temp_f, humidity) or None."""
+def read_dht22(iio_path, retries=3):
+    """Read DHT22 via kernel IIO sysfs, retry on errors. Returns (temp_f, humidity) or None."""
     for attempt in range(1, retries + 1):
         try:
-            temp_c = sensor.temperature
-            humidity = sensor.humidity
-            if temp_c is not None and humidity is not None:
-                temp_f = temp_c * 9 / 5 + 32
-                return (round(temp_f, 1), round(humidity, 1))
-        except RuntimeError as e:
+            with open(iio_path + "/in_temp_input") as f:
+                temp_c = int(f.read().strip()) / 1000.0
+            with open(iio_path + "/in_humidityrelative_input") as f:
+                humidity = int(f.read().strip()) / 1000.0
+            temp_f = temp_c * 9 / 5 + 32
+            return (round(temp_f, 1), round(humidity, 1))
+        except (OSError, ValueError) as e:
             print(f"{YELLOW}[sensor]{RESET}  {e}, retry {attempt}/{retries}...")
             time.sleep(0.5)
     return None
@@ -182,7 +177,7 @@ def _fmt_bytes(b):
 async def run_agent(server_url, sensors):
     """Connect to WebSocket and send telemetry on intervals.
 
-    sensors is a list of dicts: {"brooder_id": int, "label": str, "sensor": obj|None}
+    sensors is a list of dicts: {"brooder_id": int, "label": str, "iio_device": str, "available": bool}
     """
     async with websockets.connect(server_url) as ws:
         print(f"{GREEN}[connected]{RESET} WebSocket connected")
@@ -198,14 +193,14 @@ async def run_agent(server_url, sensors):
             # Brooder readings every 5s — iterate all sensors
             if (now - last_brooder) >= BROODER_INTERVAL:
                 for i, entry in enumerate(sensors):
-                    sensor = entry["sensor"]
                     bid = entry["brooder_id"]
                     label = entry["label"]
+                    iio_device = entry["iio_device"]
 
-                    if sensor is None:
+                    if not entry["available"]:
                         continue
 
-                    reading = read_dht22(sensor)
+                    reading = read_dht22(iio_device)
                     if reading:
                         temp_f, humidity = reading
                         payload = build_brooder_payload(temp_f, humidity, bid)
@@ -217,13 +212,13 @@ async def run_agent(server_url, sensors):
                         if consecutive_failures[bid] >= 3:
                             print(
                                 f"{RED}[error]{RESET}   "
-                                f"Sensor on GPIO{entry['gpio_pin']} for {label} "
+                                f"Sensor at {iio_device} for {label} "
                                 f"has failed {consecutive_failures[bid]} consecutive reads"
                             )
                         else:
                             print(
                                 f"{YELLOW}[warn]{RESET}    "
-                                f"Sensor read failed for {label} (GPIO{entry['gpio_pin']}), skipping"
+                                f"Sensor read failed for {label} ({iio_device}), skipping"
                             )
 
                     # Small delay between sensor reads (not after the last one)
@@ -268,12 +263,6 @@ async def connect_with_backoff(server_url, sensors):
         delay = min(delay * 2, 60)
 
 
-# ── GPIO pin name helper ─────────────────────────────────────────────────────
-def _get_board_pin(gpio_num):
-    """Map GPIO number to board pin object (e.g. 4 -> board.D4)."""
-    return getattr(board, f"D{gpio_num}")
-
-
 # ── Entry point ──────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(description="QuailSync Raspberry Pi Agent")
@@ -282,26 +271,22 @@ def main():
 
     server_url = args.server or os.environ.get("QUAILSYNC_SERVER", DEFAULT_SERVER)
 
-    # Init sensors from SENSOR_CONFIG
+    # Init sensors from SENSOR_CONFIG — check IIO device availability
     sensors = []
     for cfg in SENSOR_CONFIG:
+        iio_path = cfg["iio_device"]
+        available = os.path.isdir(iio_path)
         entry = {
             "brooder_id": cfg["brooder_id"],
-            "gpio_pin": cfg["gpio_pin"],
+            "iio_device": iio_path,
             "label": cfg["label"],
-            "sensor": None,
+            "available": available,
         }
-        if HAS_DHT:
-            try:
-                pin = _get_board_pin(cfg["gpio_pin"])
-                entry["sensor"] = adafruit_dht.DHT22(pin)
-                print(f"{GREEN}[init]{RESET}     {cfg['label']}: DHT22 on GPIO{cfg['gpio_pin']}")
-            except Exception as e:
-                print(f"{YELLOW}[warn]{RESET}    Could not init DHT22 on GPIO{cfg['gpio_pin']}: {e}")
+        if available:
+            print(f"{GREEN}[init]{RESET}     {cfg['label']}: IIO device at {iio_path}")
+        else:
+            print(f"{YELLOW}[warn]{RESET}    IIO device not found at {iio_path} — sensor reads disabled for {cfg['label']}")
         sensors.append(entry)
-
-    if not HAS_DHT:
-        print(f"{YELLOW}[warn]{RESET}    adafruit_dht/board not available — sensor reads disabled")
 
     if not HAS_PSUTIL:
         print(f"{YELLOW}[warn]{RESET}    psutil not available — using /proc fallback for system metrics")
@@ -315,9 +300,6 @@ def main():
 
     def shutdown(sig, frame):
         print(f"\n{YELLOW}[shutdown]{RESET} Caught signal, exiting...")
-        for entry in sensors:
-            if entry["sensor"]:
-                entry["sensor"].exit()
         loop.stop()
         raise SystemExit(0)
 
