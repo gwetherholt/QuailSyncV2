@@ -111,6 +111,9 @@ interface QuailSyncApi {
     @GET("api/birds/{id}/weights")
     suspend fun getBirdWeights(@Path("id") id: Int): List<BirdWeight>
 
+    @GET("api/birds/nfc/{tag_id}")
+    suspend fun getBirdByNfcTag(@Path("tag_id") tagId: String): Bird
+
     @GET("api/bloodlines")
     suspend fun getBloodlines(): List<Bloodline>
 
