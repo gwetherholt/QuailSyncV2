@@ -41,13 +41,25 @@ data class BrooderAlert(
 data class Bird(
     @SerializedName("id") val id: Int,
     @SerializedName("band_id") val bandId: String? = null,
+    @SerializedName("band_color") val bandColor: String? = null,
     @SerializedName("species") val species: String? = null,
     @SerializedName("sex") val sex: String? = null,
     @SerializedName("status") val status: String? = null,
     @SerializedName("hatch_date") val hatchDate: String? = null,
     @SerializedName("bloodline_id") val bloodlineId: Int? = null,
+    @SerializedName("bloodline_name") val bloodlineName: String? = null,
     @SerializedName("brooder_id") val brooderId: Int? = null,
     @SerializedName("notes") val notes: String? = null,
+    @SerializedName("sire_id") val sireId: Int? = null,
+    @SerializedName("dam_id") val damId: Int? = null,
+    @SerializedName("latest_weight") val latestWeight: Double? = null,
+)
+
+data class BirdWeight(
+    @SerializedName("id") val id: Int? = null,
+    @SerializedName("bird_id") val birdId: Int,
+    @SerializedName("weight_grams") val weightGrams: Double,
+    @SerializedName("recorded_at") val recordedAt: String? = null,
 )
 
 data class Bloodline(
@@ -60,20 +72,26 @@ data class Bloodline(
 data class Clutch(
     @SerializedName("id") val id: Int,
     @SerializedName("parent_pair_id") val parentPairId: Int? = null,
+    @SerializedName("bloodline_id") val bloodlineId: Int? = null,
+    @SerializedName("bloodline_name") val bloodlineName: String? = null,
     @SerializedName("egg_count") val eggCount: Int? = null,
     @SerializedName("fertile_count") val fertileCount: Int? = null,
     @SerializedName("hatch_count") val hatchCount: Int? = null,
     @SerializedName("set_date") val setDate: String? = null,
     @SerializedName("expected_hatch_date") val expectedHatchDate: String? = null,
     @SerializedName("status") val status: String? = null,
+    @SerializedName("notes") val notes: String? = null,
 )
 
 data class Camera(
     @SerializedName("id") val id: Int,
     @SerializedName("name") val name: String,
     @SerializedName("url") val url: String? = null,
+    @SerializedName("feed_url") val feedUrl: String? = null,
     @SerializedName("location") val location: String? = null,
     @SerializedName("status") val status: String? = null,
+    @SerializedName("brooder_id") val brooderId: Int? = null,
+    @SerializedName("brooder_name") val brooderName: String? = null,
 )
 
 interface QuailSyncApi {
@@ -89,6 +107,9 @@ interface QuailSyncApi {
 
     @GET("api/birds")
     suspend fun getBirds(): List<Bird>
+
+    @GET("api/birds/{id}/weights")
+    suspend fun getBirdWeights(@Path("id") id: Int): List<BirdWeight>
 
     @GET("api/bloodlines")
     suspend fun getBloodlines(): List<Bloodline>
