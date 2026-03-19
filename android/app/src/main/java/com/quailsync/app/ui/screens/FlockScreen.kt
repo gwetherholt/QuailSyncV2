@@ -620,7 +620,7 @@ private fun formatSex(sex: String?): String {
     }
 }
 
-private fun parseBandColor(color: String?): Color {
+internal fun parseBandColor(color: String?): Color {
     if (color == null) return Color(0xFF9E9E9E)
     return try {
         val hex = color.removePrefix("#")
