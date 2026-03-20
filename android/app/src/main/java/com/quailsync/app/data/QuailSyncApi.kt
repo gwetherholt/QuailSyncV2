@@ -2,9 +2,16 @@ package com.quailsync.app.data
 
 import com.google.gson.annotations.SerializedName
 import com.quailsync.app.BuildConfig
+import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.Multipart
+import retrofit2.http.POST
+import retrofit2.http.Part
 import retrofit2.http.Path
 
 data class Brooder(
@@ -62,6 +69,12 @@ data class BirdWeight(
     @SerializedName("recorded_at") val recordedAt: String? = null,
 )
 
+data class CreateWeightRequest(
+    @SerializedName("weight_grams") val weightGrams: Double,
+    @SerializedName("date") val date: String,
+    @SerializedName("notes") val notes: String? = null,
+)
+
 data class Bloodline(
     @SerializedName("id") val id: Int,
     @SerializedName("name") val name: String,
@@ -94,6 +107,25 @@ data class Camera(
     @SerializedName("brooder_name") val brooderName: String? = null,
 )
 
+data class CreateBirdRequest(
+    @SerializedName("band_color") val bandColor: String? = null,
+    @SerializedName("sex") val sex: String = "Unknown",
+    @SerializedName("bloodline_id") val bloodlineId: Long,
+    @SerializedName("hatch_date") val hatchDate: String,
+    @SerializedName("mother_id") val motherId: Long? = null,
+    @SerializedName("father_id") val fatherId: Long? = null,
+    @SerializedName("generation") val generation: Int = 1,
+    @SerializedName("status") val status: String = "Active",
+    @SerializedName("notes") val notes: String? = null,
+    @SerializedName("nfc_tag_id") val nfcTagId: String? = null,
+)
+
+data class PhotoUploadResponse(
+    @SerializedName("id") val id: Int? = null,
+    @SerializedName("url") val url: String? = null,
+    @SerializedName("path") val path: String? = null,
+)
+
 interface QuailSyncApi {
 
     @GET("api/brooders")
@@ -108,11 +140,24 @@ interface QuailSyncApi {
     @GET("api/birds")
     suspend fun getBirds(): List<Bird>
 
+    @POST("api/birds")
+    suspend fun createBird(@Body request: CreateBirdRequest): Bird
+
     @GET("api/birds/{id}/weights")
     suspend fun getBirdWeights(@Path("id") id: Int): List<BirdWeight>
 
+    @POST("api/birds/{id}/weight")
+    suspend fun createBirdWeight(@Path("id") id: Int, @Body request: CreateWeightRequest): BirdWeight
+
     @GET("api/birds/nfc/{tag_id}")
     suspend fun getBirdByNfcTag(@Path("tag_id") tagId: String): Bird
+
+    @Multipart
+    @POST("api/birds/{id}/photo")
+    suspend fun uploadBirdPhoto(
+        @Path("id") id: Int,
+        @Part photo: MultipartBody.Part,
+    ): PhotoUploadResponse
 
     @GET("api/bloodlines")
     suspend fun getBloodlines(): List<Bloodline>
@@ -126,8 +171,17 @@ interface QuailSyncApi {
     companion object {
         fun create(baseUrl: String = BuildConfig.BASE_URL): QuailSyncApi {
             val url = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
+            val logging = HttpLoggingInterceptor { message ->
+                android.util.Log.d("QuailSync-HTTP", message)
+            }.apply {
+                level = HttpLoggingInterceptor.Level.BODY
+            }
+            val client = OkHttpClient.Builder()
+                .addInterceptor(logging)
+                .build()
             return Retrofit.Builder()
                 .baseUrl(url)
+                .client(client)
                 .addConverterFactory(GsonConverterFactory.create())
                 .build()
                 .create(QuailSyncApi::class.java)
