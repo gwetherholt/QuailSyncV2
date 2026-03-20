@@ -34,6 +34,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.quailsync.app.data.NfcService
+import com.quailsync.app.ui.screens.BatchState
 import com.quailsync.app.ui.screens.CameraScreen
 import com.quailsync.app.ui.screens.ClutchScreen
 import com.quailsync.app.ui.screens.DashboardScreen
@@ -72,7 +73,6 @@ class MainActivity : ComponentActivity() {
         nfcService.checkAvailability(nfcAdapter)
         nfcViewModel = NfcViewModel(nfcService)
 
-        // Handle NFC intent that launched the activity
         handleNfcIntent(intent)
 
         setContent {
@@ -103,24 +103,55 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleNfcIntent(intent: Intent) {
-        val result = nfcService.handleIntent(intent) ?: return
+        val wasBatchWriting = nfcViewModel.batchState.value is BatchState.AwaitingTagWrite
 
-        // Look up bird by NFC data
-        nfcViewModel.lookupBirdByNfc(result.tagId, result.payload)
+        val (scanResult, writeAttempt) = nfcService.handleIntent(intent) ?: return
 
-        // Show toast
-        val toastMsg = if (result.payload?.startsWith("BIRD-") == true) {
-            "Scanned: ${result.payload}"
+        // --- Write mode was active ---
+        if (writeAttempt != null) {
+            when (writeAttempt) {
+                is NfcService.WriteAttemptResult.Written -> {
+                    Toast.makeText(this, "Wrote ${scanResult.payload ?: scanResult.tagId}", Toast.LENGTH_SHORT).show()
+                    if (wasBatchWriting) {
+                        nfcViewModel.onBatchTagWritten(scanResult.tagId, true)
+                    }
+                }
+                is NfcService.WriteAttemptResult.Conflict -> {
+                    // Look up the existing bird to populate the dialog
+                    nfcViewModel.lookupConflictBird(writeAttempt.conflict)
+                    if (wasBatchWriting) {
+                        // Batch is paused — dialog will show, user confirms or cancels
+                        nfcViewModel.setBatchPausedForConflict(true)
+                    }
+                }
+                is NfcService.WriteAttemptResult.Failed -> {
+                    Toast.makeText(this, writeAttempt.message, Toast.LENGTH_SHORT).show()
+                    if (wasBatchWriting) {
+                        nfcViewModel.onBatchTagWritten(scanResult.tagId, false)
+                    }
+                }
+            }
+            // Navigate to NFC tab if not already there
+            navController?.navigate(Screen.Nfc.route) {
+                popUpTo(navController!!.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
+            return
+        }
+
+        // --- Normal read mode ---
+        nfcViewModel.lookupBirdByNfc(scanResult.tagId, scanResult.payload)
+
+        val toastMsg = if (scanResult.payload?.startsWith("BIRD-") == true) {
+            "Scanned: ${scanResult.payload}"
         } else {
-            "NFC tag: ${result.tagId}"
+            "NFC tag: ${scanResult.tagId}"
         }
         Toast.makeText(this, toastMsg, Toast.LENGTH_SHORT).show()
 
-        // Navigate to NFC tab
         navController?.navigate(Screen.Nfc.route) {
-            popUpTo(navController!!.graph.findStartDestination().id) {
-                saveState = true
-            }
+            popUpTo(navController!!.graph.findStartDestination().id) { saveState = true }
             launchSingleTop = true
             restoreState = true
         }
