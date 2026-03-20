@@ -60,6 +60,8 @@ qr_detections = {}       # track detection counts for stability
 qr_stable_threshold = 3  # need 3 consecutive detections to confirm
 last_qr_raw = None
 server_url = None
+default_brooder_id = 1
+stream_port = 8080
 
 # === Camera Setup ===
 picam2 = Picamera2()
@@ -127,23 +129,46 @@ def scan_frame_for_qr(frame_bytes):
         return current_brooder_id
 
 
-def _notify_server(brooder_id):
-    """Send camera-brooder association to server."""
+def _announce_camera(brooder_id):
+    """Announce this camera's stream URL to the server via WebSocket."""
+    if not WS_AVAILABLE or not server_url:
+        return
     try:
+        import socket
+        local_ip = socket.gethostbyname(socket.gethostname())
+        # Fallback: try to get the IP from the network interface
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+        except Exception:
+            pass
+
+        stream_url = f"http://{local_ip}:{stream_port}/stream"
+        snapshot_url = f"http://{local_ip}:{stream_port}/snapshot"
+
         async def _send():
             async with websockets.connect(server_url) as ws:
                 payload = json.dumps({
-                    "CameraAssign": {
+                    "CameraAnnounce": {
                         "brooder_id": brooder_id,
-                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+                        "stream_url": stream_url,
+                        "snapshot_url": snapshot_url
                     }
                 })
                 await ws.send(payload)
-                print(f"\033[32m[qr] Notified server: camera → brooder {brooder_id}\033[0m")
+                print(f"\033[32m[camera] Announced to server: brooder {brooder_id} stream={stream_url}\033[0m")
 
         asyncio.run(_send())
     except Exception as e:
-        print(f"\033[33m[qr] Server notify failed: {e}\033[0m")
+        print(f"\033[33m[camera] Announce failed: {e}\033[0m")
+
+
+def _notify_server(brooder_id):
+    """Send camera-brooder association to server (QR code detected)."""
+    # Re-announce with the new brooder ID
+    _announce_camera(brooder_id)
 
 
 class StreamHandler(BaseHTTPRequestHandler):
@@ -257,15 +282,19 @@ class StreamHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    global server_url
+    global server_url, default_brooder_id, stream_port
 
     parser = argparse.ArgumentParser(description="QuailSync Camera Stream")
     parser.add_argument("--port", type=int, default=8080, help="HTTP port (default: 8080)")
     parser.add_argument("--server", type=str, default=None,
                         help="QuailSync server WebSocket URL (e.g., ws://192.168.0.228:3000/ws)")
+    parser.add_argument("--brooder-id", type=int, default=1,
+                        help="Brooder ID to register this camera with (default: 1)")
     args = parser.parse_args()
 
     server_url = args.server
+    default_brooder_id = args.brooder_id
+    stream_port = args.port
 
     print(f"\n\033[1m[QuailSync Camera]\033[0m")
     print(f"  Stream:   http://0.0.0.0:{args.port}/stream")
@@ -273,7 +302,16 @@ def main():
     print(f"  QR JSON:  http://0.0.0.0:{args.port}/qr-status")
     print(f"  QR Scan:  {'enabled' if QR_AVAILABLE else 'DISABLED'}")
     print(f"  Server:   {server_url or 'not configured'}")
+    print(f"  Brooder:  {default_brooder_id}")
     print()
+
+    # Auto-register this camera with the server on startup
+    if server_url:
+        threading.Thread(
+            target=_announce_camera,
+            args=(default_brooder_id,),
+            daemon=True
+        ).start()
 
     try:
         HTTPServer(("0.0.0.0", args.port), StreamHandler).serve_forever()

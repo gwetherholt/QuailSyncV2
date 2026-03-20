@@ -37,7 +37,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.LifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -166,7 +166,7 @@ fun DashboardScreen(viewModel: DashboardViewModel = viewModel(), onBrooderClick:
     val liveReadings by viewModel.webSocketService.readings.collectAsState()
 
     // Refresh data whenever this screen becomes visible (e.g. navigating back)
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val lifecycleOwner = androidx.compose.ui.platform.LocalContext.current as LifecycleOwner
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
