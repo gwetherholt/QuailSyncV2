@@ -17,7 +17,11 @@ Dependencies:
   sudo apt install libzbar0
 
 Usage:
-  python3 camera_stream.py [--server ws://192.168.0.228:3000/ws] [--port 8080]
+  python3 camera_stream.py [--server ws://192.168.0.228:3000/ws] [--port 8080] [--camera-index 0] [--brooder-id 1]
+
+Multi-camera example (two cameras on one Pi):
+  python3 camera_stream.py --camera-index 0 --port 8080 --brooder-id 1 --server ws://192.168.0.228:3000/ws &
+  python3 camera_stream.py --camera-index 1 --port 8081 --brooder-id 2 --server ws://192.168.0.228:3000/ws &
 """
 
 from picamera2 import Picamera2
@@ -62,16 +66,20 @@ last_qr_raw = None
 server_url = None
 default_brooder_id = 1
 stream_port = 8080
+picam2 = None  # initialized in main()
 
-# === Camera Setup ===
-picam2 = Picamera2()
-config = picam2.create_video_configuration(
-    main={"size": (640, 480), "format": "RGB888"}
-)
-picam2.configure(config)
-picam2.start()
-time.sleep(1)
-print("\033[32m[camera] Started — 640x480 RGB888\033[0m")
+
+def init_camera(camera_index=0):
+    """Initialize the Picamera2 instance with the given camera index."""
+    global picam2
+    picam2 = Picamera2(camera_index)
+    config = picam2.create_video_configuration(
+        main={"size": (640, 480), "format": "RGB888"}
+    )
+    picam2.configure(config)
+    picam2.start()
+    time.sleep(1)
+    print(f"\033[32m[camera] Started camera {camera_index} — 640x480 RGB888\033[0m")
 
 
 def scan_frame_for_qr(frame_bytes):
@@ -290,13 +298,19 @@ def main():
                         help="QuailSync server WebSocket URL (e.g., ws://192.168.0.228:3000/ws)")
     parser.add_argument("--brooder-id", type=int, default=1,
                         help="Brooder ID to register this camera with (default: 1)")
+    parser.add_argument("--camera-index", type=int, default=0,
+                        help="Camera index for Picamera2 (0=cam0, 1=cam1, default: 0)")
     args = parser.parse_args()
 
     server_url = args.server
     default_brooder_id = args.brooder_id
     stream_port = args.port
 
+    # Initialize the selected camera
+    init_camera(args.camera_index)
+
     print(f"\n\033[1m[QuailSync Camera]\033[0m")
+    print(f"  Camera:   index {args.camera_index}")
     print(f"  Stream:   http://0.0.0.0:{args.port}/stream")
     print(f"  Snapshot: http://0.0.0.0:{args.port}/snapshot")
     print(f"  QR JSON:  http://0.0.0.0:{args.port}/qr-status")
