@@ -46,6 +46,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.quailsync.app.data.Bloodline
+import com.quailsync.app.data.Brooder
+import com.quailsync.app.data.ChickGroupDto
 import com.quailsync.app.data.Clutch
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.ui.theme.AlertGreen
@@ -71,6 +73,12 @@ class ClutchViewModel : ViewModel() {
 
     private val _bloodlines = MutableStateFlow<List<Bloodline>>(emptyList())
     val bloodlines: StateFlow<List<Bloodline>> = _bloodlines.asStateFlow()
+
+    private val _chickGroups = MutableStateFlow<List<ChickGroupDto>>(emptyList())
+    val chickGroups: StateFlow<List<ChickGroupDto>> = _chickGroups.asStateFlow()
+
+    private val _brooders = MutableStateFlow<List<Brooder>>(emptyList())
+    val brooders: StateFlow<List<Brooder>> = _brooders.asStateFlow()
 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -109,6 +117,8 @@ class ClutchViewModel : ViewModel() {
                 emptyList()
             }
             _bloodlines.value = bloodlineList
+            _chickGroups.value = try { api.getChickGroups() } catch (_: Exception) { emptyList() }
+            _brooders.value = try { api.getBrooders() } catch (_: Exception) { emptyList() }
         } catch (e: Exception) {
             Log.e("QuailSync", "Failed to load clutches", e)
         } finally {
@@ -121,10 +131,15 @@ class ClutchViewModel : ViewModel() {
 fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
     val clutches by viewModel.clutches.collectAsState()
     val bloodlines by viewModel.bloodlines.collectAsState()
+    val chickGroups by viewModel.chickGroups.collectAsState()
+    val broodersList by viewModel.brooders.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
 
     val bloodlineMap = remember(bloodlines) { bloodlines.associateBy { it.id } }
+    val brooderMap = remember(broodersList) { broodersList.associateBy { it.id } }
+    // Map clutch_id → chick group (for showing brooder assignment on hatched clutches)
+    val clutchGroupMap = remember(chickGroups) { chickGroups.filter { it.clutchId != null }.associateBy { it.clutchId } }
 
     val sortedClutches = remember(clutches) {
         clutches.sortedWith(compareBy<Clutch> { clutch ->
@@ -202,10 +217,13 @@ fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     items(sortedClutches, key = { it.id }) { clutch ->
+                        val group = clutchGroupMap[clutch.id]
+                        val brooderName = group?.brooderId?.let { brooderMap[it]?.name }
                         ClutchCard(
                             clutch = clutch,
                             bloodlineName = clutch.bloodlineName
                                 ?: bloodlineMap[clutch.bloodlineId]?.name,
+                            brooderName = brooderName,
                         )
                     }
                     item { Spacer(modifier = Modifier.height(8.dp)) }
@@ -216,7 +234,7 @@ fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
 }
 
 @Composable
-fun ClutchCard(clutch: Clutch, bloodlineName: String?) {
+fun ClutchCard(clutch: Clutch, bloodlineName: String?, brooderName: String? = null) {
     val today = remember { LocalDate.now() }
     val setDate = remember(clutch.setDate) { parseDate(clutch.setDate) }
     val daysElapsed = remember(setDate, today) {
@@ -326,6 +344,23 @@ fun ClutchCard(clutch: Clutch, bloodlineName: String?) {
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = TextAlign.Center,
+                )
+            }
+
+            // Brooder assignment (for hatched clutches)
+            if (brooderName != null) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Brooder: $brooderName",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = SageGreen,
+                )
+            } else if (clutch.status?.lowercase() in listOf("hatched", "completed")) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Not assigned to a brooder",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 

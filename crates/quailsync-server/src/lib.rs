@@ -24,6 +24,8 @@ use quailsync_common::{
     Severity, Species, SystemMetrics, TelemetryPayload, UpdateBird, UpdateClutch,
     UpdateProcessingRecord, WeightRecord, COTURNIX_MIN_BREEDING_WEIGHT_GRAMS,
     MAX_FEMALES_PER_MALE, MIN_FEMALES_PER_MALE,
+    TargetTempResponse, AssignGroupRequest, MoveBirdRequest, BrooderResidentsResponse,
+    target_temp_for_age, temp_schedule_label, ADULT_TEMP_MIN, ADULT_TEMP_MAX,
 };
 use rust_embed::Embed;
 use rusqlite::{params, Connection};
@@ -242,6 +244,9 @@ pub fn init_db(conn: &Connection) {
     // Camera URL on brooders
     conn.execute("ALTER TABLE brooders ADD COLUMN camera_url TEXT", []).ok();
 
+    // Current brooder assignment for individual birds
+    conn.execute("ALTER TABLE birds ADD COLUMN current_brooder_id INTEGER REFERENCES brooders(id)", []).ok();
+
     // Chick groups (nursery)
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS chick_groups (
@@ -347,54 +352,73 @@ fn store_alert(conn: &Connection, severity: &Severity, message: &str) {
 // Alert engine
 // ---------------------------------------------------------------------------
 
+/// Look up the youngest active chick group in a brooder.
+/// Returns (group_id, age_in_days) or None.
+fn youngest_chick_age_in_brooder(conn: &Connection, brooder_id: i64) -> Option<(i64, i64)> {
+    conn.query_row(
+        "SELECT id, hatch_date FROM chick_groups
+         WHERE brooder_id = ?1 AND status = 'Active'
+         ORDER BY hatch_date DESC LIMIT 1",
+        params![brooder_id],
+        |row| {
+            let id: i64 = row.get(0)?;
+            let hatch_str: String = row.get(1)?;
+            let hatch = NaiveDate::parse_from_str(&hatch_str, "%Y-%m-%d")
+                .unwrap_or_else(|_| Utc::now().date_naive());
+            let age = (Utc::now().date_naive() - hatch).num_days();
+            Ok((id, age))
+        },
+    )
+    .ok()
+}
+
 fn check_brooder_alerts(conn: &Connection, reading: &BrooderReading, config: &AlertConfig) {
     let temp = reading.temperature_celsius;
     let hum = reading.humidity_percent;
 
-    if temp < config.brooder_temp_min {
-        let delta = config.brooder_temp_min - temp;
-        let severity = if delta > 3.0 {
-            Severity::Critical
+    // Determine temperature range: use age-based if a chick group is in this brooder
+    let (temp_min, temp_max) = if let Some(bid) = reading.brooder_id {
+        if let Some((_group_id, age)) = youngest_chick_age_in_brooder(conn, bid) {
+            let (target, tolerance) = target_temp_for_age(age);
+            (target - tolerance, target + tolerance)
         } else {
-            Severity::Warning
-        };
+            // Brooder exists but no chick group — use default adult range
+            (config.brooder_temp_min.min(ADULT_TEMP_MIN), config.brooder_temp_max.max(ADULT_TEMP_MAX))
+        }
+    } else {
+        // No brooder ID on reading — use static config
+        (config.brooder_temp_min, config.brooder_temp_max)
+    };
+
+    if temp < temp_min {
+        let delta = temp_min - temp;
+        let severity = if delta > 3.0 { Severity::Critical } else { Severity::Warning };
         let msg = format!(
             "Temperature LOW: {:.1}\u{00b0}F (min {:.1}\u{00b0}F, {:.1}\u{00b0}F below)",
-            temp, config.brooder_temp_min, delta,
+            temp, temp_min, delta,
         );
         print_alert(&severity, &msg);
         store_alert(conn, &severity, &msg);
-    } else if temp > config.brooder_temp_max {
-        let delta = temp - config.brooder_temp_max;
-        let severity = if delta > 3.0 {
-            Severity::Critical
-        } else {
-            Severity::Warning
-        };
+    } else if temp > temp_max {
+        let delta = temp - temp_max;
+        let severity = if delta > 3.0 { Severity::Critical } else { Severity::Warning };
         let msg = format!(
             "Temperature HIGH: {:.1}\u{00b0}F (max {:.1}\u{00b0}F, {:.1}\u{00b0}F above)",
-            temp, config.brooder_temp_max, delta,
+            temp, temp_max, delta,
         );
         print_alert(&severity, &msg);
         store_alert(conn, &severity, &msg);
     }
 
+    // Humidity thresholds remain static
     if hum < config.humidity_min {
-        let msg = format!(
-            "Humidity LOW: {:.1}% (min {:.1}%)",
-            hum, config.humidity_min,
-        );
-        let severity = Severity::Warning;
-        print_alert(&severity, &msg);
-        store_alert(conn, &severity, &msg);
+        let msg = format!("Humidity LOW: {:.1}% (min {:.1}%)", hum, config.humidity_min);
+        print_alert(&Severity::Warning, &msg);
+        store_alert(conn, &Severity::Warning, &msg);
     } else if hum > config.humidity_max {
-        let msg = format!(
-            "Humidity HIGH: {:.1}% (max {:.1}%)",
-            hum, config.humidity_max,
-        );
-        let severity = Severity::Warning;
-        print_alert(&severity, &msg);
-        store_alert(conn, &severity, &msg);
+        let msg = format!("Humidity HIGH: {:.1}% (max {:.1}%)", hum, config.humidity_max);
+        print_alert(&Severity::Warning, &msg);
+        store_alert(conn, &Severity::Warning, &msg);
     }
 }
 
@@ -820,6 +844,7 @@ async fn create_bird(
             status: body.status,
             notes: body.notes,
             nfc_tag_id: body.nfc_tag_id,
+            current_brooder_id: None,
         }),
     )
 }
@@ -827,7 +852,7 @@ async fn create_bird(
 async fn list_birds(State(state): State<AppState>) -> Json<Vec<Bird>> {
     let conn = acquire_db(&state);
     let mut stmt = conn
-        .prepare("SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id FROM birds ORDER BY id")
+        .prepare("SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id FROM birds ORDER BY id")
         .unwrap();
     let rows: Vec<Bird> = stmt
         .query_map([], |row| {
@@ -846,6 +871,7 @@ async fn list_birds(State(state): State<AppState>) -> Json<Vec<Bird>> {
                 status: str_to_bird_status(&status_str),
                 notes: row.get(9)?,
                 nfc_tag_id: row.get(10)?,
+                current_brooder_id: row.get(11)?,
             })
         })
         .unwrap()
@@ -898,7 +924,7 @@ async fn update_bird(
 
     let bird = conn
         .query_row(
-            "SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id FROM birds WHERE id = ?1",
+            "SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id FROM birds WHERE id = ?1",
             params![id],
             |row| {
                 let sex_str: String = row.get(2)?;
@@ -916,6 +942,7 @@ async fn update_bird(
                     status: str_to_bird_status(&status_str),
                     notes: row.get(9)?,
                     nfc_tag_id: row.get(10)?,
+                    current_brooder_id: row.get(11)?,
                 })
             },
         )
@@ -932,7 +959,7 @@ async fn get_bird_by_nfc(
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
     let bird = conn.query_row(
-        "SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id FROM birds WHERE nfc_tag_id = ?1",
+        "SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id FROM birds WHERE nfc_tag_id = ?1",
         params![tag_id],
         |row| {
             let sex_str: String = row.get(2)?;
@@ -950,6 +977,7 @@ async fn get_bird_by_nfc(
                 status: str_to_bird_status(&status_str),
                 notes: row.get(9)?,
                 nfc_tag_id: row.get(10)?,
+                current_brooder_id: row.get(11)?,
             })
         },
     );
@@ -2592,8 +2620,8 @@ async fn graduate_chick_group(
     let mut birds_created = Vec::new();
     for gb in &body.birds {
         conn.execute(
-            "INSERT INTO birds (band_color, sex, bloodline_id, hatch_date, generation, status, notes, nfc_tag_id)
-             VALUES (?1, ?2, ?3, ?4, 1, 'Active', ?5, ?6)",
+            "INSERT INTO birds (band_color, sex, bloodline_id, hatch_date, generation, status, notes, nfc_tag_id, current_brooder_id)
+             VALUES (?1, ?2, ?3, ?4, 1, 'Active', ?5, ?6, ?7)",
             params![
                 gb.band_color,
                 sex_to_str(&gb.sex),
@@ -2601,6 +2629,7 @@ async fn graduate_chick_group(
                 group.hatch_date.to_string(),
                 gb.notes,
                 gb.nfc_tag_id,
+                group.brooder_id,
             ],
         )
         .unwrap();
@@ -2617,6 +2646,7 @@ async fn graduate_chick_group(
             status: BirdStatus::Active,
             notes: gb.notes.clone(),
             nfc_tag_id: gb.nfc_tag_id.clone(),
+            current_brooder_id: group.brooder_id,
         });
     }
 
@@ -2820,6 +2850,187 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Brooder target temp + group assignment + residents
+// ---------------------------------------------------------------------------
+
+async fn brooder_target_temp(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+    if let Some((group_id, age)) = youngest_chick_age_in_brooder(&conn, id) {
+        let (target, tolerance) = target_temp_for_age(age);
+        let week = (age / 7) + 1;
+        let status = if age >= 35 { "ambient" } else if age >= 28 { "weaning" } else { "heat_required" };
+        Json(TargetTempResponse {
+            brooder_id: id,
+            target_temp_f: target,
+            min_temp_f: target - tolerance,
+            max_temp_f: target + tolerance,
+            week,
+            age_days: Some(age),
+            chick_group_id: Some(group_id),
+            schedule_label: temp_schedule_label(age),
+            status: status.to_string(),
+        })
+    } else {
+        Json(TargetTempResponse {
+            brooder_id: id,
+            target_temp_f: (ADULT_TEMP_MIN + ADULT_TEMP_MAX) / 2.0,
+            min_temp_f: ADULT_TEMP_MIN,
+            max_temp_f: ADULT_TEMP_MAX,
+            week: 0,
+            age_days: None,
+            chick_group_id: None,
+            schedule_label: "Unassigned — adult range".to_string(),
+            status: "unassigned".to_string(),
+        })
+    }
+}
+
+async fn assign_group_to_brooder(
+    State(state): State<AppState>,
+    Path(brooder_id): Path<i64>,
+    Json(body): Json<AssignGroupRequest>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+    // Clear any previous brooder assignment for this group
+    conn.execute(
+        "UPDATE chick_groups SET brooder_id = NULL WHERE brooder_id = ?1",
+        params![brooder_id],
+    ).unwrap();
+    // Assign the new group
+    conn.execute(
+        "UPDATE chick_groups SET brooder_id = ?1 WHERE id = ?2",
+        params![brooder_id, body.group_id],
+    ).unwrap();
+    // Return the updated group
+    let group = conn.query_row(
+        "SELECT id, clutch_id, bloodline_id, brooder_id, initial_count, current_count, hatch_date, status, notes
+         FROM chick_groups WHERE id = ?1",
+        params![body.group_id],
+        |row| {
+            Ok(ChickGroup {
+                id: row.get(0)?,
+                clutch_id: row.get(1)?,
+                bloodline_id: row.get(2)?,
+                brooder_id: row.get(3)?,
+                initial_count: row.get(4)?,
+                current_count: row.get(5)?,
+                hatch_date: NaiveDate::parse_from_str(&row.get::<_, String>(6)?, "%Y-%m-%d")
+                    .unwrap_or_else(|_| Utc::now().date_naive()),
+                status: str_to_chick_group_status(&row.get::<_, String>(7)?),
+                notes: row.get(8)?,
+            })
+        },
+    ).unwrap();
+    (StatusCode::OK, Json(group))
+}
+
+async fn unassign_brooder_group(
+    State(state): State<AppState>,
+    Path(brooder_id): Path<i64>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+    conn.execute(
+        "UPDATE chick_groups SET brooder_id = NULL WHERE brooder_id = ?1",
+        params![brooder_id],
+    ).unwrap();
+    StatusCode::NO_CONTENT
+}
+
+async fn brooder_residents(
+    State(state): State<AppState>,
+    Path(brooder_id): Path<i64>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+
+    // Active chick groups in this brooder
+    let mut stmt = conn.prepare(
+        "SELECT id, clutch_id, bloodline_id, brooder_id, initial_count, current_count, hatch_date, status, notes
+         FROM chick_groups WHERE brooder_id = ?1 AND status = 'Active'"
+    ).unwrap();
+    let groups: Vec<ChickGroup> = stmt.query_map(params![brooder_id], |row| {
+        Ok(ChickGroup {
+            id: row.get(0)?,
+            clutch_id: row.get(1)?,
+            bloodline_id: row.get(2)?,
+            brooder_id: row.get(3)?,
+            initial_count: row.get(4)?,
+            current_count: row.get(5)?,
+            hatch_date: NaiveDate::parse_from_str(&row.get::<_, String>(6)?, "%Y-%m-%d")
+                .unwrap_or_else(|_| Utc::now().date_naive()),
+            status: str_to_chick_group_status(&row.get::<_, String>(7)?),
+            notes: row.get(8)?,
+        })
+    }).unwrap().filter_map(|r| r.ok()).collect();
+
+    // Individual birds in this brooder
+    let mut stmt = conn.prepare(
+        "SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id
+         FROM birds WHERE current_brooder_id = ?1 AND status = 'Active'"
+    ).unwrap();
+    let birds: Vec<Bird> = stmt.query_map(params![brooder_id], |row| {
+        Ok(Bird {
+            id: row.get(0)?,
+            band_color: row.get(1)?,
+            sex: str_to_sex(&row.get::<_, String>(2)?),
+            bloodline_id: row.get(3)?,
+            hatch_date: NaiveDate::parse_from_str(&row.get::<_, String>(4)?, "%Y-%m-%d")
+                .unwrap_or_else(|_| Utc::now().date_naive()),
+            mother_id: row.get(5)?,
+            father_id: row.get(6)?,
+            generation: row.get(7)?,
+            status: str_to_bird_status(&row.get::<_, String>(8)?),
+            notes: row.get(9)?,
+            nfc_tag_id: row.get(10)?,
+            current_brooder_id: row.get(11)?,
+        })
+    }).unwrap().filter_map(|r| r.ok()).collect();
+
+    Json(BrooderResidentsResponse {
+        brooder_id,
+        chick_groups: groups,
+        individual_birds: birds,
+    })
+}
+
+async fn move_bird(
+    State(state): State<AppState>,
+    Path(bird_id): Path<i64>,
+    Json(body): Json<MoveBirdRequest>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+    conn.execute(
+        "UPDATE birds SET current_brooder_id = ?1 WHERE id = ?2",
+        params![body.target_brooder_id, bird_id],
+    ).unwrap();
+    let bird = conn.query_row(
+        "SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id
+         FROM birds WHERE id = ?1",
+        params![bird_id],
+        |row| {
+            Ok(Bird {
+                id: row.get(0)?,
+                band_color: row.get(1)?,
+                sex: str_to_sex(&row.get::<_, String>(2)?),
+                bloodline_id: row.get(3)?,
+                hatch_date: NaiveDate::parse_from_str(&row.get::<_, String>(4)?, "%Y-%m-%d")
+                    .unwrap_or_else(|_| Utc::now().date_naive()),
+                mother_id: row.get(5)?,
+                father_id: row.get(6)?,
+                generation: row.get(7)?,
+                status: str_to_bird_status(&row.get::<_, String>(8)?),
+                notes: row.get(9)?,
+                nfc_tag_id: row.get(10)?,
+                current_brooder_id: row.get(11)?,
+            })
+        },
+    ).unwrap();
+    Json(bird)
+}
+
+// ---------------------------------------------------------------------------
 // Public: build the app
 // ---------------------------------------------------------------------------
 
@@ -2853,6 +3064,10 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/brooders/{id}", axum::routing::put(update_brooder))
         .route("/api/brooders/{id}/readings", get(brooder_readings))
         .route("/api/brooders/{id}/status", get(brooder_status))
+        .route("/api/brooders/{id}/target-temp", get(brooder_target_temp))
+        .route("/api/brooders/{id}/assign-group", axum::routing::put(assign_group_to_brooder).delete(unassign_brooder_group))
+        .route("/api/brooders/{id}/residents", get(brooder_residents))
+        .route("/api/birds/{id}/move", axum::routing::put(move_bird))
         .route("/api/cameras", get(list_cameras).post(create_camera))
         .route("/api/cameras/{id}/brooder", axum::routing::put(update_camera_brooder))
         .route("/api/cameras/{id}/detections/summary", get(camera_detection_summary))
