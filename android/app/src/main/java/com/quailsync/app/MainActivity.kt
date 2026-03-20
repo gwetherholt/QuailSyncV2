@@ -76,7 +76,7 @@ sealed class Screen(val route: String, val label: String, val icon: ImageVector)
     data object Cameras : Screen("cameras", "Cameras", Icons.Default.Videocam)
     data object Flock : Screen("flock", "Flock", Icons.Default.Pets)
     data object Nfc : Screen("nfc", "NFC", Icons.Default.Nfc)
-    data object Clutches : Screen("clutches", "Clutches", Icons.Default.Egg)
+    data object Clutches : Screen("clutches", "Hatchery", Icons.Default.Egg)
     data object Settings : Screen("settings", "Settings", Icons.Default.Settings)
 }
 
