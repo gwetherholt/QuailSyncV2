@@ -2,13 +2,10 @@ package com.quailsync.app.ui.screens
 
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Log
-import android.view.ViewGroup
-import android.webkit.WebResourceError
-import android.webkit.WebResourceRequest
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -67,11 +64,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.ViewModel
@@ -85,6 +83,7 @@ import com.quailsync.app.data.UpdateBrooderRequest
 import com.quailsync.app.ui.theme.SageGreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -781,66 +780,129 @@ fun AddCameraDialog(viewModel: CameraViewModel, onDismiss: () -> Unit) {
 }
 
 // =====================================================================
-// MJPEG Stream WebView
+// Native MJPEG Stream Reader
 // =====================================================================
 
 @Composable
 fun MjpegStreamView(url: String, modifier: Modifier = Modifier) {
+    var currentFrame by remember { mutableStateOf<Bitmap?>(null) }
     var hasError by remember { mutableStateOf(false) }
-    var isLoading by remember { mutableStateOf(true) }
 
-    // MJPEG streams must be loaded as <img src> — loading the URL directly
-    // in a WebView shows garbled multipart text. Wrap in a minimal HTML page.
-    LaunchedEffect(url) { delay(5000L); isLoading = false }
+    // Stream coroutine: runs while in composition, cancels when leaving.
+    // Uses multipart Content-Length for bulk reads instead of byte-scanning.
+    LaunchedEffect(url) {
+        currentFrame = null
+        hasError = false
+        withContext(Dispatchers.IO) {
+            while (isActive) {
+                try {
+                    val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                    connection.connectTimeout = 5000
+                    connection.readTimeout = 10000
+                    connection.connect()
 
-    val html = remember(url) {
-        """
-        <html><head>
-        <meta name="viewport" content="width=device-width,initial-scale=1">
-        <style>body{margin:0;padding:0;background:#000;display:flex;align-items:center;justify-content:center;height:100vh}
-        img{width:100%;height:auto;object-fit:contain}</style>
-        </head><body>
-        <img src="${url.replace("\"", "&quot;")}" alt="Camera stream">
-        </body></html>
-        """.trimIndent()
-    }
+                    val stream = java.io.BufferedInputStream(connection.inputStream, 16384)
 
-    Box(modifier = modifier) {
-        if (hasError) {
-            CameraOfflinePlaceholder()
-        } else {
-            var lastLoadedUrl by remember { mutableStateOf("") }
-            AndroidView(
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                        settings.javaScriptEnabled = false
-                        settings.loadWithOverviewMode = true
-                        settings.useWideViewPort = true
-                        settings.blockNetworkImage = false
-                        setBackgroundColor(android.graphics.Color.BLACK)
-                        webViewClient = object : WebViewClient() {
-                            override fun onPageFinished(view: WebView?, url: String?) { isLoading = false }
-                            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
-                                if (request?.isForMainFrame == true) { hasError = true; isLoading = false }
+                    // Read frames using multipart headers (Content-Length)
+                    // Each part: boundary line, headers (including Content-Length), blank line, JPEG data
+                    val reader = stream.bufferedReader(Charsets.ISO_8859_1)
+
+                    while (isActive) {
+                        // Skip to next part — read lines until we find Content-Length or JPEG data
+                        var contentLength = -1
+                        var line: String? = null
+
+                        // Read headers until blank line
+                        while (true) {
+                            line = reader.readLine() ?: break
+                            if (line.isBlank()) break // end of headers
+                            val lower = line.lowercase()
+                            if (lower.startsWith("content-length:")) {
+                                contentLength = line.substringAfter(":").trim().toIntOrNull() ?: -1
                             }
                         }
-                        loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
-                        lastLoadedUrl = url
+                        if (line == null) break // stream ended
+
+                        if (contentLength > 0) {
+                            // Bulk read the exact JPEG frame
+                            val frameData = CharArray(contentLength)
+                            var read = 0
+                            while (read < contentLength) {
+                                val n = reader.read(frameData, read, contentLength - read)
+                                if (n == -1) break
+                                read += n
+                            }
+                            if (read == contentLength) {
+                                // Convert chars back to bytes (ISO-8859-1 is 1:1)
+                                val bytes = ByteArray(contentLength) { frameData[it].code.toByte() }
+                                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                if (bitmap != null) {
+                                    withContext(Dispatchers.Main) {
+                                        currentFrame = bitmap
+                                        hasError = false
+                                    }
+                                }
+                            }
+                        } else {
+                            // Fallback: no Content-Length, scan for JPEG markers
+                            val buf = java.io.ByteArrayOutputStream(65536)
+                            var prev = 0
+                            var inFrame = false
+                            while (isActive) {
+                                val b = stream.read()
+                                if (b == -1) break
+                                if (!inFrame) {
+                                    if (prev == 0xFF && b == 0xD8) {
+                                        buf.reset()
+                                        buf.write(0xFF)
+                                        buf.write(0xD8)
+                                        inFrame = true
+                                    }
+                                } else {
+                                    buf.write(b)
+                                    if (prev == 0xFF && b == 0xD9) {
+                                        val data = buf.toByteArray()
+                                        val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
+                                        if (bitmap != null) {
+                                            withContext(Dispatchers.Main) {
+                                                currentFrame = bitmap
+                                                hasError = false
+                                            }
+                                        }
+                                        break // go back to header reading loop
+                                    }
+                                }
+                                prev = b
+                            }
+                        }
                     }
-                },
-                update = { webView ->
-                    if (url != lastLoadedUrl) {
-                        webView.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
-                        lastLoadedUrl = url
+                    connection.disconnect()
+                } catch (e: Exception) {
+                    if (isActive) {
+                        Log.e("QuailSync", "MJPEG stream error: ${e.message}")
+                        withContext(Dispatchers.Main) { hasError = true }
+                        delay(2000)
                     }
-                },
-                modifier = Modifier.fillMaxSize(),
-            )
-            if (isLoading) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = SageGreen, modifier = Modifier.size(32.dp), strokeWidth = 2.dp)
                 }
+            }
+        }
+    }
+
+    Box(modifier = modifier.background(androidx.compose.ui.graphics.Color.Black)) {
+        val frame = currentFrame
+        if (frame != null) {
+            Image(
+                bitmap = frame.asImageBitmap(),
+                contentDescription = "Camera feed",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit,
+            )
+        } else if (hasError) {
+            CameraOfflinePlaceholder()
+        } else {
+            // Loading — waiting for first frame
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = SageGreen, modifier = Modifier.size(32.dp), strokeWidth = 2.dp)
             }
         }
     }
