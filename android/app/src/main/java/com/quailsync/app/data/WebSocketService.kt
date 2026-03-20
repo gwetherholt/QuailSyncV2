@@ -19,6 +19,7 @@ data class LiveReading(
     val temperature: Double?,
     val humidity: Double?,
     val timestamp: String? = null,
+    val receivedAt: Long = System.currentTimeMillis(),
 )
 
 class WebSocketService(

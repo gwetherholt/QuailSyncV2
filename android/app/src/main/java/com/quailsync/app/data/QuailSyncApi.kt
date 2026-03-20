@@ -11,6 +11,7 @@ import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Multipart
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Part
 import retrofit2.http.Path
 
@@ -25,6 +26,17 @@ data class Brooder(
     // Alternative field names the server might use
     @SerializedName("latest_temperature_celsius") val latestTemperatureCelsius: Double? = null,
     @SerializedName("latest_humidity_percent") val latestHumidityPercent: Double? = null,
+    @SerializedName("camera_url") val cameraUrl: String? = null,
+)
+
+data class UpdateBrooderRequest(
+    @SerializedName("camera_url") val cameraUrl: String? = null,
+)
+
+data class CreateCameraRequest(
+    @SerializedName("name") val name: String,
+    @SerializedName("feed_url") val feedUrl: String,
+    @SerializedName("location") val location: String? = null,
 )
 
 data class BrooderReading(
@@ -167,6 +179,12 @@ interface QuailSyncApi {
 
     @GET("api/cameras")
     suspend fun getCameras(): List<Camera>
+
+    @POST("api/cameras")
+    suspend fun createCamera(@Body request: CreateCameraRequest): Camera
+
+    @PUT("api/brooders/{id}")
+    suspend fun updateBrooder(@Path("id") id: Int, @Body request: UpdateBrooderRequest): Brooder
 
     companion object {
         fun create(baseUrl: String = BuildConfig.BASE_URL): QuailSyncApi {
