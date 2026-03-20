@@ -38,12 +38,22 @@ pub struct DetectionEvent {
     pub timestamp: DateTime<Utc>,
 }
 
+/// Camera auto-registration announcement from Pi agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CameraAnnounce {
+    pub brooder_id: i64,
+    pub stream_url: String,
+    #[serde(default)]
+    pub snapshot_url: Option<String>,
+}
+
 /// Top-level telemetry payload sent from agent to server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TelemetryPayload {
     System(SystemMetrics),
     Brooder(BrooderReading),
     Detection(DetectionEvent),
+    CameraAnnounce(CameraAnnounce),
 }
 
 /// Configurable thresholds for brooder alerts.

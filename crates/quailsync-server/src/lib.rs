@@ -25,7 +25,7 @@ use quailsync_common::{
     UpdateProcessingRecord, WeightRecord, COTURNIX_MIN_BREEDING_WEIGHT_GRAMS,
     MAX_FEMALES_PER_MALE, MIN_FEMALES_PER_MALE,
     TargetTempResponse, AssignGroupRequest, MoveBirdRequest, BrooderResidentsResponse,
-    target_temp_for_age, temp_schedule_label, ADULT_TEMP_MIN, ADULT_TEMP_MAX,
+    CameraAnnounce, target_temp_for_age, temp_schedule_label, ADULT_TEMP_MIN, ADULT_TEMP_MAX,
 };
 use rust_embed::Embed;
 use rusqlite::{params, Connection};
@@ -333,6 +333,18 @@ fn store_payload(conn: &Connection, payload: &TelemetryPayload) {
             )
             .ok();
         }
+        TelemetryPayload::CameraAnnounce(ca) => {
+            // Auto-register: set camera_url on the matching brooder
+            conn.execute(
+                "UPDATE brooders SET camera_url = ?1 WHERE id = ?2",
+                params![ca.stream_url, ca.brooder_id],
+            )
+            .ok();
+            println!(
+                "[camera] Auto-registered stream for brooder {}: {}",
+                ca.brooder_id, ca.stream_url
+            );
+        }
     }
 }
 
@@ -534,6 +546,12 @@ fn print_payload(payload: &TelemetryPayload) {
                 d.species,
                 d.confidence * 100.0,
                 d.timestamp,
+            );
+        }
+        TelemetryPayload::CameraAnnounce(ca) => {
+            println!(
+                "[telemetry] camera  | brooder {} stream: {}",
+                ca.brooder_id, ca.stream_url,
             );
         }
     }
@@ -2006,6 +2024,21 @@ async fn list_cameras(State(state): State<AppState>) -> Json<Vec<CameraFeed>> {
     Json(rows)
 }
 
+async fn delete_camera(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+    let affected = conn
+        .execute("DELETE FROM camera_feeds WHERE id = ?1", params![id])
+        .unwrap_or(0);
+    if affected > 0 {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
 async fn create_frame(
     State(state): State<AppState>,
     Json(body): Json<CreateFrameCapture>,
@@ -3069,6 +3102,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/brooders/{id}/residents", get(brooder_residents))
         .route("/api/birds/{id}/move", axum::routing::put(move_bird))
         .route("/api/cameras", get(list_cameras).post(create_camera))
+        .route("/api/cameras/{id}", axum::routing::delete(delete_camera))
         .route("/api/cameras/{id}/brooder", axum::routing::put(update_camera_brooder))
         .route("/api/cameras/{id}/detections/summary", get(camera_detection_summary))
         .route("/api/frames", get(list_frames).post(create_frame))

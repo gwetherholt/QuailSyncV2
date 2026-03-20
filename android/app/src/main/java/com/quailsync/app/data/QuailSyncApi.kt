@@ -10,6 +10,7 @@ import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Multipart
+import retrofit2.http.DELETE
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Part
@@ -220,6 +221,9 @@ interface QuailSyncApi {
 
     @POST("api/cameras")
     suspend fun createCamera(@Body request: CreateCameraRequest): Camera
+
+    @DELETE("api/cameras/{id}")
+    suspend fun deleteCamera(@Path("id") id: Int): retrofit2.Response<Unit>
 
     @PUT("api/brooders/{id}")
     suspend fun updateBrooder(@Path("id") id: Int, @Body request: UpdateBrooderRequest): Brooder

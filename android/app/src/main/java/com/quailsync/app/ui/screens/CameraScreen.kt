@@ -29,10 +29,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.VideocamOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -78,11 +80,15 @@ import com.quailsync.app.data.CreateCameraRequest
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.UpdateBrooderRequest
 import com.quailsync.app.ui.theme.SageGreen
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 
 // =====================================================================
 // Unified camera item — either from /api/cameras or a brooder's camera_url
@@ -217,6 +223,51 @@ class CameraViewModel : ViewModel() {
         }
     }
 
+    fun deleteCamera(item: CameraItem) {
+        Log.d("QuailSync", "deleteCamera called: name='${item.name}', source=${item.source::class.simpleName}")
+        val baseUrl = com.quailsync.app.BuildConfig.BASE_URL.trimEnd('/')
+        viewModelScope.launch {
+            try {
+                val (code, respBody) = when (val src = item.source) {
+                    is CameraSource.Standalone -> {
+                        val url = "$baseUrl/api/cameras/${src.camera.id}"
+                        Log.d("QuailSync", "DELETE $url (standalone '${src.camera.name}')")
+                        withContext(Dispatchers.IO) {
+                            val req = okhttp3.Request.Builder().url(url).delete().build()
+                            val resp = okhttp3.OkHttpClient().newCall(req).execute()
+                            val body = resp.body?.string()
+                            Log.d("QuailSync", "Delete response: ${resp.code} body=$body")
+                            Pair(resp.code, body)
+                        }
+                    }
+                    is CameraSource.BrooderCamera -> {
+                        val url = "$baseUrl/api/brooders/${src.brooder.id}"
+                        val json = """{"camera_url": null}"""
+                        Log.d("QuailSync", "PUT $url body=$json (brooder '${src.brooder.name}')")
+                        withContext(Dispatchers.IO) {
+                            val body = json.toRequestBody("application/json".toMediaType())
+                            val req = okhttp3.Request.Builder().url(url).put(body).build()
+                            val resp = okhttp3.OkHttpClient().newCall(req).execute()
+                            val respBody = resp.body?.string()
+                            Log.d("QuailSync", "Clear camera response: ${resp.code} body=$respBody")
+                            Pair(resp.code, respBody)
+                        }
+                    }
+                }
+                if (code in 200..299) {
+                    Log.d("QuailSync", "Delete OK, refreshing camera list")
+                    loadAllSuspend()
+                } else {
+                    Log.e("QuailSync", "Delete failed: HTTP $code body=$respBody")
+                    _saveError.value = "Delete failed: HTTP $code"
+                }
+            } catch (e: Exception) {
+                Log.e("QuailSync", "Delete failed", e)
+                _saveError.value = "Delete failed: ${e.message}"
+            }
+        }
+    }
+
     fun clearSaveError() { _saveError.value = null }
 }
 
@@ -268,7 +319,7 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
             }
             else -> {
                 LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    items(cameraItems) { item -> CameraCard(item) }
+                    items(cameraItems) { item -> CameraCard(item, onDelete = { viewModel.deleteCamera(item) }) }
                     item { Spacer(Modifier.height(8.dp)) }
                 }
             }
@@ -285,10 +336,41 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
 // =====================================================================
 
 @Composable
-fun CameraCard(item: CameraItem) {
+fun CameraCard(item: CameraItem, onDelete: () -> Unit = {}) {
     val context = LocalContext.current
     var showFullScreen by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
     val snapshotUrl = item.streamUrl?.replace("/stream", "/snapshot")
+
+    if (showDeleteConfirm) {
+        val sourceType = when (item.source) {
+            is CameraSource.Standalone -> "standalone #${item.source.camera.id}"
+            is CameraSource.BrooderCamera -> "brooder #${item.source.brooder.id} (${item.source.brooder.name})"
+        }
+        val sourceLabel = when (item.source) {
+            is CameraSource.Standalone -> "This will remove the camera '${item.name}' from the system."
+            is CameraSource.BrooderCamera -> "This will clear the camera URL from ${item.source.brooder.name}."
+        }
+        Log.d("QuailSync", "Delete confirm dialog shown for: $sourceType")
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Remove Camera?") },
+            text = { Text(sourceLabel) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        Log.d("QuailSync", "Delete confirmed for: $sourceType")
+                        showDeleteConfirm = false
+                        onDelete()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = androidx.compose.ui.graphics.Color(0xFFCC4444)),
+                ) { Text("Remove") }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { Log.d("QuailSync", "Delete cancelled"); showDeleteConfirm = false }) { Text("Cancel") }
+            },
+        )
+    }
 
     Card(
         Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
@@ -297,11 +379,19 @@ fun CameraCard(item: CameraItem) {
     ) {
         Column(Modifier.padding(16.dp)) {
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                Column {
+                Column(Modifier.weight(1f)) {
                     Text(item.name, style = MaterialTheme.typography.titleLarge)
                     if (item.subtitle != null) Text(item.subtitle, style = MaterialTheme.typography.bodyMedium)
                 }
-                Icon(Icons.Default.CameraAlt, null, tint = SageGreen)
+                Row {
+                    Icon(Icons.Default.CameraAlt, null, tint = SageGreen)
+                    IconButton(onClick = {
+                        Log.d("QuailSync", "Delete icon tapped for camera: '${item.name}'")
+                        showDeleteConfirm = true
+                    }) {
+                        Icon(Icons.Default.Delete, "Delete", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
             }
 
             Spacer(Modifier.height(12.dp))
@@ -504,7 +594,21 @@ fun MjpegStreamView(url: String, modifier: Modifier = Modifier) {
     var hasError by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(true) }
 
+    // MJPEG streams must be loaded as <img src> — loading the URL directly
+    // in a WebView shows garbled multipart text. Wrap in a minimal HTML page.
     LaunchedEffect(url) { delay(5000L); isLoading = false }
+
+    val html = remember(url) {
+        """
+        <html><head>
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <style>body{margin:0;padding:0;background:#000;display:flex;align-items:center;justify-content:center;height:100vh}
+        img{width:100%;height:auto;object-fit:contain}</style>
+        </head><body>
+        <img src="${url.replace("\"", "&quot;")}" alt="Camera stream">
+        </body></html>
+        """.trimIndent()
+    }
 
     Box(modifier = modifier) {
         if (hasError) {
@@ -517,15 +621,15 @@ fun MjpegStreamView(url: String, modifier: Modifier = Modifier) {
                         settings.javaScriptEnabled = false
                         settings.loadWithOverviewMode = true
                         settings.useWideViewPort = true
-                        setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                        settings.blockNetworkImage = false
+                        setBackgroundColor(android.graphics.Color.BLACK)
                         webViewClient = object : WebViewClient() {
-                            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) { hasError = false }
                             override fun onPageFinished(view: WebView?, url: String?) { isLoading = false }
                             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                                 if (request?.isForMainFrame == true) { hasError = true; isLoading = false }
                             }
                         }
-                        loadUrl(url)
+                        loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
                     }
                 },
                 modifier = Modifier.fillMaxSize(),
