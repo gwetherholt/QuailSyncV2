@@ -137,14 +137,20 @@ def scan_frame_for_qr(frame_bytes):
         return current_brooder_id
 
 
+_announced = False
+
+
 def _announce_camera(brooder_id):
-    """Announce this camera's stream URL to the server via WebSocket."""
+    """Announce this camera's stream URL to the server via WebSocket. Only once per process."""
+    global _announced
+    if _announced:
+        print(f"[camera] Already announced, skipping (restart script to re-announce)")
+        return
     if not WS_AVAILABLE or not server_url:
         return
     try:
         import socket
         local_ip = socket.gethostbyname(socket.gethostname())
-        # Fallback: try to get the IP from the network interface
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
@@ -169,13 +175,17 @@ def _announce_camera(brooder_id):
                 print(f"\033[32m[camera] Announced to server: brooder {brooder_id} stream={stream_url}\033[0m")
 
         asyncio.run(_send())
+        _announced = True
     except Exception as e:
-        print(f"\033[33m[camera] Announce failed: {e}\033[0m")
+        print(f"\033[33m[camera] Announce failed: {e} (will not retry)\033[0m")
+        _announced = True  # Don't retry on failure either — manual config takes over
 
 
 def _notify_server(brooder_id):
-    """Send camera-brooder association to server (QR code detected)."""
-    # Re-announce with the new brooder ID
+    """Send camera-brooder association to server (QR code detected a new brooder)."""
+    # Only announce on QR-triggered brooder change, not reconnects
+    global _announced
+    _announced = False  # Allow re-announce since the brooder actually changed
     _announce_camera(brooder_id)
 
 
