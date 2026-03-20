@@ -1,5 +1,6 @@
 package com.quailsync.app.ui.screens
 
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,8 +21,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -30,12 +31,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -45,7 +46,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.quailsync.app.data.Brooder
 import com.quailsync.app.data.BrooderAlert
 import com.quailsync.app.data.BrooderReading
-import android.util.Log
 import com.quailsync.app.data.LiveReading
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.WebSocketService
@@ -58,11 +58,24 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+// =====================================================================
+// Data
+// =====================================================================
+
 data class BrooderState(
     val brooder: Brooder,
     val readings: List<BrooderReading> = emptyList(),
     val alerts: List<BrooderAlert> = emptyList(),
 )
+
+private const val STALE_THRESHOLD_MS = 60_000L       // 1 minute
+private const val OFFLINE_THRESHOLD_MS = 2 * 60_000L // 2 minutes
+
+enum class SensorStatus { LIVE, STALE, OFFLINE, UNKNOWN }
+
+// =====================================================================
+// ViewModel
+// =====================================================================
 
 class DashboardViewModel : ViewModel() {
     private val api = QuailSyncApi.create()
@@ -90,42 +103,34 @@ class DashboardViewModel : ViewModel() {
         }
     }
 
-    private fun loadData() {
-        viewModelScope.launch {
-            loadDataSuspend()
-        }
-    }
+    private fun loadData() { viewModelScope.launch { loadDataSuspend() } }
 
     private suspend fun loadDataSuspend() {
         try {
             val brooderList = api.getBrooders()
-            Log.d("QuailSync", "Brooders loaded: ${brooderList.size}")
-            brooderList.forEach { b ->
-                Log.d("QuailSync", "  Brooder ${b.id} '${b.name}' latestTemp=${b.latestTemperature} latestHumidity=${b.latestHumidity}")
+            Log.d("QuailSync", "Brooders loaded: ${brooderList.size} (IDs: ${brooderList.map { it.id }})")
+            // Deduplicate by ID in case the server returns duplicates
+            val uniqueBrooders = brooderList.distinctBy { it.id }
+            if (uniqueBrooders.size != brooderList.size) {
+                Log.w("QuailSync", "Removed ${brooderList.size - uniqueBrooders.size} duplicate brooders")
             }
-            val states = brooderList.map { brooder ->
+            val states = uniqueBrooders.map { brooder ->
                 val readings = try {
-                    val r = api.getBrooderReadings(brooder.id)
-                    Log.d("QuailSync", "  Readings for brooder ${brooder.id}: ${r.size} items")
-                    r.firstOrNull()?.let { first ->
-                        Log.d("QuailSync", "    Latest reading: temp=${first.temperature} humidity=${first.humidity} at=${first.recordedAt}")
-                    }
-                    r
+                    api.getBrooderReadings(brooder.id)
                 } catch (e: Exception) {
-                    Log.e("QuailSync", "  Failed to load readings for brooder ${brooder.id}", e)
+                    Log.e("QuailSync", "Failed to load readings for brooder ${brooder.id}", e)
                     emptyList()
                 }
                 val alerts = try {
-                    val a = api.getBrooderAlerts(brooder.id)
-                    Log.d("QuailSync", "  Alerts for brooder ${brooder.id}: ${a.size} items")
-                    a
+                    api.getBrooderAlerts(brooder.id)
                 } catch (e: Exception) {
-                    Log.e("QuailSync", "  Failed to load alerts for brooder ${brooder.id}", e)
+                    Log.e("QuailSync", "Failed to load alerts for brooder ${brooder.id}", e)
                     emptyList()
                 }
                 BrooderState(brooder, readings, alerts)
             }
             _brooders.value = states
+            Log.d("QuailSync", "BrooderStates set: ${states.size} cards")
         } catch (e: Exception) {
             Log.e("QuailSync", "Failed to load brooders", e)
         } finally {
@@ -139,6 +144,10 @@ class DashboardViewModel : ViewModel() {
     }
 }
 
+// =====================================================================
+// Dashboard Screen
+// =====================================================================
+
 @Composable
 fun DashboardScreen(viewModel: DashboardViewModel = viewModel()) {
     val brooders by viewModel.brooders.collectAsState()
@@ -146,64 +155,53 @@ fun DashboardScreen(viewModel: DashboardViewModel = viewModel()) {
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val liveReadings by viewModel.webSocketService.readings.collectAsState()
 
-    DisposableEffect(Unit) {
-        onDispose { }
-    }
-
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            Arrangement.SpaceBetween, Alignment.CenterVertically,
         ) {
-            Text(
-                text = "Dashboard",
-                style = MaterialTheme.typography.headlineMedium,
-            )
+            Text("Dashboard", style = MaterialTheme.typography.headlineMedium)
             if (isRefreshing) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(24.dp),
-                    strokeWidth = 2.dp,
-                    color = SageGreen,
-                )
+                CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp, color = SageGreen)
             } else {
                 IconButton(onClick = { viewModel.refresh() }) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = "Refresh",
-                    )
+                    Icon(Icons.Default.Refresh, "Refresh")
                 }
             }
         }
 
+        Log.d("QuailSync", "DashboardScreen recompose: ${brooders.size} brooders, ${liveReadings.size} live readings")
+
         if (isLoading && brooders.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
-            ) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = SageGreen)
             }
         } else {
+            // Only show brooders from the REST API — one card per brooder.
+            // WebSocket live readings are overlaid by matching brooder ID.
             LazyColumn(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                items(brooders) { state ->
+                items(brooders, key = { it.brooder.id }) { state ->
                     BrooderCard(
                         state = state,
                         liveReading = liveReadings[state.brooder.id],
                     )
                 }
-                item { Spacer(modifier = Modifier.height(8.dp)) }
+                item { Spacer(Modifier.height(8.dp)) }
             }
         }
     }
 }
 
+// =====================================================================
+// Brooder Card
+// =====================================================================
+
 @Composable
 fun BrooderCard(state: BrooderState, liveReading: LiveReading?) {
+    // Use live WebSocket data if available, otherwise fall back to REST data
     val currentTemp = liveReading?.temperature
         ?: state.readings.firstOrNull()?.temperature
         ?: state.brooder.latestTemperature
@@ -216,104 +214,125 @@ fun BrooderCard(state: BrooderState, liveReading: LiveReading?) {
     val previousTemp = if (state.readings.size >= 2) state.readings[1].temperature else null
     val previousHumidity = if (state.readings.size >= 2) state.readings[1].humidity else null
 
-    val hasActiveAlerts = state.alerts.any { it.acknowledged != true }
-    val hasCriticalAlert = state.alerts.any {
-        it.acknowledged != true && it.severity?.lowercase() == "critical"
+    // Sensor status based on last reading time
+    // Not cached in remember — recalculates on every recomposition so age stays fresh
+    val sensorStatus = run {
+        val lastReadingMs = liveReading?.receivedAt
+        if (lastReadingMs != null) {
+            val age = System.currentTimeMillis() - lastReadingMs
+            when {
+                age < STALE_THRESHOLD_MS -> SensorStatus.LIVE
+                age < OFFLINE_THRESHOLD_MS -> SensorStatus.STALE
+                else -> SensorStatus.OFFLINE
+            }
+        } else if (state.readings.isNotEmpty()) {
+            // Have REST data but no live WebSocket data yet
+            SensorStatus.UNKNOWN
+        } else {
+            SensorStatus.OFFLINE
+        }
     }
 
-    val alertColor = when {
+    // Alert status
+    val hasActiveAlerts = state.alerts.any { it.acknowledged != true }
+    val hasCriticalAlert = state.alerts.any { it.acknowledged != true && it.severity?.lowercase() == "critical" }
+
+    // Status dot: sensor status takes priority for color if offline/stale
+    val statusDotColor = when {
+        sensorStatus == SensorStatus.OFFLINE -> AlertRed
+        sensorStatus == SensorStatus.STALE -> AlertYellow
         hasCriticalAlert -> AlertRed
         hasActiveAlerts -> AlertYellow
         else -> AlertGreen
     }
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(2.dp),
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = state.brooder.name,
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                Box(
-                    modifier = Modifier
-                        .size(12.dp)
-                        .clip(CircleShape)
-                        .background(alertColor),
-                )
+        Column(Modifier.padding(16.dp)) {
+            // Header: name + status dot
+            Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                Text(state.brooder.name, style = MaterialTheme.typography.titleLarge)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (sensorStatus == SensorStatus.OFFLINE || sensorStatus == SensorStatus.STALE) {
+                        Text(
+                            if (sensorStatus == SensorStatus.OFFLINE) "Offline" else "Stale",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = statusDotColor,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Box(Modifier.size(12.dp).clip(CircleShape).background(statusDotColor))
+                }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(Modifier.height(12.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-            ) {
+            // Readings
+            Row(Modifier.fillMaxWidth(), Arrangement.SpaceEvenly) {
                 // Temperature
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "Temperature",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Temperature", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = currentTemp?.let { "%.1f°F".format(it) } ?: "--",
-                            fontSize = 24.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface,
+                            currentTemp?.let { "%.1f°F".format(it) } ?: "--",
+                            fontSize = 24.sp, fontWeight = FontWeight.Bold,
+                            color = if (sensorStatus == SensorStatus.OFFLINE) MaterialTheme.colorScheme.onSurfaceVariant
+                                else MaterialTheme.colorScheme.onSurface,
                         )
                         if (currentTemp != null && previousTemp != null) {
-                            Spacer(modifier = Modifier.width(4.dp))
-                            TrendIcon(current = currentTemp, previous = previousTemp)
+                            Spacer(Modifier.width(4.dp))
+                            TrendIcon(currentTemp, previousTemp)
                         }
+                    }
+                    if (sensorStatus == SensorStatus.OFFLINE && currentTemp == null) {
+                        Text("No data", style = MaterialTheme.typography.labelSmall, color = AlertRed)
                     }
                 }
 
                 // Humidity
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "Humidity",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Humidity", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = currentHumidity?.let { "%.0f%%".format(it) } ?: "--",
-                            fontSize = 24.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface,
+                            currentHumidity?.let { "%.0f%%".format(it) } ?: "--",
+                            fontSize = 24.sp, fontWeight = FontWeight.Bold,
+                            color = if (sensorStatus == SensorStatus.OFFLINE) MaterialTheme.colorScheme.onSurfaceVariant
+                                else MaterialTheme.colorScheme.onSurface,
                         )
                         if (currentHumidity != null && previousHumidity != null) {
-                            Spacer(modifier = Modifier.width(4.dp))
-                            TrendIcon(current = currentHumidity, previous = previousHumidity)
+                            Spacer(Modifier.width(4.dp))
+                            TrendIcon(currentHumidity, previousHumidity)
                         }
+                    }
+                    if (sensorStatus == SensorStatus.OFFLINE && currentHumidity == null) {
+                        Text("No data", style = MaterialTheme.typography.labelSmall, color = AlertRed)
                     }
                 }
             }
 
+            // Alerts
             if (hasActiveAlerts) {
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(Modifier.height(8.dp))
                 val alertCount = state.alerts.count { it.acknowledged != true }
                 Text(
-                    text = "$alertCount active alert${if (alertCount != 1) "s" else ""}",
+                    "$alertCount active alert${if (alertCount != 1) "s" else ""}",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = alertColor,
+                    color = if (hasCriticalAlert) AlertRed else AlertYellow,
                 )
             }
         }
     }
 }
+
+// =====================================================================
+// Trend Icon
+// =====================================================================
 
 @Composable
 fun TrendIcon(current: Double, previous: Double) {
@@ -323,10 +342,5 @@ fun TrendIcon(current: Double, previous: Double) {
         diff < -0.5 -> Icons.Default.ArrowDownward to MaterialTheme.colorScheme.primary
         else -> Icons.Default.Remove to MaterialTheme.colorScheme.onSurfaceVariant
     }
-    Icon(
-        imageVector = icon,
-        contentDescription = "Trend",
-        modifier = Modifier.size(18.dp),
-        tint = tint,
-    )
+    Icon(icon, "Trend", Modifier.size(18.dp), tint = tint)
 }
