@@ -2,6 +2,7 @@ package com.quailsync.app.ui.screens
 
 import android.util.Log
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,8 +32,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,6 +53,7 @@ import com.quailsync.app.data.BrooderAlert
 import com.quailsync.app.data.BrooderReading
 import com.quailsync.app.data.LiveReading
 import com.quailsync.app.data.QuailSyncApi
+import com.quailsync.app.data.TargetTempResponse
 import com.quailsync.app.data.WebSocketService
 import com.quailsync.app.ui.theme.AlertGreen
 import com.quailsync.app.ui.theme.AlertRed
@@ -66,6 +72,7 @@ data class BrooderState(
     val brooder: Brooder,
     val readings: List<BrooderReading> = emptyList(),
     val alerts: List<BrooderAlert> = emptyList(),
+    val targetTemp: TargetTempResponse? = null,
 )
 
 private const val STALE_THRESHOLD_MS = 60_000L       // 1 minute
@@ -127,7 +134,10 @@ class DashboardViewModel : ViewModel() {
                     Log.e("QuailSync", "Failed to load alerts for brooder ${brooder.id}", e)
                     emptyList()
                 }
-                BrooderState(brooder, readings, alerts)
+                val targetTemp = try {
+                    api.getBrooderTargetTemp(brooder.id)
+                } catch (_: Exception) { null }
+                BrooderState(brooder, readings, alerts, targetTemp)
             }
             _brooders.value = states
             Log.d("QuailSync", "BrooderStates set: ${states.size} cards")
@@ -149,11 +159,23 @@ class DashboardViewModel : ViewModel() {
 // =====================================================================
 
 @Composable
-fun DashboardScreen(viewModel: DashboardViewModel = viewModel()) {
+fun DashboardScreen(viewModel: DashboardViewModel = viewModel(), onBrooderClick: (Int) -> Unit = {}) {
     val brooders by viewModel.brooders.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val liveReadings by viewModel.webSocketService.readings.collectAsState()
+
+    // Refresh data whenever this screen becomes visible (e.g. navigating back)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.refresh()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
@@ -187,6 +209,7 @@ fun DashboardScreen(viewModel: DashboardViewModel = viewModel()) {
                     BrooderCard(
                         state = state,
                         liveReading = liveReadings[state.brooder.id],
+                        onClick = { onBrooderClick(state.brooder.id) },
                     )
                 }
                 item { Spacer(Modifier.height(8.dp)) }
@@ -200,7 +223,7 @@ fun DashboardScreen(viewModel: DashboardViewModel = viewModel()) {
 // =====================================================================
 
 @Composable
-fun BrooderCard(state: BrooderState, liveReading: LiveReading?) {
+fun BrooderCard(state: BrooderState, liveReading: LiveReading?, onClick: () -> Unit = {}) {
     // Use live WebSocket data if available, otherwise fall back to REST data
     val currentTemp = liveReading?.temperature
         ?: state.readings.firstOrNull()?.temperature
@@ -247,7 +270,7 @@ fun BrooderCard(state: BrooderState, liveReading: LiveReading?) {
     }
 
     Card(
-        Modifier.fillMaxWidth(),
+        Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(2.dp),
@@ -313,6 +336,42 @@ fun BrooderCard(state: BrooderState, liveReading: LiveReading?) {
                     if (sensorStatus == SensorStatus.OFFLINE && currentHumidity == null) {
                         Text("No data", style = MaterialTheme.typography.labelSmall, color = AlertRed)
                     }
+                }
+            }
+
+            // Target temp + chick age
+            if (state.targetTemp != null) {
+                Spacer(Modifier.height(10.dp))
+                val tt = state.targetTemp
+                val tempInRange = currentTemp != null && currentTemp >= tt.minTempF && currentTemp <= tt.maxTempF
+                val tempColor = when {
+                    currentTemp == null -> MaterialTheme.colorScheme.onSurfaceVariant
+                    tempInRange -> AlertGreen
+                    else -> AlertRed
+                }
+
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    Arrangement.SpaceBetween, Alignment.CenterVertically,
+                ) {
+                    Column {
+                        Text(
+                            "Target: %.0f°F".format(tt.targetTempF),
+                            style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = tempColor,
+                        )
+                        if (tt.ageDays != null) {
+                            Text(
+                                "Day ${tt.ageDays} — ${tt.scheduleLabel}",
+                                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            Text("Unassigned", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    // Range indicator dot
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(tempColor))
                 }
             }
 

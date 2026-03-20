@@ -131,6 +131,8 @@ pub struct Bird {
     pub notes: Option<String>,
     #[serde(default)]
     pub nfc_tag_id: Option<String>,
+    #[serde(default)]
+    pub current_brooder_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -507,6 +509,69 @@ pub struct GraduateBird {
     pub band_color: Option<String>,
     pub nfc_tag_id: Option<String>,
     pub notes: Option<String>,
+}
+
+// =========================================================================
+// Brooder temperature schedule (coturnix quail)
+// =========================================================================
+
+/// Target temperature (°F) by chick age. Returns (target, tolerance).
+pub fn target_temp_for_age(age_days: i64) -> (f64, f64) {
+    let tolerance = 2.5;
+    let target = match age_days {
+        0..=6 => 97.0,
+        7..=13 => 92.0,
+        14..=20 => 87.0,
+        21..=27 => 82.0,
+        28..=34 => 77.0,
+        _ => 72.0, // feathered out, room temp
+    };
+    (target, tolerance)
+}
+
+/// Week label for the temperature schedule.
+pub fn temp_schedule_label(age_days: i64) -> String {
+    let week = (age_days / 7) + 1;
+    let (target, _) = target_temp_for_age(age_days);
+    if age_days >= 35 {
+        format!("Week {}+ — {:.0}°F (feathered)", week, target)
+    } else {
+        format!("Week {} — {:.0}°F", week, target)
+    }
+}
+
+/// Default adult/unassigned brooder temperature range.
+pub const ADULT_TEMP_MIN: f64 = 65.0;
+pub const ADULT_TEMP_MAX: f64 = 75.0;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TargetTempResponse {
+    pub brooder_id: i64,
+    pub target_temp_f: f64,
+    pub min_temp_f: f64,
+    pub max_temp_f: f64,
+    pub week: i64,
+    pub age_days: Option<i64>,
+    pub chick_group_id: Option<i64>,
+    pub schedule_label: String,
+    pub status: String, // "heat_required", "weaning", "ambient", "unassigned"
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssignGroupRequest {
+    pub group_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MoveBirdRequest {
+    pub target_brooder_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrooderResidentsResponse {
+    pub brooder_id: i64,
+    pub chick_groups: Vec<ChickGroup>,
+    pub individual_birds: Vec<Bird>,
 }
 
 /// Inbreeding coefficient for a potential male-female pairing.

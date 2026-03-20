@@ -60,6 +60,7 @@ import com.quailsync.app.data.MonitoringService
 import com.quailsync.app.data.NfcService
 import com.quailsync.app.data.NotificationHelper
 import com.quailsync.app.ui.screens.BatchState
+import com.quailsync.app.ui.screens.BrooderManageScreen
 import com.quailsync.app.ui.screens.CameraScreen
 import com.quailsync.app.ui.screens.ClutchScreen
 import com.quailsync.app.ui.screens.DashboardScreen
@@ -260,12 +261,18 @@ fun QuailSyncApp(
             startDestination = Screen.Dashboard.route,
             modifier = Modifier.padding(innerPadding),
         ) {
-            composable(Screen.Dashboard.route) { DashboardScreen() }
+            composable(Screen.Dashboard.route) {
+                DashboardScreen(onBrooderClick = { id -> navController.navigate("brooder/$id") })
+            }
             composable(Screen.Cameras.route) { CameraScreen() }
             composable(Screen.Flock.route) { FlockScreen() }
             composable(Screen.Nfc.route) { NfcScreen(nfcService = nfcService, viewModel = nfcViewModel) }
             composable(Screen.Clutches.route) { ClutchScreen() }
             composable(Screen.Settings.route) { SettingsScreen() }
+            composable("brooder/{id}") { backStackEntry ->
+                val id = backStackEntry.arguments?.getString("id")?.toIntOrNull() ?: 0
+                BrooderManageScreen(brooderId = id, onBack = { navController.popBackStack() })
+            }
         }
     }
 }

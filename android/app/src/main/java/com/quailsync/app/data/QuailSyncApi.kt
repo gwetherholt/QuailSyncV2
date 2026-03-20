@@ -138,6 +138,44 @@ data class PhotoUploadResponse(
     @SerializedName("path") val path: String? = null,
 )
 
+data class TargetTempResponse(
+    @SerializedName("brooder_id") val brooderId: Int,
+    @SerializedName("target_temp_f") val targetTempF: Double,
+    @SerializedName("min_temp_f") val minTempF: Double,
+    @SerializedName("max_temp_f") val maxTempF: Double,
+    @SerializedName("week") val week: Int,
+    @SerializedName("age_days") val ageDays: Int?,
+    @SerializedName("chick_group_id") val chickGroupId: Int?,
+    @SerializedName("schedule_label") val scheduleLabel: String,
+    @SerializedName("status") val status: String,
+)
+
+data class ChickGroupDto(
+    @SerializedName("id") val id: Int,
+    @SerializedName("clutch_id") val clutchId: Int? = null,
+    @SerializedName("bloodline_id") val bloodlineId: Int,
+    @SerializedName("brooder_id") val brooderId: Int? = null,
+    @SerializedName("initial_count") val initialCount: Int,
+    @SerializedName("current_count") val currentCount: Int,
+    @SerializedName("hatch_date") val hatchDate: String,
+    @SerializedName("status") val status: String,
+    @SerializedName("notes") val notes: String? = null,
+)
+
+data class AssignGroupRequest(
+    @SerializedName("group_id") val groupId: Int,
+)
+
+data class BrooderResidentsResponse(
+    @SerializedName("brooder_id") val brooderId: Int,
+    @SerializedName("chick_groups") val chickGroups: List<ChickGroupDto>,
+    @SerializedName("individual_birds") val individualBirds: List<Bird>,
+)
+
+data class MoveBirdRequest(
+    @SerializedName("target_brooder_id") val targetBrooderId: Int?,
+)
+
 interface QuailSyncApi {
 
     @GET("api/brooders")
@@ -185,6 +223,21 @@ interface QuailSyncApi {
 
     @PUT("api/brooders/{id}")
     suspend fun updateBrooder(@Path("id") id: Int, @Body request: UpdateBrooderRequest): Brooder
+
+    @GET("api/brooders/{id}/target-temp")
+    suspend fun getBrooderTargetTemp(@Path("id") id: Int): TargetTempResponse
+
+    @PUT("api/brooders/{id}/assign-group")
+    suspend fun assignGroupToBrooder(@Path("id") id: Int, @Body request: AssignGroupRequest): ChickGroupDto
+
+    @GET("api/brooders/{id}/residents")
+    suspend fun getBrooderResidents(@Path("id") id: Int): BrooderResidentsResponse
+
+    @GET("api/chick-groups")
+    suspend fun getChickGroups(): List<ChickGroupDto>
+
+    @PUT("api/birds/{id}/move")
+    suspend fun moveBird(@Path("id") id: Int, @Body request: MoveBirdRequest): Bird
 
     companion object {
         fun create(baseUrl: String = BuildConfig.BASE_URL): QuailSyncApi {
