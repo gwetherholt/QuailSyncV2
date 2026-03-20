@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Refresh
@@ -44,6 +45,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -66,6 +68,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -146,8 +149,9 @@ class CameraViewModel : ViewModel() {
         // Fetch standalone cameras
         try {
             val cameras = api.getCameras()
-            Log.d("QuailSync", "Cameras loaded: ${cameras.size}")
+            Log.d("QuailSync", "Standalone cameras loaded: ${cameras.size}")
             cameras.forEach { c ->
+                Log.d("QuailSync", "  Standalone: id=${c.id}, name='${c.name}', feedUrl=${c.feedUrl}, url=${c.url}")
                 items.add(CameraItem(
                     name = c.name,
                     subtitle = c.brooderName ?: c.location,
@@ -164,12 +168,14 @@ class CameraViewModel : ViewModel() {
             val brooders = api.getBrooders()
             _brooders.value = brooders
             Log.d("QuailSync", "Brooders loaded: ${brooders.size}")
-            brooders.filter { it.cameraUrl != null }.forEach { b ->
-                // Avoid duplicates if the camera is also in /api/cameras
-                val alreadyListed = items.any { item ->
-                    val url = item.streamUrl ?: ""
-                    url == b.cameraUrl
-                }
+            brooders.forEach { b ->
+                Log.d("QuailSync", "  Brooder ${b.id} '${b.name}': cameraUrl=${b.cameraUrl}")
+            }
+            val broodersWithCameras = brooders.filter { it.cameraUrl != null }
+            Log.d("QuailSync", "Brooders with camera_url: ${broodersWithCameras.size}")
+            broodersWithCameras.forEach { b ->
+                val alreadyListed = items.any { item -> item.streamUrl == b.cameraUrl }
+                Log.d("QuailSync", "  Brooder ${b.id} '${b.name}' url=${b.cameraUrl} alreadyListed=$alreadyListed")
                 if (!alreadyListed) {
                     items.add(CameraItem(
                         name = "${b.name} Camera",
@@ -181,6 +187,15 @@ class CameraViewModel : ViewModel() {
             }
         } catch (e: Exception) {
             Log.e("QuailSync", "Failed to load brooders for cameras", e)
+        }
+
+        Log.d("QuailSync", "Building camera list: ${items.size} items")
+        items.forEach { item ->
+            val brooderId = when (val src = item.source) {
+                is CameraSource.BrooderCamera -> src.brooder.id
+                is CameraSource.Standalone -> src.camera.brooderId
+            }
+            Log.d("QuailSync", "  Camera item: name='${item.name}', url=${item.streamUrl}, brooderId=$brooderId")
         }
 
         _cameraItems.value = items
@@ -268,6 +283,71 @@ class CameraViewModel : ViewModel() {
         }
     }
 
+    fun reassignCamera(item: CameraItem, newBrooderId: Int) {
+        val movingUrl = item.streamUrl ?: return
+        val baseUrl = com.quailsync.app.BuildConfig.BASE_URL.trimEnd('/')
+        val oldBrooderId = when (val src = item.source) {
+            is CameraSource.BrooderCamera -> src.brooder.id
+            is CameraSource.Standalone -> src.camera.brooderId
+        }
+
+        // Capture both URLs BEFORE any API calls
+        val newBrooderOldUrl = _brooders.value.find { it.id == newBrooderId }?.cameraUrl
+        val isSwap = oldBrooderId != null && oldBrooderId != newBrooderId && newBrooderOldUrl != null
+
+        Log.d("QuailSync", "reassignCamera: '${item.name}'")
+        Log.d("QuailSync", "  movingUrl=$movingUrl (currently on brooder $oldBrooderId)")
+        Log.d("QuailSync", "  newBrooderId=$newBrooderId, newBrooderOldUrl=$newBrooderOldUrl")
+        Log.d("QuailSync", "  isSwap=$isSwap")
+
+        viewModelScope.launch {
+            try {
+                val client = okhttp3.OkHttpClient()
+                withContext(Dispatchers.IO) {
+                    // Step 1: Set the NEW brooder to the camera being moved
+                    Log.d("QuailSync", "Step 1: PUT brooder $newBrooderId camera_url=$movingUrl")
+                    val resp1 = client.newCall(
+                        okhttp3.Request.Builder()
+                            .url("$baseUrl/api/brooders/$newBrooderId")
+                            .put("""{"camera_url": "$movingUrl"}""".toRequestBody("application/json".toMediaType()))
+                            .build()
+                    ).execute()
+                    Log.d("QuailSync", "Step 1 response: ${resp1.code}")
+
+                    // Step 2: Update the OLD brooder
+                    if (oldBrooderId != null && oldBrooderId != newBrooderId) {
+                        if (isSwap) {
+                            // Swap: give old brooder the new brooder's previous camera
+                            Log.d("QuailSync", "Step 2 (swap): PUT brooder $oldBrooderId camera_url=$newBrooderOldUrl")
+                            val resp2 = client.newCall(
+                                okhttp3.Request.Builder()
+                                    .url("$baseUrl/api/brooders/$oldBrooderId")
+                                    .put("""{"camera_url": "$newBrooderOldUrl"}""".toRequestBody("application/json".toMediaType()))
+                                    .build()
+                            ).execute()
+                            Log.d("QuailSync", "Step 2 response: ${resp2.code}")
+                        } else {
+                            // No swap: clear old brooder's camera
+                            Log.d("QuailSync", "Step 2 (clear): PUT brooder $oldBrooderId camera_url=null")
+                            val resp2 = client.newCall(
+                                okhttp3.Request.Builder()
+                                    .url("$baseUrl/api/brooders/$oldBrooderId")
+                                    .put("""{"camera_url": null}""".toRequestBody("application/json".toMediaType()))
+                                    .build()
+                            ).execute()
+                            Log.d("QuailSync", "Step 2 response: ${resp2.code}")
+                        }
+                    }
+                }
+                Log.d("QuailSync", "Reassign complete, refreshing")
+                loadAllSuspend()
+            } catch (e: Exception) {
+                Log.e("QuailSync", "Reassign failed", e)
+                _saveError.value = "Reassign failed: ${e.message}"
+            }
+        }
+    }
+
     fun clearSaveError() { _saveError.value = null }
 }
 
@@ -280,6 +360,7 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
     val cameraItems by viewModel.cameraItems.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val allBrooders by viewModel.brooders.collectAsState()
     var showAddDialog by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -319,7 +400,22 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
             }
             else -> {
                 LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    items(cameraItems) { item -> CameraCard(item, onDelete = { viewModel.deleteCamera(item) }) }
+                    items(
+                        cameraItems,
+                        key = { item ->
+                            when (val src = item.source) {
+                                is CameraSource.Standalone -> "cam-${src.camera.id}"
+                                is CameraSource.BrooderCamera -> "brooder-${src.brooder.id}"
+                            }
+                        },
+                    ) { item ->
+                        CameraCard(
+                            item = item,
+                            brooders = allBrooders,
+                            onDelete = { viewModel.deleteCamera(item) },
+                            onReassign = { newBrooderId -> viewModel.reassignCamera(item, newBrooderId) },
+                        )
+                    }
                     item { Spacer(Modifier.height(8.dp)) }
                 }
             }
@@ -335,39 +431,44 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
 // Camera Card
 // =====================================================================
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CameraCard(item: CameraItem, onDelete: () -> Unit = {}) {
+fun CameraCard(
+    item: CameraItem,
+    brooders: List<Brooder> = emptyList(),
+    onDelete: () -> Unit = {},
+    onReassign: (Int) -> Unit = {},
+) {
     val context = LocalContext.current
     var showFullScreen by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showReassign by remember { mutableStateOf(false) }
+    var reassignExpanded by remember { mutableStateOf(false) }
     val snapshotUrl = item.streamUrl?.replace("/stream", "/snapshot")
 
+    // Current brooder ID for this camera
+    val currentBrooderId = when (val src = item.source) {
+        is CameraSource.BrooderCamera -> src.brooder.id
+        is CameraSource.Standalone -> src.camera.brooderId
+    }
+
     if (showDeleteConfirm) {
-        val sourceType = when (item.source) {
-            is CameraSource.Standalone -> "standalone #${item.source.camera.id}"
-            is CameraSource.BrooderCamera -> "brooder #${item.source.brooder.id} (${item.source.brooder.name})"
-        }
         val sourceLabel = when (item.source) {
             is CameraSource.Standalone -> "This will remove the camera '${item.name}' from the system."
             is CameraSource.BrooderCamera -> "This will clear the camera URL from ${item.source.brooder.name}."
         }
-        Log.d("QuailSync", "Delete confirm dialog shown for: $sourceType")
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
             title = { Text("Remove Camera?") },
             text = { Text(sourceLabel) },
             confirmButton = {
                 Button(
-                    onClick = {
-                        Log.d("QuailSync", "Delete confirmed for: $sourceType")
-                        showDeleteConfirm = false
-                        onDelete()
-                    },
+                    onClick = { showDeleteConfirm = false; onDelete() },
                     colors = ButtonDefaults.buttonColors(containerColor = androidx.compose.ui.graphics.Color(0xFFCC4444)),
                 ) { Text("Remove") }
             },
             dismissButton = {
-                OutlinedButton(onClick = { Log.d("QuailSync", "Delete cancelled"); showDeleteConfirm = false }) { Text("Cancel") }
+                OutlinedButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") }
             },
         )
     }
@@ -381,15 +482,70 @@ fun CameraCard(item: CameraItem, onDelete: () -> Unit = {}) {
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(item.name, style = MaterialTheme.typography.titleLarge)
-                    if (item.subtitle != null) Text(item.subtitle, style = MaterialTheme.typography.bodyMedium)
+                    // Brooder assignment with edit icon
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val brooderLabel = currentBrooderId?.let { id ->
+                            brooders.find { it.id == id }?.name ?: "Brooder #$id"
+                        } ?: "Not assigned"
+                        Text(
+                            brooderLabel,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (currentBrooderId != null) SageGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (brooders.isNotEmpty()) {
+                            IconButton(
+                                onClick = { showReassign = !showReassign },
+                                modifier = Modifier.size(28.dp),
+                            ) {
+                                Icon(Icons.Default.Edit, "Change brooder", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
                 }
                 Row {
-                    Icon(Icons.Default.CameraAlt, null, tint = SageGreen)
-                    IconButton(onClick = {
-                        Log.d("QuailSync", "Delete icon tapped for camera: '${item.name}'")
-                        showDeleteConfirm = true
-                    }) {
+                    IconButton(onClick = { showDeleteConfirm = true }) {
                         Icon(Icons.Default.Delete, "Delete", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+
+            // Reassign brooder dropdown
+            if (showReassign && brooders.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                ExposedDropdownMenuBox(reassignExpanded, { reassignExpanded = it }) {
+                    OutlinedTextField(
+                        value = currentBrooderId?.let { id -> brooders.find { it.id == id }?.name ?: "Brooder #$id" } ?: "Select brooder",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Assign to brooder") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(reassignExpanded) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                    )
+                    ExposedDropdownMenu(reassignExpanded, { reassignExpanded = false }) {
+                        brooders.forEach { b ->
+                            val isCurrent = b.id == currentBrooderId
+                            val hasCamera = b.cameraUrl != null && b.id != currentBrooderId
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        b.name + when {
+                                            isCurrent -> " (current)"
+                                            hasCamera -> " (has camera — will swap)"
+                                            else -> ""
+                                        },
+                                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                    )
+                                },
+                                onClick = {
+                                    reassignExpanded = false
+                                    if (!isCurrent) {
+                                        Log.d("QuailSync", "Reassign camera '${item.name}' to brooder ${b.id} (${b.name})")
+                                        onReassign(b.id)
+                                        showReassign = false
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -440,6 +596,7 @@ fun CameraCard(item: CameraItem, onDelete: () -> Unit = {}) {
 @Composable
 fun AddCameraDialog(viewModel: CameraViewModel, onDismiss: () -> Unit) {
     val brooders by viewModel.brooders.collectAsState()
+    val cameraItems by viewModel.cameraItems.collectAsState()
     val saveError by viewModel.saveError.collectAsState()
     var tabIndex by remember { mutableIntStateOf(0) }
 
@@ -453,6 +610,10 @@ fun AddCameraDialog(viewModel: CameraViewModel, onDismiss: () -> Unit) {
     var cameraUrl by remember { mutableStateOf("") }
     var cameraLocation by remember { mutableStateOf("") }
 
+    // Brooders with existing camera URLs (for the "existing cameras" section)
+    val broodersWithCameras = brooders.filter { it.cameraUrl != null }
+    val broodersWithoutCameras = brooders.filter { it.cameraUrl == null }
+
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Card(
             Modifier.fillMaxWidth().padding(16.dp),
@@ -463,6 +624,40 @@ fun AddCameraDialog(viewModel: CameraViewModel, onDismiss: () -> Unit) {
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                     Text("Add Camera", style = MaterialTheme.typography.headlineMedium)
                     IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "Close") }
+                }
+
+                // Existing cameras quick-assign section
+                if (broodersWithCameras.isNotEmpty() && broodersWithoutCameras.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("Active Cameras", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(4.dp))
+                    broodersWithCameras.forEach { b ->
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            Arrangement.SpaceBetween, Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(b.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Text(
+                                    b.cameraUrl ?: "",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                )
+                            }
+                            Icon(Icons.Default.CameraAlt, null, Modifier.size(18.dp), tint = SageGreen)
+                        }
+                    }
+                    if (broodersWithoutCameras.isNotEmpty()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "${broodersWithoutCameras.size} brooder${if (broodersWithoutCameras.size != 1) "s" else ""} without cameras",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    HorizontalDivider()
                 }
 
                 Spacer(Modifier.height(8.dp))
@@ -614,6 +809,7 @@ fun MjpegStreamView(url: String, modifier: Modifier = Modifier) {
         if (hasError) {
             CameraOfflinePlaceholder()
         } else {
+            var lastLoadedUrl by remember { mutableStateOf("") }
             AndroidView(
                 factory = { ctx ->
                     WebView(ctx).apply {
@@ -630,6 +826,13 @@ fun MjpegStreamView(url: String, modifier: Modifier = Modifier) {
                             }
                         }
                         loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+                        lastLoadedUrl = url
+                    }
+                },
+                update = { webView ->
+                    if (url != lastLoadedUrl) {
+                        webView.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+                        lastLoadedUrl = url
                     }
                 },
                 modifier = Modifier.fillMaxSize(),
