@@ -1,0 +1,5 @@
+FROM python:3.13-slim
+RUN pip install websockets psutil
+WORKDIR /app
+COPY pi_agent.py .
+CMD ["python3", "pi_agent.py", "--server", "ws://server:3000/ws"]

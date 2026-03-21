@@ -1,0 +1,5 @@
+FROM python:3.13-slim
+RUN apt-get update && apt-get install -y libcamera-dev libcap-dev python3-libcamera python3-picamera2 python3-pyzbar python3-pil && rm -rf /var/lib/apt/lists/*
+RUN pip install websockets
+WORKDIR /app
+COPY camera_stream.py .
