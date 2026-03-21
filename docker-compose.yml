@@ -1,60 +1,56 @@
 services:
   server:
     build: .
-    ports:
-      - "3000:3000"
-      - "3443:3443"
+    network_mode: host
     volumes:
       - ./data:/data
     restart: always
 
   sensors:
-    image: python:3.13-slim
-    volumes:
-      - ./pi-agent:/app
-      - /sys/bus/iio/devices:/sys/bus/iio/devices:ro
-    working_dir: /app
+    build:
+      context: ./pi-agent
+      dockerfile: Dockerfile.sensors
+    network_mode: host
     privileged: true
+    volumes:
+      - /sys/bus/iio/devices:/sys/bus/iio/devices:ro
     depends_on:
       - server
-    command: python3 pi_agent.py --server http://server:3000
     restart: always
 
   camera1:
-    image: python:3.13-slim
-    volumes:
-      - ./pi-agent:/app
-    working_dir: /app
+    build:
+      context: ./pi-agent
+      dockerfile: Dockerfile.camera
+    network_mode: host
     privileged: true
-    devices:
-      - /dev/video0:/dev/video0
-    ports:
-      - "8080:8080"
+    volumes:
+      - /dev:/dev
+      - /run/udev:/run/udev:ro
     depends_on:
       - server
     command: >
       python3 camera_stream.py
-      --server ws://server:3000/ws
+      --server ws://localhost:3000/ws
       --brooder-id 1
       --camera-index 0
       --port 8080
     restart: always
 
   camera2:
-    image: python:3.13-slim
-    volumes:
-      - ./pi-agent:/app
-    working_dir: /app
+    build:
+      context: ./pi-agent
+      dockerfile: Dockerfile.camera
+    network_mode: host
     privileged: true
-    devices:
-      - /dev/video2:/dev/video2
-    ports:
-      - "8081:8081"
+    volumes:
+      - /dev:/dev
+      - /run/udev:/run/udev:ro
     depends_on:
       - server
     command: >
       python3 camera_stream.py
-      --server ws://server:3000/ws
+      --server ws://localhost:3000/ws
       --brooder-id 2
       --camera-index 1
       --port 8081
