@@ -898,6 +898,7 @@ async fn cmd_clutch_update(
         eggs_infertile: infertile,
         eggs_damaged: damaged,
         hatch_notes,
+        set_date: None,
     };
 
     let resp = reqwest::Client::new()
