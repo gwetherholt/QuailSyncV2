@@ -59,6 +59,7 @@ import com.quailsync.app.data.HatchCountdownWorker
 import com.quailsync.app.data.MonitoringService
 import com.quailsync.app.data.NfcService
 import com.quailsync.app.data.NotificationHelper
+import com.quailsync.app.data.ServerConfig
 import com.quailsync.app.ui.screens.BatchState
 import com.quailsync.app.ui.screens.BrooderManageScreen
 import com.quailsync.app.ui.screens.CameraScreen
@@ -111,7 +112,7 @@ class MainActivity : ComponentActivity() {
 
         nfcAdapter = NfcAdapter.getDefaultAdapter(this)
         nfcService.checkAvailability(nfcAdapter)
-        nfcViewModel = NfcViewModel(nfcService)
+        nfcViewModel = NfcViewModel(nfcService, ServerConfig.getServerUrl(this))
 
         handleNfcIntent(intent)
 
@@ -289,11 +290,57 @@ fun SettingsScreen() {
     var monitoringEnabled by remember {
         mutableStateOf(MonitoringService.isMonitoringEnabled(context))
     }
+    var serverUrl by remember {
+        mutableStateOf(ServerConfig.getServerUrl(context))
+    }
+    var serverUrlSaved by remember { mutableStateOf(true) }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Text("Settings", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(16.dp))
 
+        // Server Connection card
+        androidx.compose.material3.Card(
+            Modifier.fillMaxWidth(),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+            colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = androidx.compose.material3.CardDefaults.cardElevation(2.dp),
+        ) {
+            Column(Modifier.padding(16.dp)) {
+                Text("Server Connection", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "The URL of your QuailSync server. Changes take effect after restarting the app.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                androidx.compose.material3.OutlinedTextField(
+                    value = serverUrl,
+                    onValueChange = { serverUrl = it; serverUrlSaved = false },
+                    label = { Text("Server URL") },
+                    placeholder = { Text(ServerConfig.DEFAULT_URL) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                androidx.compose.material3.Button(
+                    onClick = {
+                        ServerConfig.setServerUrl(context, serverUrl)
+                        serverUrlSaved = true
+                        android.widget.Toast.makeText(context, "Server URL saved — restart app to apply", android.widget.Toast.LENGTH_SHORT).show()
+                    },
+                    enabled = !serverUrlSaved,
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = SageGreen),
+                ) {
+                    Text(if (serverUrlSaved) "Saved" else "Save")
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // Notifications card
         androidx.compose.material3.Card(
             Modifier.fillMaxWidth(),
             shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),

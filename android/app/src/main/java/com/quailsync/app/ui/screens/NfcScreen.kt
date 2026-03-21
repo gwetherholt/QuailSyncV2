@@ -179,8 +179,8 @@ sealed class BatchState {
 // ViewModel
 // =====================================================================
 
-class NfcViewModel(val nfcService: NfcService) : ViewModel() {
-    private val api = QuailSyncApi.create()
+class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() {
+    private val api = QuailSyncApi.create(serverUrl)
 
     private val _birds = MutableStateFlow<List<Bird>>(emptyList())
     val birds: StateFlow<List<Bird>> = _birds.asStateFlow()

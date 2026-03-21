@@ -6,7 +6,6 @@ import android.content.Intent
 import android.os.IBinder
 import android.util.Log
 import com.google.gson.JsonParser
-import com.quailsync.app.BuildConfig
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -104,7 +103,7 @@ class MonitoringService : Service() {
     }
 
     private fun connectWebSocket() {
-        val baseUrl = BuildConfig.BASE_URL
+        val baseUrl = ServerConfig.getServerUrl(this)
         val wsUrl = baseUrl
             .replace("http://", "ws://")
             .replace("https://", "wss://")

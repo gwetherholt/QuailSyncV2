@@ -63,7 +63,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.quailsync.app.data.Bloodline
@@ -73,6 +74,7 @@ import com.quailsync.app.data.Clutch
 import com.quailsync.app.data.CreateChickGroupRequest
 import com.quailsync.app.data.CreateClutchRequest
 import com.quailsync.app.data.QuailSyncApi
+import com.quailsync.app.data.ServerConfig
 import com.quailsync.app.data.UpdateClutchRequest
 import com.quailsync.app.ui.theme.AlertGreen
 import com.quailsync.app.ui.theme.AlertRed
@@ -95,8 +97,8 @@ private const val BANDING_AGE_DAYS = 28
 // ViewModel
 // =====================================================================
 
-class ClutchViewModel : ViewModel() {
-    private val api = QuailSyncApi.create()
+class ClutchViewModel(application: Application) : AndroidViewModel(application) {
+    private val api = QuailSyncApi.create(ServerConfig.getServerUrl(application))
 
     private val _clutches = MutableStateFlow<List<Clutch>>(emptyList())
     val clutches: StateFlow<List<Clutch>> = _clutches.asStateFlow()
@@ -886,7 +888,8 @@ fun EditChickGroupDialog(group: ChickGroupDto, brooders: List<Brooder>, viewMode
     var brooderExpanded by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
-    val baseUrl = com.quailsync.app.BuildConfig.BASE_URL.trimEnd('/')
+    val context = LocalContext.current
+    val baseUrl = ServerConfig.getServerUrl(context).trimEnd('/')
 
     AlertDialog(
         onDismissRequest = onDismiss,

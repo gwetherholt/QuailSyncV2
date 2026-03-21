@@ -45,7 +45,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.quailsync.app.data.Brooder
@@ -53,6 +54,7 @@ import com.quailsync.app.data.BrooderAlert
 import com.quailsync.app.data.BrooderReading
 import com.quailsync.app.data.LiveReading
 import com.quailsync.app.data.QuailSyncApi
+import com.quailsync.app.data.ServerConfig
 import com.quailsync.app.data.TargetTempResponse
 import com.quailsync.app.data.WebSocketService
 import com.quailsync.app.ui.theme.AlertGreen
@@ -84,9 +86,9 @@ enum class SensorStatus { LIVE, STALE, OFFLINE, UNKNOWN }
 // ViewModel
 // =====================================================================
 
-class DashboardViewModel : ViewModel() {
-    private val api = QuailSyncApi.create()
-    val webSocketService = WebSocketService()
+class DashboardViewModel(application: Application) : AndroidViewModel(application) {
+    private val api = QuailSyncApi.create(ServerConfig.getServerUrl(application))
+    val webSocketService = WebSocketService(ServerConfig.getServerUrl(application))
 
     private val _brooders = MutableStateFlow<List<BrooderState>>(emptyList())
     val brooders: StateFlow<List<BrooderState>> = _brooders.asStateFlow()

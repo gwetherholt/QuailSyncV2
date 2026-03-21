@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import com.quailsync.app.data.Bird
 import com.quailsync.app.data.ChickGroupDto
 import com.quailsync.app.data.QuailSyncApi
+import com.quailsync.app.data.ServerConfig
 import com.quailsync.app.data.TargetTempResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -69,7 +70,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
     val context = LocalContext.current
-    val api = remember { QuailSyncApi.create() }
+    val serverUrl = remember { ServerConfig.getServerUrl(context) }
+    val api = remember { QuailSyncApi.create(serverUrl) }
     val scope = rememberCoroutineScope()
     var targetTemp by remember { mutableStateOf<TargetTempResponse?>(null) }
     var allGroups by remember { mutableStateOf<List<ChickGroupDto>>(emptyList()) }
@@ -97,7 +99,7 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
             allGroups = try {
                 // First log the raw JSON to see exact field names
                 val rawJson = withContext(Dispatchers.IO) {
-                    val url = "${com.quailsync.app.BuildConfig.BASE_URL.trimEnd('/')}/api/chick-groups"
+                    val url = "${serverUrl.trimEnd('/')}/api/chick-groups"
                     val req = okhttp3.Request.Builder().url(url).get().build()
                     val resp = okhttp3.OkHttpClient().newCall(req).execute()
                     resp.body?.string()
@@ -224,7 +226,7 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
                             Log.d("QuailSync", "Unassign tapped: brooder=$brooderId, group=${currentGroup.id}")
                             scope.launch {
                                 try {
-                                    val url = "${com.quailsync.app.BuildConfig.BASE_URL.trimEnd('/')}/api/brooders/$brooderId/assign-group"
+                                    val url = "${serverUrl.trimEnd('/')}/api/brooders/$brooderId/assign-group"
                                     Log.d("QuailSync", "DELETE $url")
                                     val code = withContext(Dispatchers.IO) {
                                         val req = okhttp3.Request.Builder().url(url).delete().build()
@@ -296,7 +298,7 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
                             Log.d("QuailSync", "Assign button tapped: group=$gid -> brooder=$brooderId")
                             scope.launch {
                                 try {
-                                    val url = "${com.quailsync.app.BuildConfig.BASE_URL.trimEnd('/')}/api/brooders/$brooderId/assign-group"
+                                    val url = "${serverUrl.trimEnd('/')}/api/brooders/$brooderId/assign-group"
                                     val jsonBody = """{"group_id": $gid}"""
                                     Log.d("QuailSync", "PUT $url body=$jsonBody")
                                     val (code, respBody) = withContext(Dispatchers.IO) {

@@ -3,7 +3,6 @@ package com.quailsync.app.data
 import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonParser
-import com.quailsync.app.BuildConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,7 +22,7 @@ data class LiveReading(
 )
 
 class WebSocketService(
-    private val baseUrl: String = BuildConfig.BASE_URL,
+    private val baseUrl: String,
 ) {
     private val gson = Gson()
     private val client = OkHttpClient.Builder()

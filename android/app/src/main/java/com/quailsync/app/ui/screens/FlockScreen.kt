@@ -81,13 +81,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.quailsync.app.data.Bird
 import com.quailsync.app.data.BirdWeight
 import com.quailsync.app.data.Bloodline
 import com.quailsync.app.data.QuailSyncApi
+import com.quailsync.app.data.ServerConfig
 import com.quailsync.app.ui.theme.SageGreen
 import com.quailsync.app.ui.theme.SageGreenLight
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -102,8 +104,8 @@ import java.io.File
 // ViewModel
 // =====================================================================
 
-class FlockViewModel : ViewModel() {
-    private val api = QuailSyncApi.create()
+class FlockViewModel(application: Application) : AndroidViewModel(application) {
+    private val api = QuailSyncApi.create(ServerConfig.getServerUrl(application))
 
     private val _birds = MutableStateFlow<List<Bird>>(emptyList())
     val birds: StateFlow<List<Bird>> = _birds.asStateFlow()
