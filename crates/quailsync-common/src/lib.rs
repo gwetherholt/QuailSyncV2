@@ -232,6 +232,7 @@ pub struct UpdateClutch {
     pub eggs_hatched: Option<u32>,
     pub status: Option<ClutchStatus>,
     pub notes: Option<String>,
+    pub set_date: Option<NaiveDate>,
     pub eggs_stillborn: Option<u32>,
     pub eggs_quit: Option<u32>,
     pub eggs_infertile: Option<u32>,

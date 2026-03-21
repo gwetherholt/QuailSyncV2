@@ -91,8 +91,14 @@ data class CreateWeightRequest(
 data class Bloodline(
     @SerializedName("id") val id: Int,
     @SerializedName("name") val name: String,
-    @SerializedName("color") val color: String? = null,
-    @SerializedName("description") val description: String? = null,
+    @SerializedName("source") val source: String? = null,
+    @SerializedName("notes") val notes: String? = null,
+)
+
+data class CreateBloodlineRequest(
+    @SerializedName("name") val name: String,
+    @SerializedName("source") val source: String = "",
+    @SerializedName("notes") val notes: String? = null,
 )
 
 data class Clutch(
@@ -106,6 +112,36 @@ data class Clutch(
     @SerializedName("set_date") val setDate: String? = null,
     @SerializedName("expected_hatch_date") val expectedHatchDate: String? = null,
     @SerializedName("status") val status: String? = null,
+    @SerializedName("notes") val notes: String? = null,
+)
+
+data class CreateClutchRequest(
+    @SerializedName("bloodline_id") val bloodlineId: Int? = null,
+    @SerializedName("eggs_set") val eggsSet: Int,
+    @SerializedName("set_date") val setDate: String,
+    @SerializedName("status") val status: String = "Incubating",
+    @SerializedName("notes") val notes: String? = null,
+)
+
+data class UpdateClutchRequest(
+    @SerializedName("eggs_fertile") val eggsFertile: Int? = null,
+    @SerializedName("eggs_hatched") val eggsHatched: Int? = null,
+    @SerializedName("status") val status: String? = null,
+    @SerializedName("notes") val notes: String? = null,
+    @SerializedName("set_date") val setDate: String? = null,
+    @SerializedName("eggs_stillborn") val eggsStillborn: Int? = null,
+    @SerializedName("eggs_quit") val eggsQuit: Int? = null,
+    @SerializedName("eggs_infertile") val eggsInfertile: Int? = null,
+    @SerializedName("eggs_damaged") val eggsDamaged: Int? = null,
+    @SerializedName("hatch_notes") val hatchNotes: String? = null,
+)
+
+data class CreateChickGroupRequest(
+    @SerializedName("clutch_id") val clutchId: Int? = null,
+    @SerializedName("bloodline_id") val bloodlineId: Int,
+    @SerializedName("brooder_id") val brooderId: Int? = null,
+    @SerializedName("initial_count") val initialCount: Int,
+    @SerializedName("hatch_date") val hatchDate: String,
     @SerializedName("notes") val notes: String? = null,
 )
 
@@ -213,8 +249,26 @@ interface QuailSyncApi {
     @GET("api/bloodlines")
     suspend fun getBloodlines(): List<Bloodline>
 
+    @POST("api/bloodlines")
+    suspend fun createBloodline(@Body request: CreateBloodlineRequest): Bloodline
+
     @GET("api/clutches")
     suspend fun getClutches(): List<Clutch>
+
+    @POST("api/clutches")
+    suspend fun createClutch(@Body request: CreateClutchRequest): Clutch
+
+    @PUT("api/clutches/{id}")
+    suspend fun updateClutch(@Path("id") id: Int, @Body request: UpdateClutchRequest): Clutch
+
+    @DELETE("api/clutches/{id}")
+    suspend fun deleteClutch(@Path("id") id: Int): retrofit2.Response<Unit>
+
+    @POST("api/chick-groups")
+    suspend fun createChickGroup(@Body request: CreateChickGroupRequest): ChickGroupDto
+
+    @DELETE("api/chick-groups/{id}")
+    suspend fun deleteChickGroup(@Path("id") id: Int): retrofit2.Response<Unit>
 
     @GET("api/cameras")
     suspend fun getCameras(): List<Camera>
