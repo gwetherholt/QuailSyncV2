@@ -30,18 +30,16 @@ services:
       - PYTHONUNBUFFERED=1
     volumes:
       - ./pi-agent:/app
-      - /usr/lib/python3:/usr/lib/python3:ro
+      - /usr/lib/python3/dist-packages/libcamera:/usr/lib/python3/dist-packages/libcamera:ro
+      - /usr/lib/python3/dist-packages/picamera2:/usr/lib/python3/dist-packages/picamera2:ro
+      - /usr/lib/python3/dist-packages/v4l2:/usr/lib/python3/dist-packages/v4l2:ro
+      - /usr/lib/python3/dist-packages/videodev2:/usr/lib/python3/dist-packages/videodev2:ro
+      - /usr/lib/python3/dist-packages/pidng:/usr/lib/python3/dist-packages/pidng:ro
+      - /usr/lib/python3/dist-packages/piexif:/usr/lib/python3/dist-packages/piexif:ro
       - /usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu:ro
-      - /usr/local/lib/python3.13:/usr/local/lib/python3.13:ro
       - /run/udev:/run/udev:ro
     depends_on:
       - server
-    command: >
-      python3 camera_stream.py
-      --server ws://localhost:3000/ws
-      --brooder-id 1
-      --camera-index 0
-      --port 8080
     restart: always
 
   camera2:
@@ -54,9 +52,13 @@ services:
       - PYTHONUNBUFFERED=1
     volumes:
       - ./pi-agent:/app
-      - /usr/lib/python3:/usr/lib/python3:ro
+      - /usr/lib/python3/dist-packages/libcamera:/usr/lib/python3/dist-packages/libcamera:ro
+      - /usr/lib/python3/dist-packages/picamera2:/usr/lib/python3/dist-packages/picamera2:ro
+      - /usr/lib/python3/dist-packages/v4l2:/usr/lib/python3/dist-packages/v4l2:ro
+      - /usr/lib/python3/dist-packages/videodev2:/usr/lib/python3/dist-packages/videodev2:ro
+      - /usr/lib/python3/dist-packages/pidng:/usr/lib/python3/dist-packages/pidng:ro
+      - /usr/lib/python3/dist-packages/piexif:/usr/lib/python3/dist-packages/piexif:ro
       - /usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu:ro
-      - /usr/local/lib/python3.13:/usr/local/lib/python3.13:ro
       - /run/udev:/run/udev:ro
     depends_on:
       - server
