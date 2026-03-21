@@ -25,7 +25,6 @@ services:
     network_mode: host
     privileged: true
     volumes:
-      - /dev:/dev
       - /run/udev:/run/udev:ro
     depends_on:
       - server
@@ -44,7 +43,6 @@ services:
     network_mode: host
     privileged: true
     volumes:
-      - /dev:/dev
       - /run/udev:/run/udev:ro
     depends_on:
       - server
