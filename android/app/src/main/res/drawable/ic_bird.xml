@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Simple bird silhouette for bottom nav -->
+    <!-- Topknot -->
+    <path
+        android:fillColor="@android:color/black"
+        android:pathData="M13,4 Q14,2 12.5,1.5 Q12,2.5 12.5,3.5 Z" />
+    <!-- Head -->
+    <path
+        android:fillColor="@android:color/black"
+        android:pathData="M11,5.5 A2.5,2.5 0 1,1 16,5.5 A2.5,2.5 0 1,1 11,5.5" />
+    <!-- Beak -->
+    <path
+        android:fillColor="@android:color/black"
+        android:pathData="M16,5.5 L18.5,5 L16,6.5 Z" />
+    <!-- Body -->
+    <path
+        android:fillColor="@android:color/black"
+        android:pathData="M6,12
+            C6,8 9,6 13,7
+            C17,8 20,11 20,14
+            C20,18 17,20 12,20
+            C7,20 4,17 4,14
+            C4,13 5,12 6,12 Z" />
+    <!-- Tail -->
+    <path
+        android:fillColor="@android:color/black"
+        android:pathData="M4,14 L1,12 L2.5,14 L0.5,14.5 L4,16 Z" />
+    <!-- Legs -->
+    <path
+        android:strokeColor="@android:color/black"
+        android:strokeWidth="1.2"
+        android:pathData="M10,20 L9,23 M9,23 L8,24 M9,23 L10,24" />
+    <path
+        android:strokeColor="@android:color/black"
+        android:strokeWidth="1.2"
+        android:pathData="M14,20 L13,23 M13,23 L12,24 M13,23 L14,24" />
+</vector>

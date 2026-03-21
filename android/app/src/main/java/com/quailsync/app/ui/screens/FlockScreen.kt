@@ -4,8 +4,10 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -28,14 +30,22 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -43,7 +53,12 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -55,7 +70,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import com.quailsync.app.ui.theme.AlertRed
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -156,6 +174,62 @@ class FlockViewModel : ViewModel() {
         }
     }
 
+    fun updateBirdStatus(birdId: Int, status: String, notes: String? = null, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val ok = try {
+                api.updateBird(birdId, com.quailsync.app.data.UpdateBirdRequest(status = status, notes = notes))
+                true
+            } catch (e: Exception) { Log.e("QuailSync", "Update bird status failed", e); false }
+            if (ok) loadDataSuspend()
+            onResult(ok)
+        }
+    }
+
+    fun deleteBirdById(birdId: Int, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val ok = try { api.deleteBird(birdId); true } catch (e: Exception) { Log.e("QuailSync", "Delete bird failed", e); false }
+            if (ok) loadDataSuspend()
+            onResult(ok)
+        }
+    }
+
+    fun logWeight(birdId: Int, weightGrams: Double, notes: String?, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val ok = try {
+                api.createBirdWeight(birdId, com.quailsync.app.data.CreateWeightRequest(
+                    weightGrams = weightGrams,
+                    date = java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE),
+                    notes = notes,
+                ))
+                true
+            } catch (e: Exception) { Log.e("QuailSync", "Log weight failed", e); false }
+            onResult(ok)
+        }
+    }
+
+    fun deleteWeight(birdId: Int, weightId: Int, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val ok = try { api.deleteBirdWeight(birdId, weightId); true } catch (e: Exception) { Log.e("QuailSync", "Delete weight failed", e); false }
+            onResult(ok)
+        }
+    }
+
+    fun updateBird(birdId: Int, request: com.quailsync.app.data.UpdateBirdRequest, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val ok = try { api.updateBird(birdId, request); true } catch (e: Exception) { Log.e("QuailSync", "Update bird failed", e); false }
+            if (ok) loadDataSuspend()
+            onResult(ok)
+        }
+    }
+
+    fun createBird(request: com.quailsync.app.data.CreateBirdRequest, onResult: (Bird?) -> Unit) {
+        viewModelScope.launch {
+            val bird = try { api.createBird(request) } catch (e: Exception) { Log.e("QuailSync", "Create bird failed", e); null }
+            if (bird != null) loadDataSuspend()
+            onResult(bird)
+        }
+    }
+
     /** Save a bitmap directly (used from TakePicturePreview). */
     fun saveBirdPhotoBitmap(birdId: Int, bitmap: Bitmap, context: android.content.Context) {
         viewModelScope.launch {
@@ -176,7 +250,9 @@ class FlockViewModel : ViewModel() {
 // =====================================================================
 
 sealed class FlockFilter {
+    data object Active : FlockFilter()
     data object All : FlockFilter()
+    data object Records : FlockFilter()
     data object Males : FlockFilter()
     data object Females : FlockFilter()
     data class ByBloodline(val bloodlineId: Int, val name: String) : FlockFilter()
@@ -233,16 +309,20 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
     val bloodlines by viewModel.bloodlines.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
-    var selectedFilter by remember { mutableStateOf<FlockFilter>(FlockFilter.All) }
+    var selectedFilter by remember { mutableStateOf<FlockFilter>(FlockFilter.Active) }
     var selectedBird by remember { mutableStateOf<Bird?>(null) }
+    var showAddBird by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     val bloodlineMap = remember(bloodlines) { bloodlines.associateBy { it.id } }
 
     val filteredBirds = remember(birds, selectedFilter) {
         when (selectedFilter) {
+            FlockFilter.Active -> birds.filter { it.status?.lowercase() == "active" }
             FlockFilter.All -> birds
-            FlockFilter.Males -> birds.filter { it.sex?.lowercase() == "male" }
-            FlockFilter.Females -> birds.filter { it.sex?.lowercase() == "female" }
+            FlockFilter.Records -> birds.filter { it.status?.lowercase() in listOf("culled", "deceased", "sold") }
+            FlockFilter.Males -> birds.filter { it.sex?.lowercase() == "male" && it.status?.lowercase() == "active" }
+            FlockFilter.Females -> birds.filter { it.sex?.lowercase() == "female" && it.status?.lowercase() == "active" }
             is FlockFilter.ByBloodline -> birds.filter { it.bloodlineId == (selectedFilter as FlockFilter.ByBloodline).bloodlineId }
         }
     }
@@ -262,6 +342,7 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
                 } else {
                     IconButton(onClick = { viewModel.refresh() }) { Icon(Icons.Default.Refresh, "Refresh") }
                 }
+                IconButton(onClick = { showAddBird = true }) { Icon(Icons.Default.Add, "Add Bird", tint = SageGreen) }
             }
         }
 
@@ -294,7 +375,21 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
     }
 
     if (selectedBird != null) {
-        BirdDetailDialog(selectedBird!!, selectedBird!!.bloodlineName ?: bloodlineMap[selectedBird!!.bloodlineId]?.name, viewModel) { selectedBird = null }
+        BirdDetailDialog(
+            selectedBird!!,
+            selectedBird!!.bloodlineName ?: bloodlineMap[selectedBird!!.bloodlineId]?.name,
+            viewModel,
+            onDismiss = { selectedBird = null },
+            onStatusChanged = { selectedBird = null; viewModel.refresh() },
+            onDeleted = { selectedBird = null; viewModel.refresh() },
+        )
+    }
+
+    if (showAddBird) {
+        AddBirdDialog(bloodlines, viewModel, onDismiss = { showAddBird = false }, onSuccess = { bird ->
+            showAddBird = false
+            Toast.makeText(context, "Bird #${bird.id} created!", Toast.LENGTH_SHORT).show()
+        })
     }
 }
 
@@ -309,7 +404,9 @@ fun FlockFilterChips(bloodlines: List<Bloodline>, selectedFilter: FlockFilter, o
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         val chipColors = FilterChipDefaults.filterChipColors(selectedContainerColor = SageGreen, selectedLabelColor = Color.White)
+        FilterChip(selectedFilter is FlockFilter.Active, { onFilterSelected(FlockFilter.Active) }, { Text("Active") }, colors = chipColors)
         FilterChip(selectedFilter is FlockFilter.All, { onFilterSelected(FlockFilter.All) }, { Text("All") }, colors = chipColors)
+        FilterChip(selectedFilter is FlockFilter.Records, { onFilterSelected(FlockFilter.Records) }, { Text("Records") }, colors = chipColors)
         FilterChip(selectedFilter is FlockFilter.Males, { onFilterSelected(FlockFilter.Males) }, { Text("Males") }, colors = chipColors)
         FilterChip(selectedFilter is FlockFilter.Females, { onFilterSelected(FlockFilter.Females) }, { Text("Females") }, colors = chipColors)
         bloodlines.forEach { bl ->
@@ -390,12 +487,21 @@ fun StatusBadge(status: String?) {
 // =====================================================================
 
 @Composable
-fun BirdDetailDialog(bird: Bird, bloodlineName: String?, viewModel: FlockViewModel, onDismiss: () -> Unit) {
+fun BirdDetailDialog(
+    bird: Bird, bloodlineName: String?, viewModel: FlockViewModel,
+    onDismiss: () -> Unit, onStatusChanged: () -> Unit = {}, onDeleted: () -> Unit = {},
+) {
     val context = LocalContext.current
     var weights by remember { mutableStateOf<List<BirdWeight>>(emptyList()) }
     var weightsLoaded by remember { mutableStateOf(false) }
     var photoRefreshKey by remember { mutableIntStateOf(0) }
     val photo = rememberBirdPhoto(bird.id, photoRefreshKey)
+    var showStatusConfirm by remember { mutableStateOf<String?>(null) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var statusNotes by remember { mutableStateOf("") }
+    var showLogWeight by remember { mutableStateOf(false) }
+    var showEditBird by remember { mutableStateOf(false) }
+    var weightRefreshKey by remember { mutableStateOf(0) }
 
     val photoLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview(),
@@ -406,7 +512,7 @@ fun BirdDetailDialog(bird: Bird, bloodlineName: String?, viewModel: FlockViewMod
         }
     }
 
-    androidx.compose.runtime.LaunchedEffect(bird.id) {
+    androidx.compose.runtime.LaunchedEffect(bird.id, weightRefreshKey) {
         weights = viewModel.getBirdWeights(bird.id)
         weightsLoaded = true
     }
@@ -421,8 +527,9 @@ fun BirdDetailDialog(bird: Bird, bloodlineName: String?, viewModel: FlockViewMod
                 // Photo + header
                 item {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                        // Close button row
+                        // Action bar
                         Row(Modifier.fillMaxWidth(), Arrangement.End) {
+                            IconButton(onClick = { showEditBird = true }) { Icon(Icons.Default.Edit, "Edit", tint = MaterialTheme.colorScheme.onSurfaceVariant) }
                             IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "Close") }
                         }
 
@@ -486,28 +593,271 @@ fun BirdDetailDialog(bird: Bird, bloodlineName: String?, viewModel: FlockViewMod
                     }
                 }
 
-                // Weight history
+                // Weight section
                 item {
                     Spacer(Modifier.height(8.dp))
                     HorizontalDivider()
                     Spacer(Modifier.height(8.dp))
-                    Text("Weight History", style = MaterialTheme.typography.titleMedium)
+                    Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                        Text("Weight History", style = MaterialTheme.typography.titleMedium)
+                        Button(onClick = { showLogWeight = true }, colors = ButtonDefaults.buttonColors(containerColor = SageGreen)) {
+                            Text("Log Weight")
+                        }
+                    }
                 }
                 if (!weightsLoaded) {
                     item { Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = SageGreen, modifier = Modifier.size(24.dp), strokeWidth = 2.dp) } }
                 } else if (weights.isEmpty()) {
-                    item { Text("No weight records", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    item { Text("No weight records yet", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 } else {
-                    items(weights) { w ->
-                        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
-                            Text(w.recordedAt ?: "—", style = MaterialTheme.typography.bodyMedium)
-                            Text("%.1f g".format(w.weightGrams), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                    // Weight chart (2+ entries)
+                    if (weights.size >= 2) {
+                        item {
+                            val sageGreenColor = SageGreen
+                            Canvas(Modifier.fillMaxWidth().height(120.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))) {
+                                val sorted = weights.sortedBy { it.date }
+                                val minW = sorted.minOf { it.weightGrams }.toFloat()
+                                val maxW = sorted.maxOf { it.weightGrams }.toFloat()
+                                val rangeW = (maxW - minW).coerceAtLeast(1f)
+                                val padding = 16f
+                                val w = size.width - padding * 2
+                                val h = size.height - padding * 2
+
+                                // Draw lines
+                                for (i in 0 until sorted.size - 1) {
+                                    val x1 = padding + (i.toFloat() / (sorted.size - 1)) * w
+                                    val y1 = padding + h - ((sorted[i].weightGrams.toFloat() - minW) / rangeW) * h
+                                    val x2 = padding + ((i + 1).toFloat() / (sorted.size - 1)) * w
+                                    val y2 = padding + h - ((sorted[i + 1].weightGrams.toFloat() - minW) / rangeW) * h
+                                    drawLine(sageGreenColor, Offset(x1, y1), Offset(x2, y2), strokeWidth = 3f, cap = StrokeCap.Round)
+                                }
+                                // Draw dots
+                                sorted.forEachIndexed { i, entry ->
+                                    val x = padding + (i.toFloat() / (sorted.size - 1)) * w
+                                    val y = padding + h - ((entry.weightGrams.toFloat() - minW) / rangeW) * h
+                                    drawCircle(sageGreenColor, radius = 5f, center = Offset(x, y))
+                                }
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            // Stats
+                            val sorted = weights.sortedBy { it.date }
+                            val latest = sorted.last().weightGrams
+                            val first = sorted.first().weightGrams
+                            val days = sorted.size.coerceAtLeast(2) - 1
+                            val adg = if (days > 0) (latest - first) / days else 0.0
+                            Row(Modifier.fillMaxWidth(), Arrangement.SpaceEvenly) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("%.0fg".format(latest), fontWeight = FontWeight.Bold); Text("Current", style = MaterialTheme.typography.labelSmall)
+                                }
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("%.1fg/d".format(adg), fontWeight = FontWeight.Bold); Text("Avg gain", style = MaterialTheme.typography.labelSmall)
+                                }
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("${weights.size}", fontWeight = FontWeight.Bold); Text("Records", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                    } else {
+                        item { Text("Log more weights to see growth chart", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    }
+                    // Weight list with delete
+                    items(weights.sortedByDescending { it.date }) { w ->
+                        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(w.date ?: "—", style = MaterialTheme.typography.bodyMedium)
+                                    Text("%.1f g".format(w.weightGrams), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                }
+                                if (w.notes != null) Text(w.notes, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            w.id?.let { wid ->
+                                IconButton(onClick = {
+                                    viewModel.deleteWeight(bird.id, wid) { ok ->
+                                        if (ok) { weightRefreshKey++; Toast.makeText(context, "Weight deleted", Toast.LENGTH_SHORT).show() }
+                                    }
+                                }, modifier = Modifier.size(28.dp)) {
+                                    Icon(Icons.Default.Delete, "Delete", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // --- Status Actions ---
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(8.dp))
+                    Text("Actions", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                if (bird.status?.lowercase() == "active") {
+                    item {
+                        Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { showStatusConfirm = "Culled" }, Modifier.weight(1f)) { Text("Culled") }
+                            OutlinedButton(onClick = { showStatusConfirm = "Deceased" }, Modifier.weight(1f)) { Text("Deceased") }
+                        }
+                    }
+                    item {
+                        Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { showStatusConfirm = "Sold" }, Modifier.weight(1f)) { Text("Sold") }
+                            OutlinedButton(onClick = { showDeleteConfirm = true }, Modifier.weight(1f),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFCC4444))) {
+                                Icon(Icons.Default.Delete, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Delete")
+                            }
+                        }
+                    }
+                } else {
+                    // Non-active bird: show reactivate + delete
+                    item {
+                        Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = { showStatusConfirm = "Active" }, Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = SageGreen)) { Text("Reactivate") }
+                            OutlinedButton(onClick = { showDeleteConfirm = true }, Modifier.weight(1f),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFCC4444))) {
+                                Icon(Icons.Default.Delete, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Delete")
+                            }
                         }
                     }
                 }
             }
         }
     }
+
+    // Status change confirmation
+    if (showStatusConfirm != null) {
+        val newStatus = showStatusConfirm!!
+        AlertDialog(
+            onDismissRequest = { showStatusConfirm = null },
+            title = { Text("Mark as $newStatus?") },
+            text = {
+                Column {
+                    Text("Change Bird #${bird.id} status to $newStatus?")
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(value = statusNotes, onValueChange = { statusNotes = it }, label = { Text("Notes (optional)") }, modifier = Modifier.fillMaxWidth())
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    val s = newStatus; val n = statusNotes.ifBlank { null }
+                    showStatusConfirm = null; statusNotes = ""
+                    viewModel.updateBirdStatus(bird.id, s, n) { ok ->
+                        if (ok) { Toast.makeText(context, "Bird #${bird.id} marked as $s", Toast.LENGTH_SHORT).show(); onStatusChanged() }
+                        else Toast.makeText(context, "Failed to update status", Toast.LENGTH_SHORT).show()
+                    }
+                }, colors = ButtonDefaults.buttonColors(containerColor = SageGreen)) { Text("Confirm") }
+            },
+            dismissButton = { TextButton(onClick = { showStatusConfirm = null }) { Text("Cancel") } },
+        )
+    }
+
+    // Delete confirmation
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete Bird #${bird.id}?") },
+            text = { Text("Permanently delete this bird? This cannot be undone. Use status changes (Culled/Deceased/Sold) to keep records instead.") },
+            confirmButton = {
+                Button(onClick = {
+                    showDeleteConfirm = false
+                    viewModel.deleteBirdById(bird.id) { ok ->
+                        if (ok) { Toast.makeText(context, "Bird deleted", Toast.LENGTH_SHORT).show(); onDeleted() }
+                        else Toast.makeText(context, "Delete failed", Toast.LENGTH_SHORT).show()
+                    }
+                }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFCC4444))) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") } },
+        )
+    }
+
+    // Log Weight dialog
+    if (showLogWeight) {
+        var weightText by remember { mutableStateOf("") }
+        var weightNotes by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showLogWeight = false },
+            title = { Text("Log Weight") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Bird #${bird.id}", style = MaterialTheme.typography.bodyMedium)
+                    OutlinedTextField(value = weightText, onValueChange = { weightText = it.filter { c -> c.isDigit() || c == '.' } },
+                        label = { Text("Weight (grams)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(value = weightNotes, onValueChange = { weightNotes = it }, label = { Text("Notes (optional)") }, modifier = Modifier.fillMaxWidth())
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    val grams = weightText.toDoubleOrNull() ?: return@Button
+                    showLogWeight = false
+                    viewModel.logWeight(bird.id, grams, weightNotes.ifBlank { null }) { ok ->
+                        if (ok) { weightRefreshKey++; Toast.makeText(context, "Weight logged: ${weightText}g", Toast.LENGTH_SHORT).show() }
+                        else Toast.makeText(context, "Failed to log weight", Toast.LENGTH_SHORT).show()
+                    }
+                }, enabled = (weightText.toDoubleOrNull() ?: 0.0) > 0, colors = ButtonDefaults.buttonColors(containerColor = SageGreen)) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { showLogWeight = false }) { Text("Cancel") } },
+        )
+    }
+
+    // Edit Bird dialog
+    if (showEditBird) {
+        EditBirdDialog(bird, bloodlineName, viewModel, onDismiss = { showEditBird = false }, onSuccess = {
+            showEditBird = false
+            Toast.makeText(context, "Bird updated", Toast.LENGTH_SHORT).show()
+            onStatusChanged() // triggers refresh
+        })
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun EditBirdDialog(bird: Bird, bloodlineName: String?, viewModel: FlockViewModel, onDismiss: () -> Unit, onSuccess: () -> Unit) {
+    val bloodlines by viewModel.bloodlines.collectAsState()
+    var sex by remember { mutableStateOf(bird.sex?.replaceFirstChar { it.uppercase() } ?: "Unknown") }
+    var bandColor by remember { mutableStateOf(bird.bandColor ?: "") }
+    var hatchDate by remember { mutableStateOf(bird.hatchDate ?: "") }
+    var nfcTag by remember { mutableStateOf(bird.bandId ?: "") }
+    var notes by remember { mutableStateOf(bird.notes ?: "") }
+    var status by remember { mutableStateOf(bird.status?.replaceFirstChar { it.uppercase() } ?: "Active") }
+    var sexExpanded by remember { mutableStateOf(false) }
+    var statusExpanded by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit Bird #${bird.id}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                ExposedDropdownMenuBox(sexExpanded, { sexExpanded = it }) {
+                    OutlinedTextField(value = sex, onValueChange = {}, readOnly = true, label = { Text("Sex") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(sexExpanded) }, modifier = Modifier.menuAnchor().fillMaxWidth())
+                    ExposedDropdownMenu(sexExpanded, { sexExpanded = false }) {
+                        listOf("Male", "Female", "Unknown").forEach { s -> DropdownMenuItem(text = { Text(s) }, onClick = { sex = s; sexExpanded = false }) }
+                    }
+                }
+                OutlinedTextField(value = bandColor, onValueChange = { bandColor = it }, label = { Text("Band color") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(value = hatchDate, onValueChange = { hatchDate = it }, label = { Text("Hatch date (YYYY-MM-DD)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                ExposedDropdownMenuBox(statusExpanded, { statusExpanded = it }) {
+                    OutlinedTextField(value = status, onValueChange = {}, readOnly = true, label = { Text("Status") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(statusExpanded) }, modifier = Modifier.menuAnchor().fillMaxWidth())
+                    ExposedDropdownMenu(statusExpanded, { statusExpanded = false }) {
+                        listOf("Active", "Culled", "Deceased", "Sold").forEach { s -> DropdownMenuItem(text = { Text(s) }, onClick = { status = s; statusExpanded = false }) }
+                    }
+                }
+                OutlinedTextField(value = notes, onValueChange = { notes = it }, label = { Text("Notes") }, modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                saving = true
+                viewModel.updateBird(bird.id, com.quailsync.app.data.UpdateBirdRequest(
+                    status = status, notes = notes.ifBlank { null },
+                )) { ok -> saving = false; if (ok) onSuccess() }
+            }, enabled = !saving, colors = ButtonDefaults.buttonColors(containerColor = SageGreen)) { Text(if (saving) "Saving..." else "Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable
@@ -516,4 +866,77 @@ fun DetailRow(label: String, value: String) {
         Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
     }
+}
+
+// =====================================================================
+// Add Bird Dialog
+// =====================================================================
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AddBirdDialog(bloodlines: List<Bloodline>, viewModel: FlockViewModel, onDismiss: () -> Unit, onSuccess: (Bird) -> Unit) {
+    var selectedBloodlineId by remember { mutableStateOf<Int?>(null) }
+    var sex by remember { mutableStateOf("Unknown") }
+    var bandColor by remember { mutableStateOf("") }
+    var notes by remember { mutableStateOf("") }
+    var blExpanded by remember { mutableStateOf(false) }
+    var sexExpanded by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add Bird") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ExposedDropdownMenuBox(blExpanded, { blExpanded = it }) {
+                    OutlinedTextField(
+                        value = selectedBloodlineId?.let { id -> bloodlines.find { it.id == id }?.name ?: "" } ?: "",
+                        onValueChange = {}, readOnly = true, label = { Text("Bloodline") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(blExpanded) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                    )
+                    ExposedDropdownMenu(blExpanded, { blExpanded = false }) {
+                        bloodlines.forEach { bl -> DropdownMenuItem(text = { Text(bl.name) }, onClick = { selectedBloodlineId = bl.id; blExpanded = false }) }
+                    }
+                }
+                ExposedDropdownMenuBox(sexExpanded, { sexExpanded = it }) {
+                    OutlinedTextField(
+                        value = sex, onValueChange = {}, readOnly = true, label = { Text("Sex") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(sexExpanded) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                    )
+                    ExposedDropdownMenu(sexExpanded, { sexExpanded = false }) {
+                        listOf("Male", "Female", "Unknown").forEach { s ->
+                            DropdownMenuItem(text = { Text(s) }, onClick = { sex = s; sexExpanded = false })
+                        }
+                    }
+                }
+                OutlinedTextField(value = bandColor, onValueChange = { bandColor = it }, label = { Text("Band color (optional)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(value = notes, onValueChange = { notes = it }, label = { Text("Notes (optional)") }, modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val blId = selectedBloodlineId ?: return@Button
+                    saving = true
+                    viewModel.createBird(
+                        com.quailsync.app.data.CreateBirdRequest(
+                            bloodlineId = blId.toLong(), sex = sex, status = "Active",
+                            hatchDate = java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE),
+                            generation = 1,
+                            bandColor = bandColor.ifBlank { null },
+                            notes = notes.ifBlank { null },
+                        )
+                    ) { bird ->
+                        saving = false
+                        if (bird != null) onSuccess(bird)
+                    }
+                },
+                enabled = selectedBloodlineId != null && !saving,
+                colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
+            ) { Text(if (saving) "Creating..." else "Create Bird") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }

@@ -79,7 +79,8 @@ data class BirdWeight(
     @SerializedName("id") val id: Int? = null,
     @SerializedName("bird_id") val birdId: Int,
     @SerializedName("weight_grams") val weightGrams: Double,
-    @SerializedName("recorded_at") val recordedAt: String? = null,
+    @SerializedName("date") val date: String? = null,
+    @SerializedName("notes") val notes: String? = null,
 )
 
 data class CreateWeightRequest(
@@ -156,6 +157,12 @@ data class Camera(
     @SerializedName("brooder_name") val brooderName: String? = null,
 )
 
+data class UpdateBirdRequest(
+    @SerializedName("status") val status: String? = null,
+    @SerializedName("notes") val notes: String? = null,
+    @SerializedName("nfc_tag_id") val nfcTagId: String? = null,
+)
+
 data class CreateBirdRequest(
     @SerializedName("band_color") val bandColor: String? = null,
     @SerializedName("sex") val sex: String = "Unknown",
@@ -230,11 +237,20 @@ interface QuailSyncApi {
     @POST("api/birds")
     suspend fun createBird(@Body request: CreateBirdRequest): Bird
 
+    @PUT("api/birds/{id}")
+    suspend fun updateBird(@Path("id") id: Int, @Body request: UpdateBirdRequest): Bird
+
+    @DELETE("api/birds/{id}")
+    suspend fun deleteBird(@Path("id") id: Int): retrofit2.Response<Unit>
+
     @GET("api/birds/{id}/weights")
     suspend fun getBirdWeights(@Path("id") id: Int): List<BirdWeight>
 
     @POST("api/birds/{id}/weight")
     suspend fun createBirdWeight(@Path("id") id: Int, @Body request: CreateWeightRequest): BirdWeight
+
+    @DELETE("api/birds/{id}/weights/{wid}")
+    suspend fun deleteBirdWeight(@Path("id") birdId: Int, @Path("wid") weightId: Int): retrofit2.Response<Unit>
 
     @GET("api/birds/nfc/{tag_id}")
     suspend fun getBirdByNfcTag(@Path("tag_id") tagId: String): Bird

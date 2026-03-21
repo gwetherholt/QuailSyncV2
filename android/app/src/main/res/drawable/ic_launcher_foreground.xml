@@ -4,21 +4,47 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Simple "Q" letter centered in the adaptive icon safe zone -->
+    <!-- Quail silhouette centered in adaptive icon safe zone (36-72 range) -->
+    <!-- Topknot/plume -->
     <path
-        android:fillColor="#3D3229"
-        android:pathData="M54,30
-            C40.745,30 30,40.745 30,54
-            C30,67.255 40.745,78 54,78
-            C60.5,78 66.5,75.5 71,71.5
-            L76,78 L80,75 L74,67.5
-            C76.5,63.5 78,59 78,54
-            C78,40.745 67.255,30 54,30z
-            M54,38
-            C62.837,38 70,45.163 70,54
-            C70,57.5 69,60.7 67.2,63.3
-            L62,57 L58,60 L63.5,66.8
-            C60.8,68.8 57.5,70 54,70
-            C45.163,70 38,62.837 38,54
-            C38,45.163 45.163,38 54,38z" />
+        android:fillColor="#546142"
+        android:pathData="M56,34 Q58,28 54,26 Q52,28 53,32 Z" />
+    <!-- Head -->
+    <path
+        android:fillColor="#546142"
+        android:pathData="M50,38 A6,6 0 1,1 62,38 A6,6 0 1,1 50,38" />
+    <!-- Eye -->
+    <path
+        android:fillColor="#FAF6F1"
+        android:pathData="M55,36 A1.5,1.5 0 1,1 58,36 A1.5,1.5 0 1,1 55,36" />
+    <!-- Body - round plump quail shape -->
+    <path
+        android:fillColor="#7D8B6A"
+        android:pathData="M38,48
+            C38,40 44,36 54,38
+            C64,40 72,46 72,56
+            C72,66 64,72 52,72
+            C40,72 34,64 34,56
+            C34,52 36,49 38,48 Z" />
+    <!-- Wing detail -->
+    <path
+        android:fillColor="#546142"
+        android:pathData="M44,50 Q54,46 64,52 Q58,56 48,54 Z" />
+    <!-- Tail feathers -->
+    <path
+        android:fillColor="#546142"
+        android:pathData="M34,58 L28,54 L30,58 L26,58 L32,62 Z" />
+    <!-- Legs -->
+    <path
+        android:strokeColor="#546142"
+        android:strokeWidth="2"
+        android:pathData="M48,72 L46,80 M46,80 L44,82 M46,80 L48,82" />
+    <path
+        android:strokeColor="#546142"
+        android:strokeWidth="2"
+        android:pathData="M56,72 L54,80 M54,80 L52,82 M54,80 L56,82" />
+    <!-- Beak -->
+    <path
+        android:fillColor="#CCA844"
+        android:pathData="M62,38 L66,37 L62,40 Z" />
 </vector>

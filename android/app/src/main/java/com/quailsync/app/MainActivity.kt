@@ -71,10 +71,10 @@ import com.quailsync.app.ui.theme.QuailSyncTheme
 import com.quailsync.app.ui.theme.SageGreen
 import com.quailsync.app.ui.theme.SageGreenLight
 
-sealed class Screen(val route: String, val label: String, val icon: ImageVector) {
+sealed class Screen(val route: String, val label: String, val icon: ImageVector, val iconRes: Int? = null) {
     data object Dashboard : Screen("dashboard", "Dashboard", Icons.Default.Dashboard)
     data object Cameras : Screen("cameras", "Cameras", Icons.Default.Videocam)
-    data object Flock : Screen("flock", "Flock", Icons.Default.Pets)
+    data object Flock : Screen("flock", "Flock", Icons.Default.Pets, iconRes = R.drawable.ic_bird)
     data object Nfc : Screen("nfc", "NFC", Icons.Default.Nfc)
     data object Clutches : Screen("clutches", "Hatchery", Icons.Default.Egg)
     data object Settings : Screen("settings", "Settings", Icons.Default.Settings)
@@ -237,7 +237,13 @@ fun QuailSyncApp(
             NavigationBar {
                 bottomNavItems.forEach { screen ->
                     NavigationBarItem(
-                        icon = { Icon(screen.icon, contentDescription = screen.label) },
+                        icon = {
+                            if (screen.iconRes != null) {
+                                Icon(androidx.compose.ui.res.painterResource(screen.iconRes), contentDescription = screen.label)
+                            } else {
+                                Icon(screen.icon, contentDescription = screen.label)
+                            }
+                        },
                         label = { Text(screen.label, fontSize = 11.sp) },
                         selected = currentDestination?.hierarchy?.any { it.route == screen.route } == true,
                         onClick = {
