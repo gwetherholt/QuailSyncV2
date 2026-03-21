@@ -1,7 +1,7 @@
 FROM debian:trixie-slim
 ENV PYTHONUNBUFFERED=1
-RUN apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/apt/lists/*
-RUN pip install --break-system-packages numpy pillow websockets psutil pyzbar
+ENV PYTHONPATH=/host-packages:$PYTHONPATH
+RUN apt-get update && apt-get install -y python3 python3-pip python3-numpy python3-pil libcap2 && rm -rf /var/lib/apt/lists/*
+RUN pip install --break-system-packages websockets psutil pyzbar
 WORKDIR /app
 COPY camera_stream.py .
-CMD ["python3", "camera_stream.py", "--server", "ws://localhost:3000/ws", "--brooder-id", "1", "--camera-index", "0", "--port", "8080"]
