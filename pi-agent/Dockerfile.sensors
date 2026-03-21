@@ -3,4 +3,4 @@ ENV PYTHONUNBUFFERED=1
 RUN pip install websockets psutil
 WORKDIR /app
 COPY pi_agent.py .
-CMD ["python3", "pi_agent.py", "--server", "ws://server:3000/ws"]
+CMD ["python3", "pi_agent.py", "--server", "ws://localhost:3000/ws"]
