@@ -969,6 +969,19 @@ async fn update_bird(
     (StatusCode::OK, Json(Some(bird))).into_response()
 }
 
+async fn delete_bird(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+    // Delete weight records first (foreign key)
+    conn.execute("DELETE FROM weight_records WHERE bird_id = ?1", params![id]).ok();
+    let affected = conn
+        .execute("DELETE FROM birds WHERE id = ?1", params![id])
+        .unwrap_or(0);
+    if affected > 0 { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND }
+}
+
 // --- NFC lookup ---
 
 async fn get_bird_by_nfc(
@@ -1503,6 +1516,15 @@ async fn list_weights(
         .filter_map(|r| r.ok())
         .collect();
     Json(rows)
+}
+
+async fn delete_weight(
+    State(state): State<AppState>,
+    Path((_bird_id, weight_id)): Path<(i64, i64)>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+    let affected = conn.execute("DELETE FROM weight_records WHERE id = ?1", params![weight_id]).unwrap_or(0);
+    if affected > 0 { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND }
 }
 
 // ---------------------------------------------------------------------------
@@ -3134,9 +3156,10 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/alerts", get(alerts))
         .route("/api/bloodlines", get(list_bloodlines).post(create_bloodline))
         .route("/api/birds", get(list_birds).post(create_bird))
-        .route("/api/birds/{id}", axum::routing::put(update_bird))
+        .route("/api/birds/{id}", axum::routing::put(update_bird).delete(delete_bird))
         .route("/api/birds/{id}/weight", axum::routing::post(create_weight))
         .route("/api/birds/{id}/weights", get(list_weights))
+        .route("/api/birds/{id}/weights/{wid}", axum::routing::delete(delete_weight))
         .route("/api/breeding-pairs", get(list_breeding_pairs).post(create_breeding_pair))
         .route("/api/clutches", get(list_clutches).post(create_clutch))
         .route("/api/clutches/{id}", axum::routing::put(update_clutch).delete(delete_clutch))
