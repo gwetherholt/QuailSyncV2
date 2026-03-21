@@ -1,0 +1,7 @@
+target/
+.git/
+android/
+node_modules/
+data/
+*.db
+backups/
