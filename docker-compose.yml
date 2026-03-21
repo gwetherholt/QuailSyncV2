@@ -12,6 +12,8 @@ services:
       dockerfile: Dockerfile.sensors
     network_mode: host
     privileged: true
+    environment:
+      - PYTHONUNBUFFERED=1
     volumes:
       - /sys/bus/iio/devices:/sys/bus/iio/devices:ro
     depends_on:
@@ -24,6 +26,8 @@ services:
       dockerfile: Dockerfile.camera
     network_mode: host
     privileged: true
+    environment:
+      - PYTHONUNBUFFERED=1
     volumes:
       - /usr/lib/python3/dist-packages/libcamera:/usr/lib/python3/dist-packages/libcamera:ro
       - /usr/lib/python3/dist-packages/picamera2:/usr/lib/python3/dist-packages/picamera2:ro
@@ -47,6 +51,8 @@ services:
       dockerfile: Dockerfile.camera
     network_mode: host
     privileged: true
+    environment:
+      - PYTHONUNBUFFERED=1
     volumes:
       - /usr/lib/python3/dist-packages/libcamera:/usr/lib/python3/dist-packages/libcamera:ro
       - /usr/lib/python3/dist-packages/picamera2:/usr/lib/python3/dist-packages/picamera2:ro
