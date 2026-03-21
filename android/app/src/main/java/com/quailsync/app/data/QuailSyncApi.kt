@@ -1,7 +1,6 @@
 package com.quailsync.app.data
 
 import com.google.gson.annotations.SerializedName
-import com.quailsync.app.BuildConfig
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -314,7 +313,7 @@ interface QuailSyncApi {
     suspend fun moveBird(@Path("id") id: Int, @Body request: MoveBirdRequest): Bird
 
     companion object {
-        fun create(baseUrl: String = BuildConfig.BASE_URL): QuailSyncApi {
+        fun create(baseUrl: String): QuailSyncApi {
             val url = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
             val logging = HttpLoggingInterceptor { message ->
                 android.util.Log.d("QuailSync-HTTP", message)

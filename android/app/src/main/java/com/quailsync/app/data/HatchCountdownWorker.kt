@@ -52,7 +52,7 @@ class HatchCountdownWorker(
     override suspend fun doWork(): Result {
         Log.d(TAG, "Running hatch countdown check")
         return try {
-            val api = QuailSyncApi.create()
+            val api = QuailSyncApi.create(ServerConfig.getServerUrl(applicationContext))
             val clutches = api.getClutches()
             val today = LocalDate.now()
 

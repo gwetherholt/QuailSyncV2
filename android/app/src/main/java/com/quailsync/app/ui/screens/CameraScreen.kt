@@ -72,13 +72,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.quailsync.app.data.Brooder
 import com.quailsync.app.data.Camera
 import com.quailsync.app.data.CreateCameraRequest
 import com.quailsync.app.data.QuailSyncApi
+import com.quailsync.app.data.ServerConfig
 import com.quailsync.app.data.UpdateBrooderRequest
 import com.quailsync.app.ui.theme.SageGreen
 import kotlinx.coroutines.Dispatchers
@@ -112,8 +114,9 @@ sealed class CameraSource {
 // ViewModel
 // =====================================================================
 
-class CameraViewModel : ViewModel() {
-    private val api = QuailSyncApi.create()
+class CameraViewModel(application: Application) : AndroidViewModel(application) {
+    private val serverUrl = ServerConfig.getServerUrl(application)
+    private val api = QuailSyncApi.create(serverUrl)
 
     private val _cameraItems = MutableStateFlow<List<CameraItem>>(emptyList())
     val cameraItems: StateFlow<List<CameraItem>> = _cameraItems.asStateFlow()
@@ -239,7 +242,7 @@ class CameraViewModel : ViewModel() {
 
     fun deleteCamera(item: CameraItem) {
         Log.d("QuailSync", "deleteCamera called: name='${item.name}', source=${item.source::class.simpleName}")
-        val baseUrl = com.quailsync.app.BuildConfig.BASE_URL.trimEnd('/')
+        val baseUrl = serverUrl.trimEnd('/')
         viewModelScope.launch {
             try {
                 val (code, respBody) = when (val src = item.source) {
@@ -284,7 +287,7 @@ class CameraViewModel : ViewModel() {
 
     fun reassignCamera(item: CameraItem, newBrooderId: Int) {
         val movingUrl = item.streamUrl ?: return
-        val baseUrl = com.quailsync.app.BuildConfig.BASE_URL.trimEnd('/')
+        val baseUrl = serverUrl.trimEnd('/')
         val oldBrooderId = when (val src = item.source) {
             is CameraSource.BrooderCamera -> src.brooder.id
             is CameraSource.Standalone -> src.camera.brooderId
