@@ -1191,6 +1191,14 @@ async fn update_clutch(
         )
         .unwrap();
     }
+    if let Some(ref set_date) = body.set_date {
+        let expected = *set_date + chrono::Duration::days(17);
+        conn.execute(
+            "UPDATE clutches SET set_date = ?1, expected_hatch_date = ?2 WHERE id = ?3",
+            params![set_date.to_string(), expected.to_string(), id],
+        )
+        .unwrap();
+    }
     if let Some(stillborn) = body.eggs_stillborn {
         conn.execute(
             "UPDATE clutches SET eggs_stillborn = ?1 WHERE id = ?2",
@@ -1257,6 +1265,30 @@ async fn update_clutch(
         .unwrap();
 
     (StatusCode::OK, Json(Some(clutch))).into_response()
+}
+
+async fn delete_clutch(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+    let affected = conn
+        .execute("DELETE FROM clutches WHERE id = ?1", params![id])
+        .unwrap_or(0);
+    if affected > 0 { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND }
+}
+
+async fn delete_chick_group(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+    // Delete mortality logs first (foreign key)
+    conn.execute("DELETE FROM chick_mortality_log WHERE group_id = ?1", params![id]).ok();
+    let affected = conn
+        .execute("DELETE FROM chick_groups WHERE id = ?1", params![id])
+        .unwrap_or(0);
+    if affected > 0 { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND }
 }
 
 // --- Flock Summary ---
@@ -2560,6 +2592,29 @@ async fn get_chick_group(
     }
 }
 
+async fn update_chick_group(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+    if let Some(count) = body.get("current_count").and_then(|v| v.as_u64()) {
+        conn.execute("UPDATE chick_groups SET current_count = ?1 WHERE id = ?2", params![count, id]).ok();
+    }
+    if body.get("brooder_id").is_some() {
+        let val: Option<i64> = body.get("brooder_id").and_then(|v| v.as_i64());
+        conn.execute("UPDATE chick_groups SET brooder_id = ?1 WHERE id = ?2", params![val, id]).ok();
+    }
+    if let Some(notes) = body.get("notes") {
+        let val: Option<String> = if notes.is_null() { None } else { notes.as_str().map(|s| s.to_string()) };
+        conn.execute("UPDATE chick_groups SET notes = ?1 WHERE id = ?2", params![val, id]).ok();
+    }
+    if let Some(status) = body.get("status").and_then(|v| v.as_str()) {
+        conn.execute("UPDATE chick_groups SET status = ?1 WHERE id = ?2", params![status, id]).ok();
+    }
+    StatusCode::OK
+}
+
 async fn log_mortality(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -3084,7 +3139,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/birds/{id}/weights", get(list_weights))
         .route("/api/breeding-pairs", get(list_breeding_pairs).post(create_breeding_pair))
         .route("/api/clutches", get(list_clutches).post(create_clutch))
-        .route("/api/clutches/{id}", axum::routing::put(update_clutch))
+        .route("/api/clutches/{id}", axum::routing::put(update_clutch).delete(delete_clutch))
         .route("/api/processing", get(list_processing).post(create_processing))
         .route("/api/processing/queue", get(list_processing_queue))
         .route("/api/processing/{id}", axum::routing::put(update_processing))
@@ -3109,7 +3164,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/frames/{id}/detections", axum::routing::post(create_frame_detections))
         .route("/api/nfc/{tag_id}", get(get_bird_by_nfc))
         .route("/api/chick-groups", get(list_chick_groups).post(create_chick_group))
-        .route("/api/chick-groups/{id}", get(get_chick_group))
+        .route("/api/chick-groups/{id}", get(get_chick_group).put(update_chick_group).delete(delete_chick_group))
         .route("/api/chick-groups/{id}/mortality", axum::routing::put(log_mortality))
         .route("/api/chick-groups/{id}/graduate", axum::routing::put(graduate_chick_group))
         .route("/api/backup", axum::routing::post(create_backup))
