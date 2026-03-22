@@ -66,6 +66,7 @@ import com.quailsync.app.ui.screens.CameraScreen
 import com.quailsync.app.ui.screens.ClutchScreen
 import com.quailsync.app.ui.screens.DashboardScreen
 import com.quailsync.app.ui.screens.FlockScreen
+import com.quailsync.app.ui.screens.TelemetryScreen
 import com.quailsync.app.ui.screens.NfcScreen
 import com.quailsync.app.ui.screens.NfcViewModel
 import com.quailsync.app.ui.theme.QuailSyncTheme
@@ -79,6 +80,7 @@ sealed class Screen(val route: String, val label: String, val icon: ImageVector,
     data object Nfc : Screen("nfc", "NFC", Icons.Default.Nfc)
     data object Clutches : Screen("clutches", "Hatchery", Icons.Default.Egg)
     data object Settings : Screen("settings", "Settings", Icons.Default.Settings)
+    data object Telemetry : Screen("telemetry", "Telemetry", Icons.Default.Settings)
 }
 
 val bottomNavItems = listOf(
@@ -269,7 +271,16 @@ fun QuailSyncApp(
             modifier = Modifier.padding(innerPadding),
         ) {
             composable(Screen.Dashboard.route) {
-                DashboardScreen(onBrooderClick = { id -> navController.navigate("brooder/$id") })
+                DashboardScreen(
+                    onBrooderClick = { id -> navController.navigate("brooder/$id") },
+                    onTelemetryClick = { navController.navigate(Screen.Telemetry.route) { launchSingleTop = true } },
+                )
+            }
+            composable(Screen.Telemetry.route) {
+                TelemetryScreen(
+                    onBrooderClick = { id -> navController.navigate("brooder/$id") },
+                    onBack = { navController.popBackStack() },
+                )
             }
             composable(Screen.Cameras.route) { CameraScreen() }
             composable(Screen.Flock.route) { FlockScreen() }

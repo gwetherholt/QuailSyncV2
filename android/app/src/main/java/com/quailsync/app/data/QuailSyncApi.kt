@@ -107,13 +107,23 @@ data class Clutch(
     @SerializedName("bloodline_id") val bloodlineId: Int? = null,
     @SerializedName("bloodline_name") val bloodlineName: String? = null,
     @SerializedName("egg_count") val eggCount: Int? = null,
+    @SerializedName("eggs_set") val eggsSet: Int? = null,
     @SerializedName("fertile_count") val fertileCount: Int? = null,
+    @SerializedName("eggs_fertile") val eggsFertile: Int? = null,
     @SerializedName("hatch_count") val hatchCount: Int? = null,
+    @SerializedName("eggs_hatched") val eggsHatched: Int? = null,
     @SerializedName("set_date") val setDate: String? = null,
     @SerializedName("expected_hatch_date") val expectedHatchDate: String? = null,
     @SerializedName("status") val status: String? = null,
     @SerializedName("notes") val notes: String? = null,
-)
+) {
+    /** Eggs set — prefers eggs_set (server field) over egg_count (legacy). */
+    val totalEggs: Int? get() = eggsSet ?: eggCount
+    /** Fertile eggs — prefers eggs_fertile (server field) over fertile_count (legacy). */
+    val totalFertile: Int? get() = eggsFertile ?: fertileCount
+    /** Hatched eggs — prefers eggs_hatched (server field) over hatch_count (legacy). */
+    val totalHatched: Int? get() = eggsHatched ?: hatchCount
+}
 
 data class CreateClutchRequest(
     @SerializedName("bloodline_id") val bloodlineId: Int? = null,
