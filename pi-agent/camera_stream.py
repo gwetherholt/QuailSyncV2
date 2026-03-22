@@ -72,8 +72,11 @@ jpeg_quality = 85
 
 # Snapshot collection for YOLO training
 collect_snapshots = False
-snapshot_interval = 300  # seconds between snapshots
+snapshot_interval = 600  # seconds between snapshots
+snapshot_dir = "./snapshots"
+max_snapshots = 1000
 last_snapshot_time = 0
+_snapshot_lock = threading.Lock()
 
 
 def init_camera(camera_index=0, width=1280, height=720):
@@ -151,7 +154,7 @@ def scan_frame_for_qr(frame_bytes):
 
 
 def _maybe_save_snapshot(frame_bytes):
-    """Save a JPEG snapshot for YOLO training data, throttled by snapshot_interval."""
+    """Queue a snapshot save if the interval has elapsed. Actual I/O runs in a background thread."""
     global last_snapshot_time
     if not collect_snapshots:
         return
@@ -159,15 +162,51 @@ def _maybe_save_snapshot(frame_bytes):
     if now - last_snapshot_time < snapshot_interval:
         return
     last_snapshot_time = now
+    # Copy the bytes and hand off to a background thread so the MJPEG stream isn't blocked
+    data = bytes(frame_bytes)
+    threading.Thread(target=_save_snapshot, args=(data,), daemon=True).start()
+
+
+def _save_snapshot(frame_bytes):
+    """Save a JPEG snapshot to disk and enforce max_snapshots limit."""
     import os
-    os.makedirs("snapshots", exist_ok=True)
-    filename = f"snapshots/{int(now)}.jpg"
-    try:
-        with open(filename, "wb") as f:
-            f.write(frame_bytes)
-        print(f"\033[36m[snapshot] Saved {filename} ({len(frame_bytes)} bytes)\033[0m")
-    except Exception as e:
-        print(f"\033[31m[snapshot] Save failed: {e}\033[0m")
+    from datetime import datetime
+
+    with _snapshot_lock:
+        os.makedirs(snapshot_dir, exist_ok=True)
+
+        bid = current_brooder_id if current_brooder_id is not None else default_brooder_id
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"brooder{bid}_{timestamp}.jpg"
+        filepath = os.path.join(snapshot_dir, filename)
+
+        try:
+            with open(filepath, "wb") as f:
+                f.write(frame_bytes)
+        except Exception as e:
+            print(f"\033[31m[snapshot] Save failed: {e}\033[0m")
+            return
+
+        # Count existing snapshots and enforce limit
+        existing = sorted(
+            [f for f in os.listdir(snapshot_dir) if f.endswith(".jpg")],
+            key=lambda f: os.path.getmtime(os.path.join(snapshot_dir, f))
+        )
+        deleted = 0
+        while len(existing) > max_snapshots:
+            oldest = existing.pop(0)
+            try:
+                os.remove(os.path.join(snapshot_dir, oldest))
+                deleted += 1
+            except OSError:
+                pass
+
+        size_kb = len(frame_bytes) / 1024
+        count = len(existing)
+        msg = f"\033[36m[snapshot] Saved {filename} ({size_kb:.0f} KB, {count}/{max_snapshots})\033[0m"
+        if deleted:
+            msg += f" (deleted {deleted} oldest)"
+        print(msg)
 
 
 _announced = False
@@ -338,7 +377,7 @@ class StreamHandler(BaseHTTPRequestHandler):
 
 def main():
     global server_url, default_brooder_id, stream_port, jpeg_quality
-    global collect_snapshots, snapshot_interval
+    global collect_snapshots, snapshot_interval, snapshot_dir, max_snapshots
 
     parser = argparse.ArgumentParser(description="QuailSync Camera Stream")
     parser.add_argument("--port", type=int, default=8080, help="HTTP port (default: 8080)")
@@ -356,8 +395,12 @@ def main():
                         help="JPEG compression quality 1-100 (default: 85)")
     parser.add_argument("--collect-snapshots", action="store_true", default=False,
                         help="Save periodic snapshots for YOLO training to ./snapshots/")
-    parser.add_argument("--snapshot-interval", type=int, default=300,
-                        help="Seconds between saved snapshots (default: 300)")
+    parser.add_argument("--snapshot-interval", type=int, default=600,
+                        help="Seconds between saved snapshots (default: 600)")
+    parser.add_argument("--snapshot-dir", type=str, default="./snapshots",
+                        help="Directory for saved snapshots (default: ./snapshots)")
+    parser.add_argument("--max-snapshots", type=int, default=1000,
+                        help="Max snapshots to keep; oldest deleted when exceeded (default: 1000)")
     args = parser.parse_args()
 
     server_url = args.server
@@ -366,6 +409,8 @@ def main():
     jpeg_quality = args.jpeg_quality
     collect_snapshots = args.collect_snapshots
     snapshot_interval = args.snapshot_interval
+    snapshot_dir = args.snapshot_dir
+    max_snapshots = args.max_snapshots
 
     # Initialize the selected camera
     init_camera(args.camera_index, args.width, args.height)
@@ -381,7 +426,7 @@ def main():
     print(f"  Server:     {server_url or 'not configured'}")
     print(f"  Brooder:    {default_brooder_id}")
     if collect_snapshots:
-        print(f"  Snapshots:  every {snapshot_interval}s -> ./snapshots/")
+        print(f"  Snapshots:  every {snapshot_interval}s -> {snapshot_dir}/ (max {max_snapshots})")
     print()
 
     # Auto-register this camera with the server on startup
