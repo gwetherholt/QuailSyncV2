@@ -348,10 +348,10 @@ def main():
                         help="Brooder ID to register this camera with (default: 1)")
     parser.add_argument("--camera-index", type=int, default=0,
                         help="Camera index for Picamera2 (0=cam0, 1=cam1, default: 0)")
-    parser.add_argument("--width", type=int, default=1280,
-                        help="Capture width in pixels (default: 1280)")
-    parser.add_argument("--height", type=int, default=720,
-                        help="Capture height in pixels (default: 720)")
+    parser.add_argument("--width", type=int, default=640,
+                        help="Capture width in pixels (default: 640)")
+    parser.add_argument("--height", type=int, default=480,
+                        help="Capture height in pixels (default: 480)")
     parser.add_argument("--jpeg-quality", type=int, default=85,
                         help="JPEG compression quality 1-100 (default: 85)")
     parser.add_argument("--collect-snapshots", action="store_true", default=False,
