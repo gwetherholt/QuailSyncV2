@@ -229,6 +229,87 @@ data class MoveBirdRequest(
     @SerializedName("target_brooder_id") val targetBrooderId: Int?,
 )
 
+// Breeding & Culling models
+
+data class BreedingGroupDto(
+    @SerializedName("id") val id: Int,
+    @SerializedName("name") val name: String,
+    @SerializedName("male_id") val maleId: Int,
+    @SerializedName("female_ids") val femaleIds: List<Int> = emptyList(),
+    @SerializedName("start_date") val startDate: String? = null,
+    @SerializedName("notes") val notes: String? = null,
+)
+
+data class CreateBreedingGroupRequest(
+    @SerializedName("name") val name: String,
+    @SerializedName("male_id") val maleId: Int,
+    @SerializedName("female_ids") val femaleIds: List<Int>,
+    @SerializedName("start_date") val startDate: String,
+    @SerializedName("notes") val notes: String? = null,
+)
+
+data class CullRecommendation(
+    @SerializedName("bird_id") val birdId: Int,
+    @SerializedName("reason") val reason: com.google.gson.JsonElement? = null,
+) {
+    /** Parse the Rust serde-tagged enum: "ExcessMale" or {"LowWeight": {"weight_grams": N}} */
+    val reasonLabel: String get() {
+        val r = reason ?: return "Unknown"
+        if (r.isJsonPrimitive) return when (r.asString) {
+            "ExcessMale" -> "Excess Male"
+            else -> r.asString
+        }
+        if (r.isJsonObject) {
+            val obj = r.asJsonObject
+            if (obj.has("LowWeight")) {
+                val w = obj.getAsJsonObject("LowWeight").get("weight_grams")?.asDouble ?: 0.0
+                return "Underweight (${w.toInt()}g)"
+            }
+            if (obj.has("HighInbreeding")) {
+                val c = obj.getAsJsonObject("HighInbreeding").get("coefficient")?.asDouble ?: 0.0
+                return "Inbreeding Risk (${"%.0f".format(c * 100)}%)"
+            }
+        }
+        return "Unknown"
+    }
+    val reasonKey: String get() {
+        val r = reason ?: return "unknown"
+        if (r.isJsonPrimitive && r.asString == "ExcessMale") return "excess_male"
+        if (r.isJsonObject) {
+            val obj = r.asJsonObject
+            if (obj.has("LowWeight")) return "underweight"
+            if (obj.has("HighInbreeding")) return "inbreeding"
+        }
+        return "unknown"
+    }
+    val priority: String get() = when (reasonKey) {
+        "inbreeding" -> "high"
+        "excess_male" -> "medium"
+        "underweight" -> "low"
+        else -> "low"
+    }
+}
+
+data class InbreedingCheckResult(
+    @SerializedName("male_id") val maleId: Int,
+    @SerializedName("female_id") val femaleId: Int,
+    @SerializedName("coefficient") val coefficient: Double,
+    @SerializedName("safe") val safe: Boolean,
+    @SerializedName("warning") val warning: String? = null,
+)
+
+data class CullBatchRequest(
+    @SerializedName("bird_ids") val birdIds: List<Int>,
+    @SerializedName("reason") val reason: String,
+    @SerializedName("method") val method: String,
+    @SerializedName("notes") val notes: String? = null,
+    @SerializedName("processed_date") val processedDate: String,
+)
+
+data class CullBatchResponse(
+    @SerializedName("updated") val updated: Int,
+)
+
 interface QuailSyncApi {
 
     @GET("api/brooders")
@@ -321,6 +402,28 @@ interface QuailSyncApi {
 
     @PUT("api/birds/{id}/move")
     suspend fun moveBird(@Path("id") id: Int, @Body request: MoveBirdRequest): Bird
+
+    // Breeding groups
+    @GET("api/breeding-groups")
+    suspend fun getBreedingGroups(): List<BreedingGroupDto>
+
+    @POST("api/breeding-groups")
+    suspend fun createBreedingGroup(@Body request: CreateBreedingGroupRequest): BreedingGroupDto
+
+    // Cull recommendations
+    @GET("api/flock/cull-recommendations")
+    suspend fun getCullRecommendations(): List<CullRecommendation>
+
+    // Inbreeding check
+    @GET("api/inbreeding-check")
+    suspend fun checkInbreeding(
+        @retrofit2.http.Query("male_id") maleId: Int,
+        @retrofit2.http.Query("female_id") femaleId: Int,
+    ): InbreedingCheckResult
+
+    // Batch cull
+    @POST("api/cull-batch")
+    suspend fun cullBatch(@Body request: CullBatchRequest): CullBatchResponse
 
     companion object {
         fun create(baseUrl: String): QuailSyncApi {
