@@ -241,7 +241,7 @@ class StreamHandler(BaseHTTPRequestHandler):
         try:
             while True:
                 buf = io.BytesIO()
-                picam2.capture_file(buf, format="jpeg", quality=jpeg_quality)
+                picam2.capture_file(buf, format="jpeg")
                 frame = buf.getvalue()
 
                 # QR scan on this frame (throttled internally)
@@ -261,7 +261,7 @@ class StreamHandler(BaseHTTPRequestHandler):
 
     def _handle_snapshot(self):
         buf = io.BytesIO()
-        picam2.capture_file(buf, format="jpeg", quality=jpeg_quality)
+        picam2.capture_file(buf, format="jpeg")
         frame = buf.getvalue()
 
         # Also scan this frame
