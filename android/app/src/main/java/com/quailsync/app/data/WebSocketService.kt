@@ -125,6 +125,7 @@ class WebSocketService(
                 temperature = temperature,
                 humidity = humidity,
                 timestamp = timestamp,
+                receivedAt = System.currentTimeMillis(),
             )
 
             Log.d("QuailSync", "WebSocket parsed reading: brooder=$brooderId temp=$temperature humidity=$humidity")
