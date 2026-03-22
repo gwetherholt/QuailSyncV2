@@ -505,7 +505,7 @@ fun AddClutchDialog(bloodlines: List<Bloodline>, viewModel: ClutchViewModel, onD
 
 @Composable
 fun CandlingDialog(clutch: Clutch, viewModel: ClutchViewModel, onDismiss: () -> Unit, onSuccess: (Int) -> Unit) {
-    var fertile by remember { mutableStateOf(clutch.eggCount?.toString() ?: "") }
+    var fertile by remember { mutableStateOf(clutch.totalEggs?.toString() ?: "") }
     var notes by remember { mutableStateOf("") }
     var saving by remember { mutableStateOf(false) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
@@ -515,7 +515,7 @@ fun CandlingDialog(clutch: Clutch, viewModel: ClutchViewModel, onDismiss: () -> 
         title = { Text("Record Candling") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Clutch #${clutch.id} — ${clutch.eggCount ?: "?"} eggs set", style = MaterialTheme.typography.bodyMedium)
+                Text("Clutch #${clutch.id} — ${clutch.totalEggs ?: "?"} eggs set", style = MaterialTheme.typography.bodyMedium)
                 OutlinedTextField(value = fertile, onValueChange = { fertile = it.filter { c -> c.isDigit() } }, label = { Text("Fertile eggs") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(value = notes, onValueChange = { notes = it }, label = { Text("Notes (optional)") }, modifier = Modifier.fillMaxWidth())
@@ -561,7 +561,7 @@ fun RecordHatchDialog(clutch: Clutch, viewModel: ClutchViewModel, onDismiss: () 
         title = { Text("Record Hatch") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Clutch #${clutch.id} — ${clutch.eggCount ?: "?"} eggs", style = MaterialTheme.typography.bodyMedium)
+                Text("Clutch #${clutch.id} — ${clutch.totalEggs ?: "?"} eggs", style = MaterialTheme.typography.bodyMedium)
                 OutlinedTextField(value = hatched, onValueChange = { hatched = it.filter { c -> c.isDigit() } }, label = { Text("Hatched") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
                 Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp)) {
@@ -692,9 +692,9 @@ fun ClutchCard(clutch: Clutch, bloodlineName: String?, brooderName: String? = nu
 
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceEvenly) {
-                clutch.eggCount?.let { ClutchStat(it.toString(), "Eggs") }
-                clutch.fertileCount?.let { ClutchStat(it.toString(), "Fertile", clutch.eggCount?.let { e -> "of $e" }) }
-                clutch.hatchCount?.let { ClutchStat(it.toString(), "Hatched", (clutch.fertileCount ?: clutch.eggCount)?.let { e -> "of $e" }) }
+                clutch.totalEggs?.let { ClutchStat(it.toString(), "Eggs") }
+                clutch.totalFertile?.let { ClutchStat(it.toString(), "Fertile", clutch.totalEggs?.let { e -> "of $e" }) }
+                clutch.totalHatched?.let { ClutchStat(it.toString(), "Hatched", (clutch.totalFertile ?: clutch.totalEggs)?.let { e -> "of $e" }) }
             }
 
             if (setDate != null) {
@@ -806,8 +806,8 @@ fun GraduatedGroupCard(group: ChickGroupDto, bloodlineName: String?) {
 @Composable
 fun EditClutchDialog(clutch: Clutch, liveBloodlines: List<Bloodline>, viewModel: ClutchViewModel, onDismiss: () -> Unit, onSuccess: () -> Unit) {
     var setDate by remember { mutableStateOf(clutch.setDate ?: "") }
-    var eggsFertile by remember { mutableStateOf(clutch.fertileCount?.toString() ?: "") }
-    var eggsHatched by remember { mutableStateOf(clutch.hatchCount?.toString() ?: "") }
+    var eggsFertile by remember { mutableStateOf(clutch.totalFertile?.toString() ?: "") }
+    var eggsHatched by remember { mutableStateOf(clutch.totalHatched?.toString() ?: "") }
     var status by remember { mutableStateOf(clutch.status ?: "Incubating") }
     var notes by remember { mutableStateOf(clutch.notes ?: "") }
     var statusExpanded by remember { mutableStateOf(false) }
@@ -827,7 +827,7 @@ fun EditClutchDialog(clutch: Clutch, liveBloodlines: List<Bloodline>, viewModel:
         title = { Text("Edit Clutch #${clutch.id}") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("${clutch.bloodlineName ?: "Clutch"} — ${clutch.eggCount ?: "?"} eggs set", style = MaterialTheme.typography.bodyMedium)
+                Text("${clutch.bloodlineName ?: "Clutch"} — ${clutch.totalEggs ?: "?"} eggs set", style = MaterialTheme.typography.bodyMedium)
 
                 // Set date
                 OutlinedTextField(
