@@ -64,6 +64,7 @@ import com.quailsync.app.ui.screens.BatchState
 import com.quailsync.app.ui.screens.BrooderManageScreen
 import com.quailsync.app.ui.screens.CameraScreen
 import com.quailsync.app.ui.screens.ClutchScreen
+import com.quailsync.app.ui.screens.BreedingScreen
 import com.quailsync.app.ui.screens.DashboardScreen
 import com.quailsync.app.ui.screens.FlockScreen
 import com.quailsync.app.ui.screens.TelemetryScreen
@@ -81,6 +82,7 @@ sealed class Screen(val route: String, val label: String, val icon: ImageVector,
     data object Clutches : Screen("clutches", "Hatchery", Icons.Default.Egg)
     data object Settings : Screen("settings", "Settings", Icons.Default.Settings)
     data object Telemetry : Screen("telemetry", "Telemetry", Icons.Default.Settings)
+    data object Breeding : Screen("breeding", "Breeding", Icons.Default.Pets)
 }
 
 val bottomNavItems = listOf(
@@ -274,6 +276,7 @@ fun QuailSyncApp(
                 DashboardScreen(
                     onBrooderClick = { id -> navController.navigate("brooder/$id") },
                     onTelemetryClick = { navController.navigate(Screen.Telemetry.route) { launchSingleTop = true } },
+                    onBreedingClick = { navController.navigate(Screen.Breeding.route) { launchSingleTop = true } },
                 )
             }
             composable(Screen.Telemetry.route) {
@@ -281,6 +284,9 @@ fun QuailSyncApp(
                     onBrooderClick = { id -> navController.navigate("brooder/$id") },
                     onBack = { navController.popBackStack() },
                 )
+            }
+            composable(Screen.Breeding.route) {
+                BreedingScreen(onBack = { navController.popBackStack() })
             }
             composable(Screen.Cameras.route) { CameraScreen() }
             composable(Screen.Flock.route) { FlockScreen() }

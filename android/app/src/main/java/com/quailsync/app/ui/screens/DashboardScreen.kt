@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Egg
 import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
@@ -179,6 +180,7 @@ fun DashboardScreen(
     viewModel: DashboardViewModel = viewModel(),
     onBrooderClick: (Int) -> Unit = {},
     onTelemetryClick: () -> Unit = {},
+    onBreedingClick: () -> Unit = {},
 ) {
     val brooders by viewModel.brooders.collectAsState()
     val birds by viewModel.birds.collectAsState()
@@ -282,6 +284,29 @@ fun DashboardScreen(
                         chickGroup = chickGroups.find { it.brooderId == state.brooder.id && it.status == "Active" },
                         onClick = { onBrooderClick(state.brooder.id) },
                     )
+                }
+
+                // === Breeding & Culling Card ===
+                item(key = "breeding-card") {
+                    Card(
+                        Modifier.fillMaxWidth().clickable(onClick = onBreedingClick),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(1.dp),
+                    ) {
+                        Row(
+                            Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Default.Science, null, Modifier.size(24.dp), tint = SageGreen)
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("Breeding & Culling", style = MaterialTheme.typography.titleMedium)
+                                Text("Manage groups, pair checks, cull list", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Text("\u203A", fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                 }
 
                 // === 4. Recent Alerts Feed ===

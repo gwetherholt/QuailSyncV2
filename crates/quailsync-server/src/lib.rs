@@ -1992,6 +1992,98 @@ async fn cull_recommendations(State(state): State<AppState>) -> Json<Vec<CullRec
 }
 
 // ---------------------------------------------------------------------------
+// Batch cull
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct CullBatchRequest {
+    bird_ids: Vec<i64>,
+    reason: String,
+    method: String,
+    notes: Option<String>,
+    processed_date: String,
+}
+
+async fn cull_batch(
+    State(state): State<AppState>,
+    Json(body): Json<CullBatchRequest>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+    let status = body.method.as_str();
+    let mut count = 0i64;
+    for bird_id in &body.bird_ids {
+        let rows = conn
+            .execute(
+                "UPDATE birds SET status = ?1 WHERE id = ?2 AND status = 'Active'",
+                params![status, bird_id],
+            )
+            .unwrap_or(0);
+        count += rows as i64;
+    }
+    Json(serde_json::json!({"updated": count}))
+}
+
+// ---------------------------------------------------------------------------
+// Inbreeding check (single pair)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct InbreedingCheckQuery {
+    male_id: i64,
+    female_id: i64,
+}
+
+async fn inbreeding_check(
+    State(state): State<AppState>,
+    Query(q): Query<InbreedingCheckQuery>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+    let get_bird = |id: i64| -> Option<BirdRecord> {
+        conn.query_row(
+            "SELECT id, sex, bloodline_id, mother_id, father_id FROM birds WHERE id = ?1",
+            params![id],
+            |row| {
+                let sex_str: String = row.get(1)?;
+                Ok(BirdRecord {
+                    id: row.get(0)?,
+                    sex: str_to_sex(&sex_str),
+                    bloodline_id: row.get(2)?,
+                    mother_id: row.get(3)?,
+                    father_id: row.get(4)?,
+                })
+            },
+        )
+        .ok()
+    };
+
+    let male = get_bird(q.male_id);
+    let female = get_bird(q.female_id);
+
+    match (male, female) {
+        (Some(m), Some(f)) => {
+            let coefficient = compute_relatedness(&m, &f);
+            Json(serde_json::json!({
+                "male_id": q.male_id,
+                "female_id": q.female_id,
+                "coefficient": coefficient,
+                "safe": coefficient < 0.0625,
+                "warning": if coefficient >= 0.0625 {
+                    format!("High inbreeding risk: {:.1}%", coefficient * 100.0)
+                } else {
+                    String::new()
+                }
+            }))
+            .into_response()
+        }
+        _ => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "One or both birds not found"})),
+        )
+            .into_response(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Camera feed infrastructure
 // ---------------------------------------------------------------------------
 
@@ -3170,6 +3262,8 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/breeding-groups/{id}", get(get_breeding_group))
         .route("/api/flock/summary", get(flock_summary))
         .route("/api/flock/cull-recommendations", get(cull_recommendations))
+        .route("/api/cull-batch", axum::routing::post(cull_batch))
+        .route("/api/inbreeding-check", get(inbreeding_check))
         .route("/api/breeding/suggest", get(breeding_suggest))
         .route("/api/brooders", get(list_brooders).post(create_brooder))
         .route("/api/brooders/{id}", axum::routing::put(update_brooder))
