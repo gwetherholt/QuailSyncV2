@@ -17,11 +17,12 @@ Dependencies:
   sudo apt install libzbar0
 
 Usage:
-  python3 camera_stream.py [--server ws://192.168.0.228:3000/ws] [--port 8080] [--camera-index 0] [--brooder-id 1]
+  python3 camera_stream.py [--server ws://192.168.0.114:3000/ws] [--port 8080] [--camera-index 0] [--brooder-id 1]
+  python3 camera_stream.py --width 1920 --height 1080 --collect-snapshots --snapshot-interval 60
 
 Multi-camera example (two cameras on one Pi):
-  python3 camera_stream.py --camera-index 0 --port 8080 --brooder-id 1 --server ws://192.168.0.228:3000/ws &
-  python3 camera_stream.py --camera-index 1 --port 8081 --brooder-id 2 --server ws://192.168.0.228:3000/ws &
+  python3 camera_stream.py --camera-index 0 --port 8080 --brooder-id 1 --server ws://192.168.0.114:3000/ws &
+  python3 camera_stream.py --camera-index 1 --port 8081 --brooder-id 2 --server ws://192.168.0.114:3000/ws &
 """
 
 from picamera2 import Picamera2
@@ -67,19 +68,31 @@ server_url = None
 default_brooder_id = 1
 stream_port = 8080
 picam2 = None  # initialized in main()
+jpeg_quality = 85
+
+# Snapshot collection for YOLO training
+collect_snapshots = False
+snapshot_interval = 300  # seconds between snapshots
+last_snapshot_time = 0
 
 
-def init_camera(camera_index=0):
+def init_camera(camera_index=0, width=1280, height=720):
     """Initialize the Picamera2 instance with the given camera index."""
     global picam2
     picam2 = Picamera2(camera_index)
     config = picam2.create_video_configuration(
-        main={"size": (640, 480), "format": "RGB888"}
+        main={"size": (width, height), "format": "RGB888"}
     )
     picam2.configure(config)
     picam2.start()
     time.sleep(1)
-    print(f"\033[32m[camera] Started camera {camera_index} — 640x480 RGB888\033[0m")
+    # Enable continuous autofocus (silently skip if camera doesn't support it)
+    try:
+        picam2.set_controls({"AfMode": 2, "AfTrigger": 0})
+        print(f"\033[32m[camera] Continuous autofocus enabled\033[0m")
+    except Exception:
+        print(f"\033[33m[camera] Autofocus not available on this camera\033[0m")
+    print(f"\033[32m[camera] Started camera {camera_index} — {width}x{height} RGB888\033[0m")
 
 
 def scan_frame_for_qr(frame_bytes):
@@ -135,6 +148,26 @@ def scan_frame_for_qr(frame_bytes):
     except Exception as e:
         print(f"\033[31m[qr] Scan error: {e}\033[0m")
         return current_brooder_id
+
+
+def _maybe_save_snapshot(frame_bytes):
+    """Save a JPEG snapshot for YOLO training data, throttled by snapshot_interval."""
+    global last_snapshot_time
+    if not collect_snapshots:
+        return
+    now = time.time()
+    if now - last_snapshot_time < snapshot_interval:
+        return
+    last_snapshot_time = now
+    import os
+    os.makedirs("snapshots", exist_ok=True)
+    filename = f"snapshots/{int(now)}.jpg"
+    try:
+        with open(filename, "wb") as f:
+            f.write(frame_bytes)
+        print(f"\033[36m[snapshot] Saved {filename} ({len(frame_bytes)} bytes)\033[0m")
+    except Exception as e:
+        print(f"\033[31m[snapshot] Save failed: {e}\033[0m")
 
 
 _announced = False
@@ -208,14 +241,18 @@ class StreamHandler(BaseHTTPRequestHandler):
         try:
             while True:
                 buf = io.BytesIO()
-                picam2.capture_file(buf, format="jpeg")
+                picam2.capture_file(buf, format="jpeg", quality=jpeg_quality)
                 frame = buf.getvalue()
 
                 # QR scan on this frame (throttled internally)
                 scan_frame_for_qr(frame)
 
+                # Save snapshot for YOLO training if enabled
+                _maybe_save_snapshot(frame)
+
                 self.wfile.write(b"--frame\r\n")
-                self.wfile.write(b"Content-Type: image/jpeg\r\n\r\n")
+                self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                self.wfile.write(f"Content-Length: {len(frame)}\r\n\r\n".encode())
                 self.wfile.write(frame)
                 self.wfile.write(b"\r\n")
                 time.sleep(0.1)  # ~10 FPS
@@ -224,7 +261,7 @@ class StreamHandler(BaseHTTPRequestHandler):
 
     def _handle_snapshot(self):
         buf = io.BytesIO()
-        picam2.capture_file(buf, format="jpeg")
+        picam2.capture_file(buf, format="jpeg", quality=jpeg_quality)
         frame = buf.getvalue()
 
         # Also scan this frame
@@ -271,7 +308,7 @@ class StreamHandler(BaseHTTPRequestHandler):
   </div>
   <div class="status">QR Scanning: {qr_status}</div>
   <br>
-  <img src="/stream" width="640">
+  <img src="/stream" width="1280" style="max-width:100%">
   <br><br>
   <a href="/snapshot" style="color:#00d4ff">Snapshot</a> |
   <a href="/qr-status" style="color:#00d4ff">QR Status JSON</a>
@@ -300,33 +337,51 @@ class StreamHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    global server_url, default_brooder_id, stream_port
+    global server_url, default_brooder_id, stream_port, jpeg_quality
+    global collect_snapshots, snapshot_interval
 
     parser = argparse.ArgumentParser(description="QuailSync Camera Stream")
     parser.add_argument("--port", type=int, default=8080, help="HTTP port (default: 8080)")
     parser.add_argument("--server", type=str, default=None,
-                        help="QuailSync server WebSocket URL (e.g., ws://192.168.0.228:3000/ws)")
+                        help="QuailSync server WebSocket URL (e.g., ws://192.168.0.114:3000/ws)")
     parser.add_argument("--brooder-id", type=int, default=1,
                         help="Brooder ID to register this camera with (default: 1)")
     parser.add_argument("--camera-index", type=int, default=0,
                         help="Camera index for Picamera2 (0=cam0, 1=cam1, default: 0)")
+    parser.add_argument("--width", type=int, default=1280,
+                        help="Capture width in pixels (default: 1280)")
+    parser.add_argument("--height", type=int, default=720,
+                        help="Capture height in pixels (default: 720)")
+    parser.add_argument("--jpeg-quality", type=int, default=85,
+                        help="JPEG compression quality 1-100 (default: 85)")
+    parser.add_argument("--collect-snapshots", action="store_true", default=False,
+                        help="Save periodic snapshots for YOLO training to ./snapshots/")
+    parser.add_argument("--snapshot-interval", type=int, default=300,
+                        help="Seconds between saved snapshots (default: 300)")
     args = parser.parse_args()
 
     server_url = args.server
     default_brooder_id = args.brooder_id
     stream_port = args.port
+    jpeg_quality = args.jpeg_quality
+    collect_snapshots = args.collect_snapshots
+    snapshot_interval = args.snapshot_interval
 
     # Initialize the selected camera
-    init_camera(args.camera_index)
+    init_camera(args.camera_index, args.width, args.height)
 
     print(f"\n\033[1m[QuailSync Camera]\033[0m")
-    print(f"  Camera:   index {args.camera_index}")
-    print(f"  Stream:   http://0.0.0.0:{args.port}/stream")
-    print(f"  Snapshot: http://0.0.0.0:{args.port}/snapshot")
-    print(f"  QR JSON:  http://0.0.0.0:{args.port}/qr-status")
-    print(f"  QR Scan:  {'enabled' if QR_AVAILABLE else 'DISABLED'}")
-    print(f"  Server:   {server_url or 'not configured'}")
-    print(f"  Brooder:  {default_brooder_id}")
+    print(f"  Camera:     index {args.camera_index}")
+    print(f"  Resolution: {args.width}x{args.height}")
+    print(f"  JPEG:       quality {jpeg_quality}")
+    print(f"  Stream:     http://0.0.0.0:{args.port}/stream")
+    print(f"  Snapshot:   http://0.0.0.0:{args.port}/snapshot")
+    print(f"  QR JSON:    http://0.0.0.0:{args.port}/qr-status")
+    print(f"  QR Scan:    {'enabled' if QR_AVAILABLE else 'DISABLED'}")
+    print(f"  Server:     {server_url or 'not configured'}")
+    print(f"  Brooder:    {default_brooder_id}")
+    if collect_snapshots:
+        print(f"  Snapshots:  every {snapshot_interval}s -> ./snapshots/")
     print()
 
     # Auto-register this camera with the server on startup

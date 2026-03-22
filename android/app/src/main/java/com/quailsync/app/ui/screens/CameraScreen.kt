@@ -54,6 +54,7 @@ import androidx.compose.material3.TabRowDefaults.SecondaryIndicator
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -62,6 +63,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
@@ -365,6 +369,20 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
     val allBrooders by viewModel.brooders.collectAsState()
     var showAddDialog by remember { mutableStateOf(false) }
 
+    // Increment refreshKey every time this screen resumes (e.g. navigating back to Cameras tab)
+    // so that MjpegStreamView LaunchedEffects restart their HTTP connections.
+    var refreshKey by remember { mutableIntStateOf(0) }
+    val lifecycleOwner = LocalContext.current as LifecycleOwner
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                refreshKey++
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
@@ -416,6 +434,7 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
                             brooders = allBrooders,
                             onDelete = { viewModel.deleteCamera(item) },
                             onReassign = { newBrooderId -> viewModel.reassignCamera(item, newBrooderId) },
+                            streamRefreshKey = refreshKey,
                         )
                     }
                     item { Spacer(Modifier.height(8.dp)) }
@@ -440,6 +459,7 @@ fun CameraCard(
     brooders: List<Brooder> = emptyList(),
     onDelete: () -> Unit = {},
     onReassign: (Int) -> Unit = {},
+    streamRefreshKey: Int = 0,
 ) {
     val context = LocalContext.current
     var showFullScreen by remember { mutableStateOf(false) }
@@ -555,7 +575,7 @@ fun CameraCard(
             Spacer(Modifier.height(12.dp))
 
             if (item.streamUrl != null) {
-                MjpegStreamView(item.streamUrl, Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp)))
+                MjpegStreamView(item.streamUrl, Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp)), streamRefreshKey)
                 Spacer(Modifier.height(12.dp))
                 Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
@@ -787,13 +807,14 @@ fun AddCameraDialog(viewModel: CameraViewModel, onDismiss: () -> Unit) {
 // =====================================================================
 
 @Composable
-fun MjpegStreamView(url: String, modifier: Modifier = Modifier) {
+fun MjpegStreamView(url: String, modifier: Modifier = Modifier, refreshKey: Int = 0) {
     var currentFrame by remember { mutableStateOf<Bitmap?>(null) }
     var hasError by remember { mutableStateOf(false) }
 
     // Stream coroutine: runs while in composition, cancels when leaving.
     // Uses multipart Content-Length for bulk reads instead of byte-scanning.
-    LaunchedEffect(url) {
+    // refreshKey forces a restart when the screen resumes after navigation away.
+    LaunchedEffect(url, refreshKey) {
         currentFrame = null
         hasError = false
         withContext(Dispatchers.IO) {
