@@ -30,6 +30,7 @@ services:
       - PYTHONUNBUFFERED=1
     volumes:
       - ./pi-agent:/app
+      - ./snapshots:/app/snapshots
       - /usr/lib/python3/dist-packages:/host-packages:ro
       - /usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu:ro
       - /usr/share/libpisp:/usr/share/libpisp:ro
@@ -43,6 +44,7 @@ services:
       --brooder-id 1
       --camera-index 0
       --port 8080
+      --collect-snapshots
     restart: always
 
   camera2:
@@ -55,6 +57,7 @@ services:
       - PYTHONUNBUFFERED=1
     volumes:
       - ./pi-agent:/app
+      - ./snapshots:/app/snapshots
       - /usr/lib/python3/dist-packages:/host-packages:ro
       - /usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu:ro
       - /usr/share/libpisp:/usr/share/libpisp:ro
@@ -68,4 +71,5 @@ services:
       --brooder-id 2
       --camera-index 1
       --port 8081
+      --collect-snapshots
     restart: always
