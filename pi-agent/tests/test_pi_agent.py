@@ -176,7 +176,7 @@ class TestBuildBrooderPayload(unittest.TestCase):
         data = json.loads(payload)
         self.assertIn("Brooder", data)
         br = data["Brooder"]
-        self.assertAlmostEqual(br["temperature_celsius"], 98.6)
+        self.assertAlmostEqual(br["temperature_f"], 98.6)
         self.assertAlmostEqual(br["humidity_percent"], 55.0)
         self.assertEqual(br["brooder_id"], 1)
         self.assertIn("timestamp", br)
@@ -192,12 +192,12 @@ class TestBuildBrooderPayload(unittest.TestCase):
     def test_negative_temperature(self):
         payload = build_brooder_payload(-40.0, 0.0, 1)
         data = json.loads(payload)
-        self.assertAlmostEqual(data["Brooder"]["temperature_celsius"], -40.0)
+        self.assertAlmostEqual(data["Brooder"]["temperature_f"], -40.0)
 
     def test_zero_values(self):
         payload = build_brooder_payload(0.0, 0.0, 0)
         data = json.loads(payload)
-        self.assertEqual(data["Brooder"]["temperature_celsius"], 0.0)
+        self.assertEqual(data["Brooder"]["temperature_f"], 0.0)
         self.assertEqual(data["Brooder"]["humidity_percent"], 0.0)
         self.assertEqual(data["Brooder"]["brooder_id"], 0)
 
@@ -209,7 +209,7 @@ class TestBuildBrooderPayload(unittest.TestCase):
     def test_extreme_values(self):
         payload = build_brooder_payload(99999.99, 99999.99, 1)
         data = json.loads(payload)
-        self.assertAlmostEqual(data["Brooder"]["temperature_celsius"], 99999.99)
+        self.assertAlmostEqual(data["Brooder"]["temperature_f"], 99999.99)
 
     def test_payload_is_valid_json(self):
         payload = build_brooder_payload(98.0, 50.0, 1)
@@ -542,7 +542,7 @@ class TestPayloadSerdeCompatibility(unittest.TestCase):
         payload = build_brooder_payload(98.0, 50.0, 1)
         data = json.loads(payload)
         br = data["Brooder"]
-        required = ["temperature_celsius", "humidity_percent", "timestamp", "brooder_id"]
+        required = ["temperature_f", "humidity_percent", "timestamp", "brooder_id"]
         for field in required:
             self.assertIn(field, br, f"Missing required field: {field}")
 
@@ -582,7 +582,7 @@ class TestPayloadSerdeCompatibility(unittest.TestCase):
     def test_temperature_is_float(self):
         payload = build_brooder_payload(98.0, 50.0, 1)
         data = json.loads(payload)
-        self.assertIsInstance(data["Brooder"]["temperature_celsius"], float)
+        self.assertIsInstance(data["Brooder"]["temperature_f"], float)
 
 
 # ===========================================================================

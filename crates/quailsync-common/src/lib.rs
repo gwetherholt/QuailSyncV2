@@ -15,7 +15,7 @@ pub struct SystemMetrics {
 /// A single reading from a brooder's environmental sensors.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrooderReading {
-    pub temperature_celsius: f64,
+    pub temperature_f: f64,
     pub humidity_percent: f64,
     pub timestamp: DateTime<Utc>,
     #[serde(default)]
@@ -626,7 +626,7 @@ mod tests {
     #[test]
     fn telemetry_brooder_roundtrip() {
         let payload = TelemetryPayload::Brooder(BrooderReading {
-            temperature_celsius: 98.6,
+            temperature_f: 98.6,
             humidity_percent: 55.0,
             timestamp: Utc::now(),
             brooder_id: Some(1),
@@ -635,7 +635,7 @@ mod tests {
         let back: TelemetryPayload = serde_json::from_str(&json).unwrap();
         match back {
             TelemetryPayload::Brooder(r) => {
-                assert!((r.temperature_celsius - 98.6).abs() < f64::EPSILON);
+                assert!((r.temperature_f - 98.6).abs() < f64::EPSILON);
                 assert!((r.humidity_percent - 55.0).abs() < f64::EPSILON);
             }
             _ => panic!("expected Brooder variant"),

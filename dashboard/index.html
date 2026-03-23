@@ -975,7 +975,7 @@
 
     // Called from /ws/live onmessage — update one brooder card instantly from WS payload
     _updateFromWs: function(reading){
-      var temp = reading.temperature_celsius;
+      var temp = reading.temperature_f;
       var hum = reading.humidity_percent;
       var bid = reading.brooder_id || 'legacy';
 
@@ -1028,10 +1028,10 @@
         var history = await API.get('/api/brooder/history?minutes=60');
         if(!history || history.length===0){ el.innerHTML=emptyState('&#x1F321;&#xFE0F;','No brooder readings yet','',null); return; }
         var latest=history[0];
-        var temp=latest.temperature_celsius.toFixed(1);
+        var temp=latest.temperature_f.toFixed(1);
         var hum=latest.humidity_percent.toFixed(1);
         var pts=history.slice().reverse().slice(-30);
-        var temps=pts.map(function(p){return p.temperature_celsius});
+        var temps=pts.map(function(p){return p.temperature_f});
         self._sparkCache['legacy'] = temps.slice();
         el.innerHTML='<div data-brooder-id="legacy" style="border-left:4px solid var(--safe)"><div class="reading-row"><div><span class="reading-label">Temperature</span><br><span class="reading-value" data-field="temp">'+temp+'&deg;F</span></div><div style="text-align:right"><span class="reading-label">Humidity</span><br><span class="reading-value" data-field="hum">'+hum+'%</span></div></div><div class="sparkline" data-field="spark">'+self._buildSparkBars(temps,30,32)+'</div><div data-field="alert"></div></div>';
         return;
@@ -1056,7 +1056,7 @@
         var sparkTemps = [];
         if(readings && readings.length>0){
           var pts=readings.slice().reverse().slice(-20);
-          sparkTemps=pts.map(function(p){return p.temperature_celsius});
+          sparkTemps=pts.map(function(p){return p.temperature_f});
         }
         self._sparkCache[String(b.id)] = sparkTemps.slice();
         html+='<div data-brooder-id="'+b.id+'" style="background:var(--cream);border-radius:var(--radius);padding:.75rem;'+alertBorder+'">';

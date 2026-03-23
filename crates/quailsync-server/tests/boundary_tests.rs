@@ -559,7 +559,7 @@ async fn reading_extreme_temperatures_via_ws() {
     for temp in temps {
         let payload = json!({
             "Brooder": {
-                "temperature_celsius": temp,
+                "temperature_f": temp,
                 "humidity_percent": 50.0,
                 "timestamp": "2026-03-01T12:00:00.000Z",
                 "brooder_id": bid,
@@ -593,7 +593,7 @@ async fn reading_extreme_humidity_via_ws() {
     for hum in humidities {
         let payload = json!({
             "Brooder": {
-                "temperature_celsius": 98.0,
+                "temperature_f": 98.0,
                 "humidity_percent": hum,
                 "timestamp": "2026-03-01T12:00:00.000Z",
                 "brooder_id": bid,
@@ -622,7 +622,7 @@ async fn reading_nan_temperature_rejected_by_serde() {
     let (mut ws, _) = connect_async(format!("{ws_base}/ws")).await.unwrap();
 
     // NaN is not valid JSON — this is a malformed payload
-    let raw = r#"{"Brooder":{"temperature_celsius":NaN,"humidity_percent":50.0,"timestamp":"2026-03-01T12:00:00.000Z","brooder_id":1}}"#;
+    let raw = r#"{"Brooder":{"temperature_f":NaN,"humidity_percent":50.0,"timestamp":"2026-03-01T12:00:00.000Z","brooder_id":1}}"#;
     ws.send(Message::Text(raw.to_string().into())).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -643,7 +643,7 @@ async fn reading_with_nonexistent_brooder_id() {
 
     let payload = json!({
         "Brooder": {
-            "temperature_celsius": 98.0,
+            "temperature_f": 98.0,
             "humidity_percent": 50.0,
             "timestamp": "2026-03-01T12:00:00.000Z",
             "brooder_id": 99999,
@@ -690,7 +690,7 @@ async fn query_readings_single_reading() {
     let (mut ws, _) = connect_async(format!("{ws_base}/ws")).await.unwrap();
     let payload = json!({
         "Brooder": {
-            "temperature_celsius": 97.5,
+            "temperature_f": 97.5,
             "humidity_percent": 55.0,
             "timestamp": "2026-03-01T12:00:00.000Z",
             "brooder_id": bid,
@@ -722,7 +722,7 @@ async fn concurrent_writes_50_tasks() {
             let (mut ws, _) = connect_async(format!("{ws_base}/ws")).await.unwrap();
             let payload = json!({
                 "Brooder": {
-                    "temperature_celsius": 95.0 + (i as f64 * 0.1),
+                    "temperature_f": 95.0 + (i as f64 * 0.1),
                     "humidity_percent": 50.0,
                     "timestamp": "2026-03-01T12:00:00.000Z",
                     "brooder_id": bid,
@@ -763,7 +763,7 @@ async fn brooder_status_for_nonexistent_brooder() {
 async fn bird_weight_for_nonexistent_bird() {
     let base = spawn_test_server().await;
     let resp = client()
-        .post(format!("{base}/api/birds/99999/weight"))
+        .post(format!("{base}/api/birds/99999/weights"))
         .json(&json!({
             "weight_grams": 250.0,
             "date": "2026-03-01",
@@ -839,7 +839,7 @@ async fn ws_send_valid_json_wrong_schema() {
     let bad_payloads = [
         json!({"wrong_variant": {"data": 123}}),
         json!({"Brooder": {}}), // missing required fields
-        json!({"Brooder": {"temperature_celsius": "not_a_number"}}),
+        json!({"Brooder": {"temperature_f": "not_a_number"}}),
         json!({"System": {"cpu_usage_percent": "string_instead"}}),
         json!(42),
         json!([1, 2, 3]),
@@ -891,7 +891,7 @@ async fn ws_rapid_fire_messages() {
     for i in 0..200 {
         let payload = json!({
             "Brooder": {
-                "temperature_celsius": 95.0 + (i as f64 * 0.01),
+                "temperature_f": 95.0 + (i as f64 * 0.01),
                 "humidity_percent": 50.0,
                 "timestamp": "2026-03-01T12:00:00.000Z",
                 "brooder_id": bid,
@@ -948,7 +948,7 @@ async fn ws_live_receives_broadcast() {
     let (mut agent_ws, _) = connect_async(format!("{ws_base}/ws")).await.unwrap();
     let payload = json!({
         "Brooder": {
-            "temperature_celsius": 98.5,
+            "temperature_f": 98.5,
             "humidity_percent": 52.0,
             "timestamp": "2026-03-01T12:00:00.000Z",
             "brooder_id": bid,
@@ -970,7 +970,7 @@ async fn ws_live_receives_broadcast() {
         Message::Text(text) => {
             let v: Value = serde_json::from_str(&text).unwrap();
             assert!(v["Brooder"].is_object());
-            assert!((v["Brooder"]["temperature_celsius"].as_f64().unwrap() - 98.5).abs() < 0.01);
+            assert!((v["Brooder"]["temperature_f"].as_f64().unwrap() - 98.5).abs() < 0.01);
         }
         other => panic!("Expected text message, got {other:?}"),
     }
@@ -984,11 +984,11 @@ async fn ws_malformed_telemetry_variants() {
 
     let malformed = [
         // Brooder with missing timestamp
-        json!({"Brooder": {"temperature_celsius": 98.0, "humidity_percent": 50.0, "brooder_id": 1}}),
+        json!({"Brooder": {"temperature_f": 98.0, "humidity_percent": 50.0, "brooder_id": 1}}),
         // System with negative CPU
         json!({"System": {"cpu_usage_percent": -50.0, "memory_used_bytes": 0, "memory_total_bytes": 0, "disk_used_bytes": 0, "disk_total_bytes": 0, "uptime_seconds": 0}}),
         // brooder_id as string
-        json!({"Brooder": {"temperature_celsius": 98.0, "humidity_percent": 50.0, "timestamp": "2026-03-01T12:00:00.000Z", "brooder_id": "one"}}),
+        json!({"Brooder": {"temperature_f": 98.0, "humidity_percent": 50.0, "timestamp": "2026-03-01T12:00:00.000Z", "brooder_id": "one"}}),
         // CameraAssign is not a valid TelemetryPayload variant — should be rejected
         json!({"CameraAssign": {"brooder_id": 0}}),
     ];
@@ -1022,7 +1022,7 @@ async fn alert_exactly_at_min_threshold() {
     // Exactly 95.0 (min threshold) — should NOT trigger alert
     let payload = json!({
         "Brooder": {
-            "temperature_celsius": 95.0,
+            "temperature_f": 95.0,
             "humidity_percent": 50.0,
             "timestamp": "2026-03-01T12:00:00.000Z",
             "brooder_id": bid,
@@ -1052,7 +1052,7 @@ async fn alert_exactly_at_max_threshold() {
     // Exactly 100.0 (max threshold) — should NOT trigger alert
     let payload = json!({
         "Brooder": {
-            "temperature_celsius": 100.0,
+            "temperature_f": 100.0,
             "humidity_percent": 50.0,
             "timestamp": "2026-03-01T12:00:00.000Z",
             "brooder_id": bid,
@@ -1081,7 +1081,7 @@ async fn alert_one_degree_below_min() {
 
     let payload = json!({
         "Brooder": {
-            "temperature_celsius": 94.0,
+            "temperature_f": 94.0,
             "humidity_percent": 50.0,
             "timestamp": "2026-03-01T12:00:00.000Z",
             "brooder_id": bid,
@@ -1118,7 +1118,7 @@ async fn alert_one_degree_above_max() {
 
     let payload = json!({
         "Brooder": {
-            "temperature_celsius": 101.0,
+            "temperature_f": 101.0,
             "humidity_percent": 50.0,
             "timestamp": "2026-03-01T12:00:00.000Z",
             "brooder_id": bid,
@@ -1150,7 +1150,7 @@ async fn alert_critical_when_far_from_threshold() {
     // >3 degrees below min → Critical
     let payload = json!({
         "Brooder": {
-            "temperature_celsius": 90.0,
+            "temperature_f": 90.0,
             "humidity_percent": 50.0,
             "timestamp": "2026-03-01T12:00:00.000Z",
             "brooder_id": bid,
@@ -1180,7 +1180,7 @@ async fn alert_humidity_low() {
 
     let payload = json!({
         "Brooder": {
-            "temperature_celsius": 97.0,
+            "temperature_f": 97.0,
             "humidity_percent": 30.0,
             "timestamp": "2026-03-01T12:00:00.000Z",
             "brooder_id": bid,
@@ -1210,7 +1210,7 @@ async fn alert_humidity_high() {
 
     let payload = json!({
         "Brooder": {
-            "temperature_celsius": 97.0,
+            "temperature_f": 97.0,
             "humidity_percent": 75.0,
             "timestamp": "2026-03-01T12:00:00.000Z",
             "brooder_id": bid,
@@ -1243,7 +1243,7 @@ async fn alert_rapid_oscillation() {
         let temp = if i % 2 == 0 { 94.0 } else { 101.0 };
         let payload = json!({
             "Brooder": {
-                "temperature_celsius": temp,
+                "temperature_f": temp,
                 "humidity_percent": 50.0,
                 "timestamp": "2026-03-01T12:00:00.000Z",
                 "brooder_id": bid,
@@ -1472,7 +1472,7 @@ async fn system_metrics_all_zeros() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = resp.json().await.unwrap();
-    assert!((body["cpu_usage"].as_f64().unwrap()).abs() < 0.01);
+    assert!((body["cpu_usage_percent"].as_f64().unwrap()).abs() < 0.01);
 }
 
 #[tokio::test]
@@ -1484,11 +1484,11 @@ async fn system_metrics_max_values() {
     let payload = json!({
         "System": {
             "cpu_usage_percent": 100.0,
-            "memory_used_bytes": u64::MAX,
-            "memory_total_bytes": u64::MAX,
-            "disk_used_bytes": u64::MAX,
-            "disk_total_bytes": u64::MAX,
-            "uptime_seconds": u64::MAX,
+            "memory_used_bytes": i64::MAX,
+            "memory_total_bytes": i64::MAX,
+            "disk_used_bytes": i64::MAX,
+            "disk_total_bytes": i64::MAX,
+            "uptime_seconds": i64::MAX,
         }
     });
     ws.send(Message::Text(payload.to_string().into())).await.unwrap();
@@ -1548,7 +1548,7 @@ async fn chick_group_mortality_exceeds_count() {
 
     // Try to log 10 deaths (more than initial count)
     let resp = client()
-        .put(format!("{base}/api/chick-groups/{gid}/mortality"))
+        .post(format!("{base}/api/chick-groups/{gid}/mortality"))
         .json(&json!({
             "count": 10,
             "reason": "cold snap",
@@ -1575,7 +1575,7 @@ async fn weight_zero_grams() {
     let bird = seed_bird(&base, bl.id, Sex::Male).await;
 
     let resp = client()
-        .post(format!("{base}/api/birds/{}/weight", bird.id))
+        .post(format!("{base}/api/birds/{}/weights", bird.id))
         .json(&json!({"weight_grams": 0.0, "date": "2026-03-01"}))
         .send()
         .await
@@ -1590,7 +1590,7 @@ async fn weight_negative_grams() {
     let bird = seed_bird(&base, bl.id, Sex::Male).await;
 
     let resp = client()
-        .post(format!("{base}/api/birds/{}/weight", bird.id))
+        .post(format!("{base}/api/birds/{}/weights", bird.id))
         .json(&json!({"weight_grams": -100.0, "date": "2026-03-01"}))
         .send()
         .await
@@ -1606,7 +1606,7 @@ async fn weight_extremely_large() {
     let bird = seed_bird(&base, bl.id, Sex::Male).await;
 
     let resp = client()
-        .post(format!("{base}/api/birds/{}/weight", bird.id))
+        .post(format!("{base}/api/birds/{}/weights", bird.id))
         .json(&json!({"weight_grams": 999999999.99, "date": "2026-03-01"}))
         .send()
         .await

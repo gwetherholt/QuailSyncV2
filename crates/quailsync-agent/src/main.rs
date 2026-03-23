@@ -36,7 +36,7 @@ fn mock_brooder_readings() -> Vec<TelemetryPayload> {
             };
 
             TelemetryPayload::Brooder(BrooderReading {
-                temperature_celsius: temp,
+                temperature_f: temp,
                 humidity_percent: humidity,
                 timestamp: Utc::now(),
                 brooder_id: Some(id),

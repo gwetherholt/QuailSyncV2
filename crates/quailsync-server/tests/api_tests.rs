@@ -138,6 +138,7 @@ async fn create_and_list_birds() {
         generation: 1,
         status: BirdStatus::Active,
         notes: None,
+        nfc_tag_id: None,
     };
     let resp = client
         .post(format!("{base}/api/birds"))
@@ -195,6 +196,7 @@ async fn breeding_suggest_same_bloodline() {
             generation: 1,
             status: BirdStatus::Active,
             notes: None,
+            nfc_tag_id: None,
         })
         .send()
         .await
@@ -213,6 +215,7 @@ async fn breeding_suggest_same_bloodline() {
             generation: 1,
             status: BirdStatus::Active,
             notes: None,
+            nfc_tag_id: None,
         })
         .send()
         .await
@@ -267,6 +270,7 @@ async fn breeding_suggest_different_bloodlines() {
             generation: 1,
             status: BirdStatus::Active,
             notes: None,
+            nfc_tag_id: None,
         })
         .send()
         .await
@@ -285,6 +289,7 @@ async fn breeding_suggest_different_bloodlines() {
             generation: 1,
             status: BirdStatus::Active,
             notes: None,
+            nfc_tag_id: None,
         })
         .send()
         .await
@@ -334,6 +339,7 @@ async fn breeding_suggest_full_siblings() {
             generation: 1,
             status: BirdStatus::Active,
             notes: None,
+            nfc_tag_id: None,
         })
         .send()
         .await
@@ -352,6 +358,7 @@ async fn breeding_suggest_full_siblings() {
             generation: 1,
             status: BirdStatus::Active,
             notes: None,
+            nfc_tag_id: None,
         })
         .send()
         .await
@@ -370,6 +377,7 @@ async fn breeding_suggest_full_siblings() {
             generation: 2,
             status: BirdStatus::Active,
             notes: None,
+            nfc_tag_id: None,
         })
         .send()
         .await
@@ -388,6 +396,7 @@ async fn breeding_suggest_full_siblings() {
             generation: 2,
             status: BirdStatus::Active,
             notes: None,
+            nfc_tag_id: None,
         })
         .send()
         .await

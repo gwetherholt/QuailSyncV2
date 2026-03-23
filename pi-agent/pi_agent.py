@@ -152,7 +152,7 @@ def build_brooder_payload(temp_f, humidity, brooder_id):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
     return json.dumps({
         "Brooder": {
-            "temperature_celsius": temp_f,
+            "temperature_f": temp_f,
             "humidity_percent": humidity,
             "timestamp": ts,
             "brooder_id": brooder_id,

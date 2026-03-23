@@ -169,8 +169,8 @@ class MonitoringService : Service() {
             }
 
             val temperature = when {
-                json.has("temperature_celsius") && !json.get("temperature_celsius").isJsonNull ->
-                    json.get("temperature_celsius").asDouble
+                json.has("temperature_f") && !json.get("temperature_f").isJsonNull ->
+                    json.get("temperature_f").asDouble
                 json.has("temperature") && !json.get("temperature").isJsonNull ->
                     json.get("temperature").asDouble
                 else -> null
