@@ -24,7 +24,7 @@ data class Brooder(
     @SerializedName("latest_temperature") val latestTemperature: Double? = null,
     @SerializedName("latest_humidity") val latestHumidity: Double? = null,
     // Alternative field names the server might use
-    @SerializedName("latest_temperature_celsius") val latestTemperatureCelsius: Double? = null,
+    @SerializedName("latest_temperature_f") val latestTemperatureF: Double? = null,
     @SerializedName("latest_humidity_percent") val latestHumidityPercent: Double? = null,
     @SerializedName("camera_url") val cameraUrl: String? = null,
 )
@@ -42,7 +42,7 @@ data class CreateCameraRequest(
 data class BrooderReading(
     @SerializedName("id") val id: Int? = null,
     @SerializedName("brooder_id") val brooderId: Int,
-    @SerializedName("temperature_celsius") val temperature: Double?,
+    @SerializedName("temperature_f") val temperature: Double?,
     @SerializedName("humidity_percent") val humidity: Double?,
     @SerializedName("recorded_at") val recordedAt: String? = null,
 )

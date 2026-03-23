@@ -199,7 +199,7 @@ void readAndSend() {
     return;
   }
 
-  // Convert to Fahrenheit (the server field is named temperature_celsius
+  // Convert to Fahrenheit (the server field is named temperature_f
   // but QuailSync stores and displays Fahrenheit — matches Pi agent behavior)
   float tempF = tempC * 9.0 / 5.0 + 32.0;
 
@@ -213,7 +213,7 @@ void readAndSend() {
   // Build JSON payload matching TelemetryPayload::Brooder
   JsonDocument doc;
   JsonObject brooder = doc["Brooder"].to<JsonObject>();
-  brooder["temperature_celsius"] = round(tempF * 10.0) / 10.0;
+  brooder["temperature_f"] = round(tempF * 10.0) / 10.0;
   brooder["humidity_percent"]    = round(humidity * 10.0) / 10.0;
   brooder["timestamp"]           = getTimestamp();
   brooder["brooder_id"]          = BROODER_ID;

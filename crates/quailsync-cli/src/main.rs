@@ -447,7 +447,7 @@ async fn cmd_brood_latest(base: &str) -> anyhow::Result<()> {
 
     println!("{}", "Brooder — Latest Reading".bold().underline());
     println!();
-    println!("  Temperature:  {:.1}°F", reading.temperature_celsius);
+    println!("  Temperature:  {:.1}°F", reading.temperature_f);
     println!("  Humidity:     {:.1}%", reading.humidity_percent);
     println!("  Timestamp:    {}", reading.timestamp);
 
@@ -482,7 +482,7 @@ async fn cmd_brood_history(base: &str, minutes: u64) -> anyhow::Result<()> {
     for r in &readings {
         println!(
             "  {:<28} {:>9.1}° {:>9.1}%",
-            r.timestamp, r.temperature_celsius, r.humidity_percent,
+            r.timestamp, r.temperature_f, r.humidity_percent,
         );
     }
 

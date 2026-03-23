@@ -186,7 +186,7 @@ fun DetailedBrooderCard(state: BrooderState, liveReading: LiveReading?, onClick:
     val currentTemp = liveReading?.temperature
         ?: state.readings.firstOrNull()?.temperature
         ?: state.brooder.latestTemperature
-        ?: state.brooder.latestTemperatureCelsius
+        ?: state.brooder.latestTemperatureF
     val currentHumidity = liveReading?.humidity
         ?: state.readings.firstOrNull()?.humidity
         ?: state.brooder.latestHumidity
