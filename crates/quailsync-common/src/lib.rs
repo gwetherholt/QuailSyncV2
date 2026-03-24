@@ -752,7 +752,11 @@ mod tests {
 
     #[test]
     fn clutch_status_serde_roundtrip() {
-        for status in [ClutchStatus::Incubating, ClutchStatus::Hatched, ClutchStatus::Failed] {
+        for status in [
+            ClutchStatus::Incubating,
+            ClutchStatus::Hatched,
+            ClutchStatus::Failed,
+        ] {
             let json = serde_json::to_string(&status).unwrap();
             let back: ClutchStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(back, status);
@@ -768,8 +772,17 @@ mod tests {
 
     #[test]
     fn clutch_status_json_values() {
-        assert_eq!(serde_json::to_string(&ClutchStatus::Incubating).unwrap(), "\"Incubating\"");
-        assert_eq!(serde_json::to_string(&ClutchStatus::Hatched).unwrap(), "\"Hatched\"");
-        assert_eq!(serde_json::to_string(&ClutchStatus::Failed).unwrap(), "\"Failed\"");
+        assert_eq!(
+            serde_json::to_string(&ClutchStatus::Incubating).unwrap(),
+            "\"Incubating\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ClutchStatus::Hatched).unwrap(),
+            "\"Hatched\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ClutchStatus::Failed).unwrap(),
+            "\"Failed\""
+        );
     }
 }

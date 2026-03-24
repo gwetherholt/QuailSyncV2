@@ -23,9 +23,21 @@ pub(crate) async fn create_backup() -> impl IntoResponse {
         Ok(_) => {
             let meta = std::fs::metadata(&dest).ok();
             let size = meta.map(|m| m.len()).unwrap_or(0);
-            (StatusCode::CREATED, Json(BackupInfo { filename, size_bytes: size, created: chrono::Local::now().to_rfc3339() })).into_response()
+            (
+                StatusCode::CREATED,
+                Json(BackupInfo {
+                    filename,
+                    size_bytes: size,
+                    created: chrono::Local::now().to_rfc3339(),
+                }),
+            )
+                .into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Backup failed: {e}")).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Backup failed: {e}"),
+        )
+            .into_response(),
     }
 }
 
@@ -37,10 +49,19 @@ pub(crate) async fn list_backups() -> Json<Vec<BackupInfo>> {
             if let Ok(meta) = entry.metadata() {
                 let fname = entry.file_name().to_string_lossy().to_string();
                 if fname.ends_with(".db") {
-                    let created = meta.modified().ok()
-                        .map(|t| { let dt: chrono::DateTime<chrono::Local> = t.into(); dt.to_rfc3339() })
+                    let created = meta
+                        .modified()
+                        .ok()
+                        .map(|t| {
+                            let dt: chrono::DateTime<chrono::Local> = t.into();
+                            dt.to_rfc3339()
+                        })
                         .unwrap_or_default();
-                    backups.push(BackupInfo { filename: fname, size_bytes: meta.len(), created });
+                    backups.push(BackupInfo {
+                        filename: fname,
+                        size_bytes: meta.len(),
+                        created,
+                    });
                 }
             }
         }
@@ -56,7 +77,11 @@ pub(crate) struct RestoreRequest {
 
 pub(crate) async fn restore_backup(Json(body): Json<RestoreRequest>) -> impl IntoResponse {
     let backup_dir = std::path::Path::new("backups");
-    if body.filename.contains('/') || body.filename.contains('\\') || body.filename.contains("..") || body.filename.contains('\0') {
+    if body.filename.contains('/')
+        || body.filename.contains('\\')
+        || body.filename.contains("..")
+        || body.filename.contains('\0')
+    {
         return (StatusCode::BAD_REQUEST, "Invalid filename").into_response();
     }
     let source = backup_dir.join(&body.filename);
@@ -68,8 +93,16 @@ pub(crate) async fn restore_backup(Json(body): Json<RestoreRequest>) -> impl Int
     std::fs::copy("quailsync.db", &pre_restore).ok();
 
     match std::fs::copy(&source, "quailsync.db") {
-        Ok(_) => (StatusCode::OK, "Database restored. Restart server to apply.").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Restore failed: {e}")).into_response(),
+        Ok(_) => (
+            StatusCode::OK,
+            "Database restored. Restart server to apply.",
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Restore failed: {e}"),
+        )
+            .into_response(),
     }
 }
 
@@ -84,12 +117,19 @@ pub fn auto_backup_if_needed() {
     }
     let should_backup = match std::fs::read_dir(backup_dir) {
         Ok(entries) => {
-            let latest = entries.flatten()
+            let latest = entries
+                .flatten()
                 .filter(|e| e.file_name().to_string_lossy().ends_with(".db"))
                 .filter_map(|e| e.metadata().ok()?.modified().ok())
                 .max();
             match latest {
-                Some(t) => std::time::SystemTime::now().duration_since(t).unwrap_or_default().as_secs() > 86400,
+                Some(t) => {
+                    std::time::SystemTime::now()
+                        .duration_since(t)
+                        .unwrap_or_default()
+                        .as_secs()
+                        > 86400
+                }
                 None => true,
             }
         }

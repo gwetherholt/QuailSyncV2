@@ -109,13 +109,25 @@ pub(crate) async fn status(State(state): State<AppState>) -> Json<StatusSummary>
     let conn = acquire_db(&state);
 
     let last_brooder: Option<String> = conn
-        .query_row("SELECT received_at FROM brooder_readings ORDER BY id DESC LIMIT 1", [], |row| row.get(0))
+        .query_row(
+            "SELECT received_at FROM brooder_readings ORDER BY id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
         .ok();
     let last_system: Option<String> = conn
-        .query_row("SELECT received_at FROM system_metrics ORDER BY id DESC LIMIT 1", [], |row| row.get(0))
+        .query_row(
+            "SELECT received_at FROM system_metrics ORDER BY id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
         .ok();
     let last_detection: Option<String> = conn
-        .query_row("SELECT received_at FROM detection_events ORDER BY id DESC LIMIT 1", [], |row| row.get(0))
+        .query_row(
+            "SELECT received_at FROM detection_events ORDER BY id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
         .ok();
 
     Json(StatusSummary {

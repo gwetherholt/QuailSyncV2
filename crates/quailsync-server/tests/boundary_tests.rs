@@ -185,7 +185,11 @@ async fn brooder_xss_payload_name() {
 #[tokio::test]
 async fn brooder_unicode_and_emoji_name() {
     let base = spawn_test_server().await;
-    let names = ["Brooder \u{1F423}\u{1F95A}", "\u{4e2d}\u{6587}\u{540d}", "\u{0410}\u{0411}\u{0412}"];
+    let names = [
+        "Brooder \u{1F423}\u{1F95A}",
+        "\u{4e2d}\u{6587}\u{540d}",
+        "\u{0410}\u{0411}\u{0412}",
+    ];
     for name in names {
         let resp = client()
             .post(format!("{base}/api/brooders"))
@@ -193,7 +197,11 @@ async fn brooder_unicode_and_emoji_name() {
             .send()
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED, "Failed for name: {name}");
+        assert_eq!(
+            resp.status(),
+            StatusCode::CREATED,
+            "Failed for name: {name}"
+        );
         let body: Value = resp.json().await.unwrap();
         assert_eq!(body["name"].as_str().unwrap(), name);
     }
@@ -514,7 +522,9 @@ async fn post_with_oversized_body() {
     let resp = client()
         .post(format!("{base}/api/brooders"))
         .header("content-type", "application/json")
-        .body(format!(r#"{{"name":"{huge}","life_stage":"Chick","qr_code":""}}"#))
+        .body(format!(
+            r#"{{"name":"{huge}","life_stage":"Chick","qr_code":""}}"#
+        ))
         .send()
         .await
         .unwrap();
@@ -565,7 +575,9 @@ async fn reading_extreme_temperatures_via_ws() {
                 "brooder_id": bid,
             }
         });
-        ws.send(Message::Text(payload.to_string().into())).await.unwrap();
+        ws.send(Message::Text(payload.to_string().into()))
+            .await
+            .unwrap();
     }
     tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -599,7 +611,9 @@ async fn reading_extreme_humidity_via_ws() {
                 "brooder_id": bid,
             }
         });
-        ws.send(Message::Text(payload.to_string().into())).await.unwrap();
+        ws.send(Message::Text(payload.to_string().into()))
+            .await
+            .unwrap();
     }
     tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -623,15 +637,13 @@ async fn reading_nan_temperature_rejected_by_serde() {
 
     // NaN is not valid JSON — this is a malformed payload
     let raw = r#"{"Brooder":{"temperature_f":NaN,"humidity_percent":50.0,"timestamp":"2026-03-01T12:00:00.000Z","brooder_id":1}}"#;
-    ws.send(Message::Text(raw.to_string().into())).await.unwrap();
+    ws.send(Message::Text(raw.to_string().into()))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Should NOT crash the server — verify health
-    let resp = client()
-        .get(format!("{base}/health"))
-        .send()
-        .await
-        .unwrap();
+    let resp = client().get(format!("{base}/health")).send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
@@ -649,15 +661,13 @@ async fn reading_with_nonexistent_brooder_id() {
             "brooder_id": 99999,
         }
     });
-    ws.send(Message::Text(payload.to_string().into())).await.unwrap();
+    ws.send(Message::Text(payload.to_string().into()))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Server should not crash
-    let resp = client()
-        .get(format!("{base}/health"))
-        .send()
-        .await
-        .unwrap();
+    let resp = client().get(format!("{base}/health")).send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
@@ -696,7 +706,9 @@ async fn query_readings_single_reading() {
             "brooder_id": bid,
         }
     });
-    ws.send(Message::Text(payload.to_string().into())).await.unwrap();
+    ws.send(Message::Text(payload.to_string().into()))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let resp = client()
@@ -728,7 +740,9 @@ async fn concurrent_writes_50_tasks() {
                     "brooder_id": bid,
                 }
             });
-            ws.send(Message::Text(payload.to_string().into())).await.unwrap();
+            ws.send(Message::Text(payload.to_string().into()))
+                .await
+                .unwrap();
         });
         handles.push(handle);
     }
@@ -745,7 +759,11 @@ async fn concurrent_writes_50_tasks() {
         .await
         .unwrap();
     let readings: Vec<Value> = resp.json().await.unwrap();
-    assert_eq!(readings.len(), 50, "Expected 50 readings from concurrent writes");
+    assert_eq!(
+        readings.len(),
+        50,
+        "Expected 50 readings from concurrent writes"
+    );
 }
 
 #[tokio::test]
@@ -788,11 +806,7 @@ async fn ws_connect_and_immediately_disconnect() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Server should still be alive
-    let resp = client()
-        .get(format!("{base}/health"))
-        .send()
-        .await
-        .unwrap();
+    let resp = client().get(format!("{base}/health")).send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
@@ -804,11 +818,7 @@ async fn ws_send_empty_message() {
     ws.send(Message::Text(String::new().into())).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let resp = client()
-        .get(format!("{base}/health"))
-        .send()
-        .await
-        .unwrap();
+    let resp = client().get(format!("{base}/health")).send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
@@ -822,11 +832,7 @@ async fn ws_send_binary_message() {
         .unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let resp = client()
-        .get(format!("{base}/health"))
-        .send()
-        .await
-        .unwrap();
+    let resp = client().get(format!("{base}/health")).send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
@@ -847,15 +853,13 @@ async fn ws_send_valid_json_wrong_schema() {
     ];
 
     for payload in bad_payloads {
-        ws.send(Message::Text(payload.to_string().into())).await.unwrap();
+        ws.send(Message::Text(payload.to_string().into()))
+            .await
+            .unwrap();
     }
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let resp = client()
-        .get(format!("{base}/health"))
-        .send()
-        .await
-        .unwrap();
+    let resp = client().get(format!("{base}/health")).send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
@@ -870,11 +874,7 @@ async fn ws_send_large_message() {
     ws.send(Message::Text(big.into())).await.unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let resp = client()
-        .get(format!("{base}/health"))
-        .send()
-        .await
-        .unwrap();
+    let resp = client().get(format!("{base}/health")).send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
@@ -897,7 +897,9 @@ async fn ws_rapid_fire_messages() {
                 "brooder_id": bid,
             }
         });
-        ws.send(Message::Text(payload.to_string().into())).await.unwrap();
+        ws.send(Message::Text(payload.to_string().into()))
+            .await
+            .unwrap();
     }
     tokio::time::sleep(Duration::from_millis(1000)).await;
 
@@ -925,11 +927,7 @@ async fn ws_live_100_clients_connect_disconnect() {
     drop(connections);
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let resp = client()
-        .get(format!("{base}/health"))
-        .send()
-        .await
-        .unwrap();
+    let resp = client().get(format!("{base}/health")).send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
@@ -994,15 +992,13 @@ async fn ws_malformed_telemetry_variants() {
     ];
 
     for payload in malformed {
-        ws.send(Message::Text(payload.to_string().into())).await.unwrap();
+        ws.send(Message::Text(payload.to_string().into()))
+            .await
+            .unwrap();
     }
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let resp = client()
-        .get(format!("{base}/health"))
-        .send()
-        .await
-        .unwrap();
+    let resp = client().get(format!("{base}/health")).send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
@@ -1028,7 +1024,9 @@ async fn alert_exactly_at_min_threshold() {
             "brooder_id": bid,
         }
     });
-    ws.send(Message::Text(payload.to_string().into())).await.unwrap();
+    ws.send(Message::Text(payload.to_string().into()))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let resp = client()
@@ -1037,7 +1035,11 @@ async fn alert_exactly_at_min_threshold() {
         .await
         .unwrap();
     let alerts: Vec<Value> = resp.json().await.unwrap();
-    assert_eq!(alerts.len(), 0, "Reading at exact min threshold should not alert");
+    assert_eq!(
+        alerts.len(),
+        0,
+        "Reading at exact min threshold should not alert"
+    );
 }
 
 #[tokio::test]
@@ -1058,7 +1060,9 @@ async fn alert_exactly_at_max_threshold() {
             "brooder_id": bid,
         }
     });
-    ws.send(Message::Text(payload.to_string().into())).await.unwrap();
+    ws.send(Message::Text(payload.to_string().into()))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let resp = client()
@@ -1067,7 +1071,11 @@ async fn alert_exactly_at_max_threshold() {
         .await
         .unwrap();
     let alerts: Vec<Value> = resp.json().await.unwrap();
-    assert_eq!(alerts.len(), 0, "Reading at exact max threshold should not alert");
+    assert_eq!(
+        alerts.len(),
+        0,
+        "Reading at exact max threshold should not alert"
+    );
 }
 
 #[tokio::test]
@@ -1087,7 +1095,9 @@ async fn alert_one_degree_below_min() {
             "brooder_id": bid,
         }
     });
-    ws.send(Message::Text(payload.to_string().into())).await.unwrap();
+    ws.send(Message::Text(payload.to_string().into()))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let resp = client()
@@ -1098,10 +1108,7 @@ async fn alert_one_degree_below_min() {
     let alerts: Vec<Value> = resp.json().await.unwrap();
     assert_eq!(alerts.len(), 1, "Reading 1 below min should trigger alert");
     assert!(
-        alerts[0]["message"]
-            .as_str()
-            .unwrap()
-            .contains("LOW"),
+        alerts[0]["message"].as_str().unwrap().contains("LOW"),
         "Alert should say LOW"
     );
     assert_eq!(alerts[0]["severity"].as_str().unwrap(), "Warning");
@@ -1124,7 +1131,9 @@ async fn alert_one_degree_above_max() {
             "brooder_id": bid,
         }
     });
-    ws.send(Message::Text(payload.to_string().into())).await.unwrap();
+    ws.send(Message::Text(payload.to_string().into()))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let resp = client()
@@ -1156,7 +1165,9 @@ async fn alert_critical_when_far_from_threshold() {
             "brooder_id": bid,
         }
     });
-    ws.send(Message::Text(payload.to_string().into())).await.unwrap();
+    ws.send(Message::Text(payload.to_string().into()))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let resp = client()
@@ -1186,7 +1197,9 @@ async fn alert_humidity_low() {
             "brooder_id": bid,
         }
     });
-    ws.send(Message::Text(payload.to_string().into())).await.unwrap();
+    ws.send(Message::Text(payload.to_string().into()))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let resp = client()
@@ -1196,7 +1209,10 @@ async fn alert_humidity_low() {
         .unwrap();
     let alerts: Vec<Value> = resp.json().await.unwrap();
     assert_eq!(alerts.len(), 1);
-    assert!(alerts[0]["message"].as_str().unwrap().contains("Humidity LOW"));
+    assert!(alerts[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Humidity LOW"));
 }
 
 #[tokio::test]
@@ -1216,7 +1232,9 @@ async fn alert_humidity_high() {
             "brooder_id": bid,
         }
     });
-    ws.send(Message::Text(payload.to_string().into())).await.unwrap();
+    ws.send(Message::Text(payload.to_string().into()))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let resp = client()
@@ -1226,7 +1244,10 @@ async fn alert_humidity_high() {
         .unwrap();
     let alerts: Vec<Value> = resp.json().await.unwrap();
     assert_eq!(alerts.len(), 1);
-    assert!(alerts[0]["message"].as_str().unwrap().contains("Humidity HIGH"));
+    assert!(alerts[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Humidity HIGH"));
 }
 
 #[tokio::test]
@@ -1249,7 +1270,9 @@ async fn alert_rapid_oscillation() {
                 "brooder_id": bid,
             }
         });
-        ws.send(Message::Text(payload.to_string().into())).await.unwrap();
+        ws.send(Message::Text(payload.to_string().into()))
+            .await
+            .unwrap();
     }
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -1262,7 +1285,11 @@ async fn alert_rapid_oscillation() {
     assert_eq!(resp.status(), StatusCode::OK);
     let alerts: Vec<Value> = resp.json().await.unwrap();
     // Each out-of-range reading generates an alert — 50 readings, all out of range
-    assert_eq!(alerts.len(), 50, "Each out-of-range reading should generate an alert");
+    assert_eq!(
+        alerts.len(),
+        50,
+        "Each out-of-range reading should generate an alert"
+    );
 }
 
 // ===========================================================================
@@ -1345,11 +1372,7 @@ async fn encoded_path_traversal_in_url() {
         "/api/brooders/../../../status",
     ];
     for path in paths {
-        let resp = client()
-            .get(format!("{base}{path}"))
-            .send()
-            .await
-            .unwrap();
+        let resp = client().get(format!("{base}{path}")).send().await.unwrap();
         assert_ne!(
             resp.status(),
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1462,7 +1485,9 @@ async fn system_metrics_all_zeros() {
             "uptime_seconds": 0,
         }
     });
-    ws.send(Message::Text(payload.to_string().into())).await.unwrap();
+    ws.send(Message::Text(payload.to_string().into()))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let resp = client()
@@ -1491,7 +1516,9 @@ async fn system_metrics_max_values() {
             "uptime_seconds": i64::MAX,
         }
     });
-    ws.send(Message::Text(payload.to_string().into())).await.unwrap();
+    ws.send(Message::Text(payload.to_string().into()))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let resp = client()

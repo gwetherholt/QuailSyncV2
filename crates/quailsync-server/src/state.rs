@@ -24,5 +24,9 @@ pub fn acquire_db(state: &AppState) -> std::sync::MutexGuard<'_, Connection> {
 
 /// Convert a rusqlite error into a 500 response.
 pub fn db_error(e: rusqlite::Error) -> Response {
-    (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {e}")).into_response()
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("Database error: {e}"),
+    )
+        .into_response()
 }

@@ -4,12 +4,12 @@ use colored::Colorize;
 use qrcode::QrCode;
 use quailsync_common::{
     Alert, Bird, BirdStatus, Bloodline, BreedingGroup, Brooder, BrooderReading, CameraFeed,
-    CameraStatus, ChickGroup, ChickMortalityLog, Clutch, ClutchStatus, CreateBird,
-    CreateBloodline, CreateBreedingGroup, CreateBrooder, CreateCameraFeed, CreateChickGroup,
-    CreateClutch, CreateProcessingRecord, CreateWeightRecord, CullReason, CullRecommendation,
-    FrameCapture, InbreedingCoefficient, LifeStage, MortalityRequest, ProcessingRecord,
-    ProcessingReason, ProcessingStatus, Sex, Severity, SystemMetrics, UpdateClutch,
-    UpdateProcessingRecord, WeightRecord, COTURNIX_BUTCHER_WEIGHT_GRAMS,
+    CameraStatus, ChickGroup, ChickMortalityLog, Clutch, ClutchStatus, CreateBird, CreateBloodline,
+    CreateBreedingGroup, CreateBrooder, CreateCameraFeed, CreateChickGroup, CreateClutch,
+    CreateProcessingRecord, CreateWeightRecord, CullReason, CullRecommendation, FrameCapture,
+    InbreedingCoefficient, LifeStage, MortalityRequest, ProcessingReason, ProcessingRecord,
+    ProcessingStatus, Severity, Sex, SystemMetrics, UpdateClutch, UpdateProcessingRecord,
+    WeightRecord, COTURNIX_BUTCHER_WEIGHT_GRAMS,
 };
 use serde::Deserialize;
 
@@ -385,7 +385,11 @@ async fn cmd_status(base: &str) -> anyhow::Result<()> {
     let resp = reqwest::get(&url).await?;
 
     if !resp.status().is_success() {
-        eprintln!("{} Server returned {}", "error:".red().bold(), resp.status());
+        eprintln!(
+            "{} Server returned {}",
+            "error:".red().bold(),
+            resp.status()
+        );
         std::process::exit(1);
     }
 
@@ -426,7 +430,10 @@ async fn cmd_status(base: &str) -> anyhow::Result<()> {
     if summary.agent_connected && has_data {
         println!("  Health:   {}", "healthy".green().bold());
     } else if has_data {
-        println!("  Health:   {}", "stale (agent disconnected)".yellow().bold());
+        println!(
+            "  Health:   {}",
+            "stale (agent disconnected)".yellow().bold()
+        );
     } else {
         println!("  Health:   {}", "no data".red().bold());
     }
@@ -466,9 +473,12 @@ async fn cmd_brood_history(base: &str, minutes: u64) -> anyhow::Result<()> {
 
     println!(
         "{}",
-        format!("Brooder — Last {minutes} Minutes ({} readings)", readings.len())
-            .bold()
-            .underline()
+        format!(
+            "Brooder — Last {minutes} Minutes ({} readings)",
+            readings.len()
+        )
+        .bold()
+        .underline()
     );
     println!();
     println!(
@@ -533,7 +543,10 @@ async fn cmd_alerts(base: &str, minutes: u64) -> anyhow::Result<()> {
     let alerts: Vec<Alert> = resp.json().await?;
 
     if alerts.is_empty() {
-        println!("{}", format!("No alerts in the last {minutes} minutes.").dimmed());
+        println!(
+            "{}",
+            format!("No alerts in the last {minutes} minutes.").dimmed()
+        );
         return Ok(());
     }
 
@@ -564,15 +577,29 @@ async fn cmd_alerts(base: &str, minutes: u64) -> anyhow::Result<()> {
 // Flock & Lineage commands
 // ---------------------------------------------------------------------------
 
-async fn cmd_bloodline_add(base: &str, name: String, source: String, notes: Option<String>) -> anyhow::Result<()> {
-    let body = CreateBloodline { name, source, notes };
+async fn cmd_bloodline_add(
+    base: &str,
+    name: String,
+    source: String,
+    notes: Option<String>,
+) -> anyhow::Result<()> {
+    let body = CreateBloodline {
+        name,
+        source,
+        notes,
+    };
     let resp = reqwest::Client::new()
         .post(format!("{base}/api/bloodlines"))
         .json(&body)
         .send()
         .await?;
     let bl: Bloodline = resp.json().await?;
-    println!("{} bloodline #{} \"{}\"", "Created".green().bold(), bl.id, bl.name);
+    println!(
+        "{} bloodline #{} \"{}\"",
+        "Created".green().bold(),
+        bl.id,
+        bl.name
+    );
     Ok(())
 }
 
@@ -585,7 +612,13 @@ async fn cmd_bloodline_list(base: &str) -> anyhow::Result<()> {
     }
     println!("{}", "Bloodlines".bold().underline());
     println!();
-    println!("  {:<5} {:<20} {:<20} {}", "ID".bold(), "Name".bold(), "Source".bold(), "Notes".bold());
+    println!(
+        "  {:<5} {:<20} {:<20} {}",
+        "ID".bold(),
+        "Name".bold(),
+        "Source".bold(),
+        "Notes".bold()
+    );
     println!("  {}", "-".repeat(60));
     for bl in &list {
         println!(
@@ -662,8 +695,13 @@ async fn cmd_bird_list(base: &str) -> anyhow::Result<()> {
     println!();
     println!(
         "  {:<5} {:<10} {:<8} {:<10} {:<12} {:<8} {}",
-        "ID".bold(), "Band".bold(), "Sex".bold(), "Bloodline".bold(),
-        "Hatch Date".bold(), "Gen".bold(), "Status".bold(),
+        "ID".bold(),
+        "Band".bold(),
+        "Sex".bold(),
+        "Bloodline".bold(),
+        "Hatch Date".bold(),
+        "Gen".bold(),
+        "Status".bold(),
     );
     println!("  {}", "-".repeat(70));
     for b in &list {
@@ -993,14 +1031,16 @@ async fn cmd_clutch_schedule(base: &str) -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------
 
 async fn cmd_breeding_suggest(base: &str) -> anyhow::Result<()> {
-    let pairs: Vec<InbreedingCoefficient> =
-        reqwest::get(format!("{base}/api/breeding/suggest"))
-            .await?
-            .json()
-            .await?;
+    let pairs: Vec<InbreedingCoefficient> = reqwest::get(format!("{base}/api/breeding/suggest"))
+        .await?
+        .json()
+        .await?;
 
     if pairs.is_empty() {
-        println!("{}", "No breeding pairs possible (need active males and females).".dimmed());
+        println!(
+            "{}",
+            "No breeding pairs possible (need active males and females).".dimmed()
+        );
         return Ok(());
     }
 
@@ -1086,7 +1126,12 @@ async fn cmd_breeding_suggest(base: &str) -> anyhow::Result<()> {
 // Weight & Growth commands
 // ---------------------------------------------------------------------------
 
-async fn cmd_bird_weigh(base: &str, id: i64, grams: f64, notes: Option<String>) -> anyhow::Result<()> {
+async fn cmd_bird_weigh(
+    base: &str,
+    id: i64,
+    grams: f64,
+    notes: Option<String>,
+) -> anyhow::Result<()> {
     let today = Local::now().date_naive();
     let body = CreateWeightRecord {
         weight_grams: grams,
@@ -1120,7 +1165,10 @@ async fn cmd_bird_growth(base: &str, id: i64) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    println!("{}", format!("Growth History — Bird #{id}").bold().underline());
+    println!(
+        "{}",
+        format!("Growth History — Bird #{id}").bold().underline()
+    );
     println!();
     println!(
         "  {:<12} {:>10} {}",
@@ -1563,7 +1611,12 @@ async fn cmd_flock_cull_review(base: &str) -> anyhow::Result<()> {
 // Camera commands
 // ---------------------------------------------------------------------------
 
-async fn cmd_camera_add(base: &str, name: String, location: String, url: String) -> anyhow::Result<()> {
+async fn cmd_camera_add(
+    base: &str,
+    name: String,
+    location: String,
+    url: String,
+) -> anyhow::Result<()> {
     let body = CreateCameraFeed {
         name,
         location,
@@ -1644,16 +1697,18 @@ async fn cmd_camera_status(base: &str) -> anyhow::Result<()> {
         };
 
         // Fetch last frame for this camera
-        let frames: Vec<FrameCapture> = reqwest::get(format!(
-            "{base}/api/frames?camera_id={}&minutes=1440",
-            c.id
-        ))
-        .await?
-        .json()
-        .await?;
+        let frames: Vec<FrameCapture> =
+            reqwest::get(format!("{base}/api/frames?camera_id={}&minutes=1440", c.id))
+                .await?
+                .json()
+                .await?;
 
         let last_frame = if let Some(f) = frames.first() {
-            format!("{} ({:?})", f.timestamp.format("%Y-%m-%d %H:%M"), f.life_stage)
+            format!(
+                "{} ({:?})",
+                f.timestamp.format("%Y-%m-%d %H:%M"),
+                f.life_stage
+            )
         } else {
             "no frames".dimmed().to_string()
         };
@@ -1768,7 +1823,8 @@ async fn cmd_brooder_qr(base: &str, id: i64) -> anyhow::Result<()> {
     };
 
     let code = QrCode::new(data.as_bytes())?;
-    let svg = code.render::<qrcode::render::svg::Color>()
+    let svg = code
+        .render::<qrcode::render::svg::Color>()
         .min_dimensions(200, 200)
         .build();
 
@@ -1909,7 +1965,10 @@ async fn cmd_chick_group_graduate(_base: &str, id: i64) -> anyhow::Result<()> {
         "{} Graduation requires per-bird banding details (sex, band color, NFC tag).",
         "Note:".yellow().bold(),
     );
-    println!("  Use the {} at #/nursery for the full banding workflow.", "dashboard".bold());
+    println!(
+        "  Use the {} at #/nursery for the full banding workflow.",
+        "dashboard".bold()
+    );
     println!("  Group #{id} can be graduated from the Nursery page.");
     Ok(())
 }
@@ -2022,16 +2081,29 @@ async fn main() {
         Commands::System => cmd_system(base).await,
         Commands::Alerts { minutes } => cmd_alerts(base, minutes).await,
         Commands::Bloodline { action } => match action {
-            BloodlineAction::Add { name, source, notes } => {
-                cmd_bloodline_add(base, name, source, notes).await
-            }
+            BloodlineAction::Add {
+                name,
+                source,
+                notes,
+            } => cmd_bloodline_add(base, name, source, notes).await,
             BloodlineAction::List => cmd_bloodline_list(base).await,
         },
         Commands::Bird { action } => match action {
             BirdAction::Add {
-                band, sex, bloodline, hatch_date, mother, father, generation, notes, nfc,
+                band,
+                sex,
+                bloodline,
+                hatch_date,
+                mother,
+                father,
+                generation,
+                notes,
+                nfc,
             } => {
-                cmd_bird_add(base, band, sex, bloodline, hatch_date, mother, father, generation, notes, nfc).await
+                cmd_bird_add(
+                    base, band, sex, bloodline, hatch_date, mother, father, generation, notes, nfc,
+                )
+                .await
             }
             BirdAction::List => cmd_bird_list(base).await,
             BirdAction::Weigh { id, grams, notes } => cmd_bird_weigh(base, id, grams, notes).await,
@@ -2043,27 +2115,61 @@ async fn main() {
         },
         Commands::Clutch { action } => match action {
             ClutchAction::Add {
-                bloodline, eggs, set_date, pair, notes,
+                bloodline,
+                eggs,
+                set_date,
+                pair,
+                notes,
             } => cmd_clutch_add(base, bloodline, eggs, set_date, pair, notes).await,
             ClutchAction::List => cmd_clutch_list(base).await,
             ClutchAction::Update {
-                id, fertile, hatched, status, notes, stillborn, quit, infertile, damaged, hatch_notes,
-            } => cmd_clutch_update(base, id, fertile, hatched, status, notes, stillborn, quit, infertile, damaged, hatch_notes).await,
+                id,
+                fertile,
+                hatched,
+                status,
+                notes,
+                stillborn,
+                quit,
+                infertile,
+                damaged,
+                hatch_notes,
+            } => {
+                cmd_clutch_update(
+                    base,
+                    id,
+                    fertile,
+                    hatched,
+                    status,
+                    notes,
+                    stillborn,
+                    quit,
+                    infertile,
+                    damaged,
+                    hatch_notes,
+                )
+                .await
+            }
             ClutchAction::Schedule => cmd_clutch_schedule(base).await,
         },
         Commands::Breeding { action } => match action {
             BreedingAction::Suggest => cmd_breeding_suggest(base).await,
             BreedingAction::Group { action: ga } => match ga {
-                BreedingGroupAction::Create { name, male, females, notes } => {
-                    cmd_breeding_group_create(base, name, male, females, notes).await
-                }
+                BreedingGroupAction::Create {
+                    name,
+                    male,
+                    females,
+                    notes,
+                } => cmd_breeding_group_create(base, name, male, females, notes).await,
                 BreedingGroupAction::List => cmd_breeding_group_list(base).await,
             },
         },
         Commands::Processing { action } => match action {
-            ProcessingAction::Schedule { bird, reason, date, notes } => {
-                cmd_processing_schedule(base, bird, reason, date, notes).await
-            }
+            ProcessingAction::Schedule {
+                bird,
+                reason,
+                date,
+                notes,
+            } => cmd_processing_schedule(base, bird, reason, date, notes).await,
             ProcessingAction::Complete { id, weight, notes } => {
                 cmd_processing_complete(base, id, weight, notes).await
             }
@@ -2071,23 +2177,37 @@ async fn main() {
             ProcessingAction::Queue => cmd_processing_queue(base).await,
         },
         Commands::Camera { action } => match action {
-            CameraAction::Add { name, location, url } => {
-                cmd_camera_add(base, name, location, url).await
-            }
+            CameraAction::Add {
+                name,
+                location,
+                url,
+            } => cmd_camera_add(base, name, location, url).await,
             CameraAction::List => cmd_camera_list(base).await,
             CameraAction::Status => cmd_camera_status(base).await,
             CameraAction::Point { id, brooder } => cmd_camera_point(base, id, brooder).await,
         },
         Commands::Brooder { action } => match action {
-            BrooderAction::Add { name, bloodline, stage, qr, notes } => {
-                cmd_brooder_add(base, name, bloodline, stage, qr, notes).await
-            }
+            BrooderAction::Add {
+                name,
+                bloodline,
+                stage,
+                qr,
+                notes,
+            } => cmd_brooder_add(base, name, bloodline, stage, qr, notes).await,
             BrooderAction::List => cmd_brooder_list(base).await,
             BrooderAction::Qr { id } => cmd_brooder_qr(base, id).await,
         },
         Commands::ChickGroup { action } => match action {
-            ChickGroupAction::Create { bloodline, count, hatch_date, clutch, brooder, notes } => {
-                cmd_chick_group_create(base, bloodline, count, hatch_date, clutch, brooder, notes).await
+            ChickGroupAction::Create {
+                bloodline,
+                count,
+                hatch_date,
+                clutch,
+                brooder,
+                notes,
+            } => {
+                cmd_chick_group_create(base, bloodline, count, hatch_date, clutch, brooder, notes)
+                    .await
             }
             ChickGroupAction::List => cmd_chick_group_list(base).await,
             ChickGroupAction::Mortality { id, count, reason } => {

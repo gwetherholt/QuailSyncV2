@@ -169,14 +169,25 @@ pub fn init_db(conn: &Connection) {
 
     // --- Idempotent migrations ---
 
-    conn.execute("ALTER TABLE clutches ADD COLUMN eggs_stillborn INTEGER", []).ok();
-    conn.execute("ALTER TABLE clutches ADD COLUMN eggs_quit INTEGER", []).ok();
-    conn.execute("ALTER TABLE clutches ADD COLUMN eggs_infertile INTEGER", []).ok();
-    conn.execute("ALTER TABLE clutches ADD COLUMN eggs_damaged INTEGER", []).ok();
-    conn.execute("ALTER TABLE clutches ADD COLUMN hatch_notes TEXT", []).ok();
-    conn.execute("ALTER TABLE birds ADD COLUMN nfc_tag_id TEXT UNIQUE", []).ok();
-    conn.execute("ALTER TABLE brooders ADD COLUMN camera_url TEXT", []).ok();
-    conn.execute("ALTER TABLE birds ADD COLUMN current_brooder_id INTEGER REFERENCES brooders(id)", []).ok();
+    conn.execute("ALTER TABLE clutches ADD COLUMN eggs_stillborn INTEGER", [])
+        .ok();
+    conn.execute("ALTER TABLE clutches ADD COLUMN eggs_quit INTEGER", [])
+        .ok();
+    conn.execute("ALTER TABLE clutches ADD COLUMN eggs_infertile INTEGER", [])
+        .ok();
+    conn.execute("ALTER TABLE clutches ADD COLUMN eggs_damaged INTEGER", [])
+        .ok();
+    conn.execute("ALTER TABLE clutches ADD COLUMN hatch_notes TEXT", [])
+        .ok();
+    conn.execute("ALTER TABLE birds ADD COLUMN nfc_tag_id TEXT UNIQUE", [])
+        .ok();
+    conn.execute("ALTER TABLE brooders ADD COLUMN camera_url TEXT", [])
+        .ok();
+    conn.execute(
+        "ALTER TABLE birds ADD COLUMN current_brooder_id INTEGER REFERENCES brooders(id)",
+        [],
+    )
+    .ok();
 
     // Chick groups (nursery)
     conn.execute_batch(
@@ -246,7 +257,12 @@ pub fn store_payload(conn: &Connection, payload: &TelemetryPayload) {
             conn.execute(
                 "INSERT INTO brooder_readings (temperature, humidity, timestamp, brooder_id)
                  VALUES (?1, ?2, ?3, ?4)",
-                params![r.temperature_f, r.humidity_percent, r.timestamp.to_rfc3339(), r.brooder_id],
+                params![
+                    r.temperature_f,
+                    r.humidity_percent,
+                    r.timestamp.to_rfc3339(),
+                    r.brooder_id
+                ],
             )
             .ok();
         }
