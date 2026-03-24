@@ -66,7 +66,7 @@ async fn main() {
     let mut tick = 0u64;
 
     loop {
-        if tick % 2 == 0 {
+        if tick.is_multiple_of(2) {
             for payload in mock_brooder_readings() {
                 let json = serde_json::to_string(&payload).unwrap();
                 println!("[send] {json}");

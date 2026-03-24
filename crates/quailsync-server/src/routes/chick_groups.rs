@@ -219,10 +219,10 @@ pub(crate) async fn graduate_chick_group(
                 |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
             ).ok()
         })
-        .and_then(|(male_id, female_id)| {
+        .map(|(male_id, female_id)| {
             let m_gen: u32 = conn.query_row("SELECT generation FROM birds WHERE id = ?1", params![male_id], |row| row.get(0)).unwrap_or(1);
             let f_gen: u32 = conn.query_row("SELECT generation FROM birds WHERE id = ?1", params![female_id], |row| row.get(0)).unwrap_or(1);
-            Some(m_gen.max(f_gen))
+            m_gen.max(f_gen)
         })
         .unwrap_or(0);
     let generation = parent_generation + 1;
