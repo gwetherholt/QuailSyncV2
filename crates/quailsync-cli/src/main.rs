@@ -640,6 +640,7 @@ fn parse_sex(s: &str) -> Sex {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_bird_add(
     base: &str,
     band: Option<String>,
@@ -901,6 +902,7 @@ async fn cmd_clutch_list(base: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_clutch_update(
     base: &str,
     id: i64,

@@ -56,7 +56,7 @@ pub(crate) async fn create_breeding_group(
     Json(body): Json<CreateBreedingGroup>,
 ) -> impl IntoResponse {
     let count = body.female_ids.len();
-    let warning = if count < MIN_FEMALES_PER_MALE || count > MAX_FEMALES_PER_MALE {
+    let warning = if !(MIN_FEMALES_PER_MALE..=MAX_FEMALES_PER_MALE).contains(&count) {
         Some(format!("Warning: {count} females per male is outside the recommended {MIN_FEMALES_PER_MALE}-{MAX_FEMALES_PER_MALE} range"))
     } else {
         None
