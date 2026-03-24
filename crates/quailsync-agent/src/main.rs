@@ -6,11 +6,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 fn mock_brooder_readings() -> Vec<TelemetryPayload> {
     let mut rng = rand::rng();
-    let configs: [(i64, f64, f64); 3] = [
-        (1, 97.0, 100.0),
-        (2, 95.0, 98.0),
-        (3, 96.0, 99.0),
-    ];
+    let configs: [(i64, f64, f64); 3] = [(1, 97.0, 100.0), (2, 95.0, 98.0), (3, 96.0, 99.0)];
 
     configs
         .iter()

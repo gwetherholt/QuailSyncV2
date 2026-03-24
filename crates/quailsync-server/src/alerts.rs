@@ -42,7 +42,11 @@ pub fn check_brooder_alerts(conn: &Connection, reading: &BrooderReading, config:
 
     if temp < temp_min {
         let delta = temp_min - temp;
-        let severity = if delta > 3.0 { Severity::Critical } else { Severity::Warning };
+        let severity = if delta > 3.0 {
+            Severity::Critical
+        } else {
+            Severity::Warning
+        };
         let msg = format!(
             "Temperature LOW: {:.1}\u{00b0}F (min {:.1}\u{00b0}F, {:.1}\u{00b0}F below)",
             temp, temp_min, delta,
@@ -51,7 +55,11 @@ pub fn check_brooder_alerts(conn: &Connection, reading: &BrooderReading, config:
         store_alert(conn, &severity, &msg);
     } else if temp > temp_max {
         let delta = temp - temp_max;
-        let severity = if delta > 3.0 { Severity::Critical } else { Severity::Warning };
+        let severity = if delta > 3.0 {
+            Severity::Critical
+        } else {
+            Severity::Warning
+        };
         let msg = format!(
             "Temperature HIGH: {:.1}\u{00b0}F (max {:.1}\u{00b0}F, {:.1}\u{00b0}F above)",
             temp, temp_max, delta,
@@ -61,11 +69,17 @@ pub fn check_brooder_alerts(conn: &Connection, reading: &BrooderReading, config:
     }
 
     if hum < config.humidity_min {
-        let msg = format!("Humidity LOW: {:.1}% (min {:.1}%)", hum, config.humidity_min);
+        let msg = format!(
+            "Humidity LOW: {:.1}% (min {:.1}%)",
+            hum, config.humidity_min
+        );
         log_alert(&Severity::Warning, &msg);
         store_alert(conn, &Severity::Warning, &msg);
     } else if hum > config.humidity_max {
-        let msg = format!("Humidity HIGH: {:.1}% (max {:.1}%)", hum, config.humidity_max);
+        let msg = format!(
+            "Humidity HIGH: {:.1}% (max {:.1}%)",
+            hum, config.humidity_max
+        );
         log_alert(&Severity::Warning, &msg);
         store_alert(conn, &Severity::Warning, &msg);
     }

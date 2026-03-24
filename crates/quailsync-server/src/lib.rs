@@ -26,14 +26,17 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
     match Asset::get(path) {
         Some(content) => {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
-            (StatusCode::OK, [(header::CONTENT_TYPE, mime.as_ref())], content.data.into_owned()).into_response()
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, mime.as_ref())],
+                content.data.into_owned(),
+            )
+                .into_response()
         }
-        None => {
-            match Asset::get("index.html") {
-                Some(content) => Html(content.data.into_owned()).into_response(),
-                None => (StatusCode::NOT_FOUND, "not found").into_response(),
-            }
-        }
+        None => match Asset::get("index.html") {
+            Some(content) => Html(content.data.into_owned()).into_response(),
+            None => (StatusCode::NOT_FOUND, "not found").into_response(),
+        },
     }
 }
 
@@ -49,45 +52,141 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/system/latest", get(telemetry::system_latest))
         .route("/api/status", get(telemetry::status))
         .route("/api/alerts", get(telemetry::alerts))
-        .route("/api/bloodlines", get(birds::list_bloodlines).post(birds::create_bloodline))
-        .route("/api/birds", get(birds::list_birds).post(birds::create_bird))
-        .route("/api/birds/{id}", axum::routing::put(birds::update_bird).delete(birds::delete_bird))
+        .route(
+            "/api/bloodlines",
+            get(birds::list_bloodlines).post(birds::create_bloodline),
+        )
+        .route(
+            "/api/birds",
+            get(birds::list_birds).post(birds::create_bird),
+        )
+        .route(
+            "/api/birds/{id}",
+            axum::routing::put(birds::update_bird).delete(birds::delete_bird),
+        )
         // Section 10: POST (not PUT) for weight creation; path matches GET route
-        .route("/api/birds/{id}/weights", get(birds::list_weights).post(birds::create_weight))
-        .route("/api/birds/{id}/weights/{wid}", axum::routing::delete(birds::delete_weight))
-        .route("/api/breeding-pairs", get(breeding::list_breeding_pairs).post(breeding::create_breeding_pair))
-        .route("/api/clutches", get(clutches::list_clutches).post(clutches::create_clutch))
-        .route("/api/clutches/{id}", axum::routing::put(clutches::update_clutch).delete(clutches::delete_clutch))
-        .route("/api/processing", get(processing::list_processing).post(processing::create_processing))
-        .route("/api/processing/queue", get(processing::list_processing_queue))
-        .route("/api/processing/{id}", axum::routing::put(processing::update_processing))
-        .route("/api/breeding-groups", get(breeding::list_breeding_groups).post(breeding::create_breeding_group))
-        .route("/api/breeding-groups/{id}", get(breeding::get_breeding_group))
+        .route(
+            "/api/birds/{id}/weights",
+            get(birds::list_weights).post(birds::create_weight),
+        )
+        .route(
+            "/api/birds/{id}/weights/{wid}",
+            axum::routing::delete(birds::delete_weight),
+        )
+        .route(
+            "/api/breeding-pairs",
+            get(breeding::list_breeding_pairs).post(breeding::create_breeding_pair),
+        )
+        .route(
+            "/api/clutches",
+            get(clutches::list_clutches).post(clutches::create_clutch),
+        )
+        .route(
+            "/api/clutches/{id}",
+            axum::routing::put(clutches::update_clutch).delete(clutches::delete_clutch),
+        )
+        .route(
+            "/api/processing",
+            get(processing::list_processing).post(processing::create_processing),
+        )
+        .route(
+            "/api/processing/queue",
+            get(processing::list_processing_queue),
+        )
+        .route(
+            "/api/processing/{id}",
+            axum::routing::put(processing::update_processing),
+        )
+        .route(
+            "/api/breeding-groups",
+            get(breeding::list_breeding_groups).post(breeding::create_breeding_group),
+        )
+        .route(
+            "/api/breeding-groups/{id}",
+            get(breeding::get_breeding_group),
+        )
         .route("/api/flock/summary", get(breeding::flock_summary))
-        .route("/api/flock/cull-recommendations", get(breeding::cull_recommendations))
-        .route("/api/cull-batch", axum::routing::post(processing::cull_batch))
+        .route(
+            "/api/flock/cull-recommendations",
+            get(breeding::cull_recommendations),
+        )
+        .route(
+            "/api/cull-batch",
+            axum::routing::post(processing::cull_batch),
+        )
         .route("/api/inbreeding-check", get(breeding::inbreeding_check))
         .route("/api/breeding/suggest", get(breeding::breeding_suggest))
-        .route("/api/brooders", get(brooders::list_brooders).post(brooders::create_brooder))
-        .route("/api/brooders/{id}", axum::routing::put(brooders::update_brooder))
-        .route("/api/brooders/{id}/readings", get(brooders::brooder_readings))
+        .route(
+            "/api/brooders",
+            get(brooders::list_brooders).post(brooders::create_brooder),
+        )
+        .route(
+            "/api/brooders/{id}",
+            axum::routing::put(brooders::update_brooder),
+        )
+        .route(
+            "/api/brooders/{id}/readings",
+            get(brooders::brooder_readings),
+        )
         .route("/api/brooders/{id}/status", get(brooders::brooder_status))
-        .route("/api/brooders/{id}/target-temp", get(brooders::brooder_target_temp))
-        .route("/api/brooders/{id}/assign-group", axum::routing::put(brooders::assign_group_to_brooder).delete(brooders::unassign_brooder_group))
-        .route("/api/brooders/{id}/residents", get(brooders::brooder_residents))
+        .route(
+            "/api/brooders/{id}/target-temp",
+            get(brooders::brooder_target_temp),
+        )
+        .route(
+            "/api/brooders/{id}/assign-group",
+            axum::routing::put(brooders::assign_group_to_brooder)
+                .delete(brooders::unassign_brooder_group),
+        )
+        .route(
+            "/api/brooders/{id}/residents",
+            get(brooders::brooder_residents),
+        )
         .route("/api/birds/{id}/move", axum::routing::put(birds::move_bird))
-        .route("/api/cameras", get(cameras::list_cameras).post(cameras::create_camera))
-        .route("/api/cameras/{id}", axum::routing::delete(cameras::delete_camera))
-        .route("/api/cameras/{id}/brooder", axum::routing::put(cameras::update_camera_brooder))
-        .route("/api/cameras/{id}/detections/summary", get(cameras::camera_detection_summary))
-        .route("/api/frames", get(cameras::list_frames).post(cameras::create_frame))
-        .route("/api/frames/{id}/detections", axum::routing::post(cameras::create_frame_detections))
+        .route(
+            "/api/cameras",
+            get(cameras::list_cameras).post(cameras::create_camera),
+        )
+        .route(
+            "/api/cameras/{id}",
+            axum::routing::delete(cameras::delete_camera),
+        )
+        .route(
+            "/api/cameras/{id}/brooder",
+            axum::routing::put(cameras::update_camera_brooder),
+        )
+        .route(
+            "/api/cameras/{id}/detections/summary",
+            get(cameras::camera_detection_summary),
+        )
+        .route(
+            "/api/frames",
+            get(cameras::list_frames).post(cameras::create_frame),
+        )
+        .route(
+            "/api/frames/{id}/detections",
+            axum::routing::post(cameras::create_frame_detections),
+        )
         .route("/api/nfc/{tag_id}", get(birds::get_bird_by_nfc))
-        .route("/api/chick-groups", get(chick_groups::list_chick_groups).post(chick_groups::create_chick_group))
-        .route("/api/chick-groups/{id}", get(chick_groups::get_chick_group).put(chick_groups::update_chick_group).delete(chick_groups::delete_chick_group))
+        .route(
+            "/api/chick-groups",
+            get(chick_groups::list_chick_groups).post(chick_groups::create_chick_group),
+        )
+        .route(
+            "/api/chick-groups/{id}",
+            get(chick_groups::get_chick_group)
+                .put(chick_groups::update_chick_group)
+                .delete(chick_groups::delete_chick_group),
+        )
         // Section 10: POST for mortality (creates a log entry) and graduate (creates birds)
-        .route("/api/chick-groups/{id}/mortality", axum::routing::post(chick_groups::log_mortality))
-        .route("/api/chick-groups/{id}/graduate", axum::routing::post(chick_groups::graduate_chick_group))
+        .route(
+            "/api/chick-groups/{id}/mortality",
+            axum::routing::post(chick_groups::log_mortality),
+        )
+        .route(
+            "/api/chick-groups/{id}/graduate",
+            axum::routing::post(chick_groups::graduate_chick_group),
+        )
         .route("/api/backup", axum::routing::post(backup::create_backup))
         .route("/api/backups", get(backup::list_backups))
         .route("/api/restore", axum::routing::post(backup::restore_backup))

@@ -22,18 +22,42 @@ pub(crate) async fn create_camera(
         return db_error(e);
     }
     let id = conn.last_insert_rowid();
-    (StatusCode::CREATED, Json(CameraFeed {
-        id, name: body.name, location: body.location, feed_url: body.feed_url, status: body.status, brooder_id: body.brooder_id,
-    })).into_response()
+    (
+        StatusCode::CREATED,
+        Json(CameraFeed {
+            id,
+            name: body.name,
+            location: body.location,
+            feed_url: body.feed_url,
+            status: body.status,
+            brooder_id: body.brooder_id,
+        }),
+    )
+        .into_response()
 }
 
 pub(crate) async fn list_cameras(State(state): State<AppState>) -> Json<Vec<CameraFeed>> {
     let conn = acquire_db(&state);
-    let mut stmt = conn.prepare("SELECT id, name, location, feed_url, status, brooder_id FROM camera_feeds ORDER BY id").expect("prepare failed");
-    let rows: Vec<CameraFeed> = stmt.query_map([], |row| {
-        let status_str: String = row.get(4)?;
-        Ok(CameraFeed { id: row.get(0)?, name: row.get(1)?, location: row.get(2)?, feed_url: row.get(3)?, status: str_to_camera_status(&status_str), brooder_id: row.get(5)? })
-    }).unwrap().filter_map(|r| r.ok()).collect();
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, name, location, feed_url, status, brooder_id FROM camera_feeds ORDER BY id",
+        )
+        .expect("prepare failed");
+    let rows: Vec<CameraFeed> = stmt
+        .query_map([], |row| {
+            let status_str: String = row.get(4)?;
+            Ok(CameraFeed {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                location: row.get(2)?,
+                feed_url: row.get(3)?,
+                status: str_to_camera_status(&status_str),
+                brooder_id: row.get(5)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
     Json(rows)
 }
 
@@ -42,8 +66,14 @@ pub(crate) async fn delete_camera(
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
-    let affected = conn.execute("DELETE FROM camera_feeds WHERE id = ?1", params![id]).unwrap_or(0);
-    if affected > 0 { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND }
+    let affected = conn
+        .execute("DELETE FROM camera_feeds WHERE id = ?1", params![id])
+        .unwrap_or(0);
+    if affected > 0 {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::NOT_FOUND
+    }
 }
 
 pub(crate) async fn update_camera_brooder(
@@ -53,7 +83,10 @@ pub(crate) async fn update_camera_brooder(
 ) -> impl IntoResponse {
     let brooder_id = body.get("brooder_id").and_then(|v| v.as_i64());
     let conn = acquire_db(&state);
-    if let Err(e) = conn.execute("UPDATE camera_feeds SET brooder_id = ?1 WHERE id = ?2", params![brooder_id, id]) {
+    if let Err(e) = conn.execute(
+        "UPDATE camera_feeds SET brooder_id = ?1 WHERE id = ?2",
+        params![brooder_id, id],
+    ) {
         return db_error(e);
     }
     StatusCode::OK.into_response()
@@ -72,7 +105,17 @@ pub(crate) async fn create_frame(
         return db_error(e);
     }
     let id = conn.last_insert_rowid();
-    (StatusCode::CREATED, Json(FrameCapture { id, camera_id: body.camera_id, timestamp: now, image_path: body.image_path, life_stage: body.life_stage })).into_response()
+    (
+        StatusCode::CREATED,
+        Json(FrameCapture {
+            id,
+            camera_id: body.camera_id,
+            timestamp: now,
+            image_path: body.image_path,
+            life_stage: body.life_stage,
+        }),
+    )
+        .into_response()
 }
 
 pub(crate) async fn create_frame_detections(
@@ -91,9 +134,15 @@ pub(crate) async fn create_frame_detections(
         }
         let id = conn.last_insert_rowid();
         results.push(DetectionResult {
-            id, frame_id, label: d.label, confidence: d.confidence,
-            bounding_box_x: d.bounding_box_x, bounding_box_y: d.bounding_box_y,
-            bounding_box_w: d.bounding_box_w, bounding_box_h: d.bounding_box_h, notes: d.notes,
+            id,
+            frame_id,
+            label: d.label,
+            confidence: d.confidence,
+            bounding_box_x: d.bounding_box_x,
+            bounding_box_y: d.bounding_box_y,
+            bounding_box_w: d.bounding_box_w,
+            bounding_box_h: d.bounding_box_h,
+            notes: d.notes,
         });
     }
     (StatusCode::CREATED, Json(results)).into_response()
@@ -129,11 +178,16 @@ pub(crate) async fn list_frames(
             let ts_str: String = row.get(2)?;
             let stage_str: String = row.get(4)?;
             Ok(FrameCapture {
-                id: row.get(0)?, camera_id: row.get(1)?,
+                id: row.get(0)?,
+                camera_id: row.get(1)?,
                 timestamp: ts_str.parse::<DateTime<Utc>>().unwrap_or_default(),
-                image_path: row.get(3)?, life_stage: str_to_life_stage(&stage_str),
+                image_path: row.get(3)?,
+                life_stage: str_to_life_stage(&stage_str),
             })
-        }).unwrap().filter_map(|r| r.ok()).collect();
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
     Json(rows)
 }
 
@@ -149,14 +203,24 @@ pub(crate) async fn camera_detection_summary(
     Path(camera_id): Path<i64>,
 ) -> Json<Vec<DetectionSummaryEntry>> {
     let conn = acquire_db(&state);
-    let mut stmt = conn.prepare(
-        "SELECT dr.label, COUNT(*), AVG(dr.confidence) FROM detection_results dr
+    let mut stmt = conn
+        .prepare(
+            "SELECT dr.label, COUNT(*), AVG(dr.confidence) FROM detection_results dr
          JOIN frame_captures fc ON fc.id = dr.frame_id
          WHERE fc.camera_id = ?1 AND fc.timestamp >= datetime('now', '-60 minutes')
-         GROUP BY dr.label ORDER BY COUNT(*) DESC"
-    ).expect("prepare failed");
+         GROUP BY dr.label ORDER BY COUNT(*) DESC",
+        )
+        .expect("prepare failed");
     let rows: Vec<DetectionSummaryEntry> = stmt
-        .query_map(params![camera_id], |row| Ok(DetectionSummaryEntry { label: row.get(0)?, count: row.get(1)?, avg_confidence: row.get(2)? }))
-        .unwrap().filter_map(|r| r.ok()).collect();
+        .query_map(params![camera_id], |row| {
+            Ok(DetectionSummaryEntry {
+                label: row.get(0)?,
+                count: row.get(1)?,
+                avg_confidence: row.get(2)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
     Json(rows)
 }

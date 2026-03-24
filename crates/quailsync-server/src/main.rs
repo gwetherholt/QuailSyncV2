@@ -94,14 +94,10 @@ async fn main() {
     let tls_acceptor = tokio_rustls::TlsAcceptor::from(tls_config);
 
     // HTTP server on port 3000
-    let http_listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
-        .await
-        .unwrap();
+    let http_listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
 
     // HTTPS listener on port 3443
-    let https_listener = tokio::net::TcpListener::bind("0.0.0.0:3443")
-        .await
-        .unwrap();
+    let https_listener = tokio::net::TcpListener::bind("0.0.0.0:3443").await.unwrap();
 
     println!("HTTP:  http://0.0.0.0:3000");
     println!("HTTPS: https://0.0.0.0:3443");
@@ -138,18 +134,22 @@ async fn main() {
                 };
 
                 let io = hyper_util::rt::TokioIo::new(tls_stream);
-                let hyper_service = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
-                    let mut app = app.clone();
-                    async move {
-                        use tower::Service;
-                        let req = req.map(axum::body::Body::new);
-                        app.call(req).await
-                    }
-                });
+                let hyper_service = hyper::service::service_fn(
+                    move |req: hyper::Request<hyper::body::Incoming>| {
+                        let mut app = app.clone();
+                        async move {
+                            use tower::Service;
+                            let req = req.map(axum::body::Body::new);
+                            app.call(req).await
+                        }
+                    },
+                );
 
-                if let Err(e) = hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
-                    .serve_connection_with_upgrades(io, hyper_service)
-                    .await
+                if let Err(e) = hyper_util::server::conn::auto::Builder::new(
+                    hyper_util::rt::TokioExecutor::new(),
+                )
+                .serve_connection_with_upgrades(io, hyper_service)
+                .await
                 {
                     eprintln!("[tls] connection error: {e}");
                 }
