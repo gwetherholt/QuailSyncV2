@@ -93,11 +93,27 @@ async fn main() {
     let tls_config = load_tls_config();
     let tls_acceptor = tokio_rustls::TlsAcceptor::from(tls_config);
 
-    // HTTP server on port 3000
-    let http_listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    // HTTP server on port 3000 (retry on bind failure for Docker restarts)
+    let http_listener = loop {
+        match tokio::net::TcpListener::bind("0.0.0.0:3000").await {
+            Ok(l) => break l,
+            Err(e) => {
+                eprintln!("[http] bind failed: {e} — retrying in 2s");
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+        }
+    };
 
     // HTTPS listener on port 3443
-    let https_listener = tokio::net::TcpListener::bind("0.0.0.0:3443").await.unwrap();
+    let https_listener = loop {
+        match tokio::net::TcpListener::bind("0.0.0.0:3443").await {
+            Ok(l) => break l,
+            Err(e) => {
+                eprintln!("[https] bind failed: {e} — retrying in 2s");
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+        }
+    };
 
     println!("HTTP:  http://0.0.0.0:3000");
     println!("HTTPS: https://0.0.0.0:3443");

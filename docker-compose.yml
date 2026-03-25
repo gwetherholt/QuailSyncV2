@@ -6,19 +6,7 @@ services:
       - ./data:/data
     restart: always
 
-  sensors:
-    build:
-      context: ./pi-agent
-      dockerfile: Dockerfile.sensors
-    network_mode: host
-    privileged: true
-    environment:
-      - PYTHONUNBUFFERED=1
-    volumes:
-      - /sys/bus/iio/devices:/sys/bus/iio/devices:ro
-    depends_on:
-      - server
-    restart: always
+  # sensors service removed — ESP32 wireless nodes now send data directly via WebSocket
 
   camera1:
     build:
@@ -47,29 +35,30 @@ services:
       --collect-snapshots
     restart: always
 
-  camera2:
-    build:
-      context: ./pi-agent
-      dockerfile: Dockerfile.camera
-    network_mode: host
-    privileged: true
-    environment:
-      - PYTHONUNBUFFERED=1
-    volumes:
-      - ./pi-agent:/app
-      - /mnt/pc-snapshots:/app/snapshots
-      - /usr/lib/python3/dist-packages:/host-packages:ro
-      - /usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu:ro
-      - /usr/share/libpisp:/usr/share/libpisp:ro
-      - /usr/share/libcamera:/usr/share/libcamera:ro
-      - /run/udev:/run/udev:ro
-    depends_on:
-      - server
-    command: >
-      python3 camera_stream.py
-      --server ws://localhost:3000/ws
-      --brooder-id 2
-      --camera-index 1
-      --port 8081
-      --collect-snapshots
-    restart: always
+  # camera2 disabled — only one camera physically connected; camera2 grabs the device and causes camera1 to fail
+  # camera2:
+  #   build:
+  #     context: ./pi-agent
+  #     dockerfile: Dockerfile.camera
+  #   network_mode: host
+  #   privileged: true
+  #   environment:
+  #     - PYTHONUNBUFFERED=1
+  #   volumes:
+  #     - ./pi-agent:/app
+  #     - /mnt/pc-snapshots:/app/snapshots
+  #     - /usr/lib/python3/dist-packages:/host-packages:ro
+  #     - /usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu:ro
+  #     - /usr/share/libpisp:/usr/share/libpisp:ro
+  #     - /usr/share/libcamera:/usr/share/libcamera:ro
+  #     - /run/udev:/run/udev:ro
+  #   depends_on:
+  #     - server
+  #   command: >
+  #     python3 camera_stream.py
+  #     --server ws://localhost:3000/ws
+  #     --brooder-id 2
+  #     --camera-index 1
+  #     --port 8081
+  #     --collect-snapshots
+  #   restart: always
