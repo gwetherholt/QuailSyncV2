@@ -29,6 +29,7 @@ async fn spawn_test_server() -> String {
         agent_connected: Arc::new(AtomicBool::new(false)),
         alert_config: AlertConfig::default(),
         live_tx,
+        last_seen: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
     };
 
     let app = build_app(state);

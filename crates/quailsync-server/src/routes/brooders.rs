@@ -10,7 +10,7 @@ use serde::Serialize;
 use crate::alerts::youngest_chick_age_in_brooder;
 use crate::db::helpers::*;
 use crate::routes::telemetry::HistoryParams;
-use crate::state::{acquire_db, db_error, AppState};
+use crate::state::{acquire_db, db_error, is_brooder_online, AppState};
 
 pub(crate) async fn create_brooder(
     State(state): State<AppState>,
@@ -146,6 +146,7 @@ struct BrooderStatus {
     latest_humidity: Option<f64>,
     has_alert: bool,
     alert_message: Option<String>,
+    sensor_status: String,
 }
 
 pub(crate) async fn brooder_status(
@@ -189,12 +190,19 @@ pub(crate) async fn brooder_status(
         Err(_) => (None, None, false, None),
     };
 
+    let sensor_status = if is_brooder_online(&state, id) {
+        "online".to_string()
+    } else {
+        "offline".to_string()
+    };
+
     Json(BrooderStatus {
         brooder,
         latest_temp,
         latest_humidity,
         has_alert,
         alert_message,
+        sensor_status,
     })
     .into_response()
 }
