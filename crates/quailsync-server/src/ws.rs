@@ -8,7 +8,7 @@ use tokio::sync::broadcast;
 
 use crate::alerts::check_brooder_alerts;
 use crate::db::store_payload;
-use crate::state::{acquire_db, AppState};
+use crate::state::{acquire_db, touch_brooder, AppState};
 
 pub async fn ws_handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
@@ -27,6 +27,9 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                     store_payload(&conn, &payload);
                     if let TelemetryPayload::Brooder(ref reading) = payload {
                         check_brooder_alerts(&conn, reading, &state.alert_config);
+                        if let Some(bid) = reading.brooder_id {
+                            touch_brooder(&state, bid);
+                        }
                     }
                     let _ = state.live_tx.send(text.to_string());
                 }

@@ -973,8 +973,25 @@
       return null;
     },
 
+    _staleTimers: {},
+    _STALE_TIMEOUT_MS: 15000,
+
+    _markOffline: function(bid){
+      var card = document.querySelector('[data-brooder-id="'+bid+'"]');
+      if(!card || card.getAttribute('data-sensor-status')==='offline') return;
+      card.setAttribute('data-sensor-status','offline');
+      card.style.opacity='0.55';
+      var tempEl = card.querySelector('[data-field="temp"]');
+      var humEl = card.querySelector('[data-field="hum"]');
+      var alertEl = card.querySelector('[data-field="alert"]');
+      if(tempEl) tempEl.innerHTML='<span style="color:#999">Offline</span>';
+      if(humEl) humEl.innerHTML='<span style="color:#999">--</span>';
+      if(alertEl) alertEl.innerHTML='<span style="color:#999">No signal</span>';
+    },
+
     // Called from /ws/live onmessage — update one brooder card instantly from WS payload
     _updateFromWs: function(reading){
+      var self = this;
       var temp = reading.temperature_f;
       var hum = reading.humidity_percent;
       var bid = reading.brooder_id || 'legacy';
@@ -983,6 +1000,14 @@
       var card = document.querySelector('[data-brooder-id="'+bid+'"]');
       if(!card) card = document.querySelector('[data-brooder-id="legacy"]');
       if(!card) return;
+
+      // Mark online — restore opacity and status
+      card.setAttribute('data-sensor-status','online');
+      card.style.opacity='1';
+
+      // Reset staleness timer for this brooder
+      if(self._staleTimers[bid]) clearTimeout(self._staleTimers[bid]);
+      self._staleTimers[bid] = setTimeout(function(){ self._markOffline(bid); }, self._STALE_TIMEOUT_MS);
 
       // Update temp + humidity values
       var tempEl = card.querySelector('[data-field="temp"]');
@@ -1047,10 +1072,17 @@
         var status = results[i][0];
         var readings = results[i][1];
         var stageCls = b.life_stage==='Chick'?'background:#e8c8c8;color:#8b4513' : b.life_stage==='Adolescent'?'background:#d2dcc3;color:#2e5c1e' : 'background:#c8d8e8;color:#2e4a5c';
-        var alertBorder = (status && status.has_alert) ? 'border-left:4px solid var(--danger)' : 'border-left:4px solid var(--safe)';
-        var tempStr = status && status.latest_temp!=null ? status.latest_temp.toFixed(1)+'&deg;F' : '--';
-        var humStr = status && status.latest_humidity!=null ? status.latest_humidity.toFixed(1)+'%' : '--';
-        var alertHtml = (status && status.has_alert) ? status.alert_message : '';
+        var isOffline = status && status.sensor_status === 'offline';
+        var alertBorder = isOffline ? 'border-left:4px solid #aaa' : (status && status.has_alert) ? 'border-left:4px solid var(--danger)' : 'border-left:4px solid var(--safe)';
+        var tempStr, humStr;
+        if(isOffline){
+          tempStr = '<span style="color:#999">Offline</span>';
+          humStr = '<span style="color:#999">--</span>';
+        } else {
+          tempStr = status && status.latest_temp!=null ? status.latest_temp.toFixed(1)+'&deg;F' : '--';
+          humStr = status && status.latest_humidity!=null ? status.latest_humidity.toFixed(1)+'%' : '--';
+        }
+        var alertHtml = isOffline ? '<span style="color:#999">No signal</span>' : (status && status.has_alert) ? status.alert_message : '';
         var camBase = b.camera_url || Page.Cameras._DEFAULT_CAM;
         // Seed sparkline cache from REST data
         var sparkTemps = [];
@@ -1059,7 +1091,8 @@
           sparkTemps=pts.map(function(p){return p.temperature_f});
         }
         self._sparkCache[String(b.id)] = sparkTemps.slice();
-        html+='<div data-brooder-id="'+b.id+'" style="background:var(--cream);border-radius:var(--radius);padding:.75rem;'+alertBorder+'">';
+        var offlineStyle = isOffline ? 'opacity:0.55;' : '';
+        html+='<div data-brooder-id="'+b.id+'" data-sensor-status="'+(isOffline?'offline':'online')+'" style="background:var(--cream);border-radius:var(--radius);padding:.75rem;'+offlineStyle+alertBorder+'">';
         html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem"><strong style="font-size:.88rem">'+escapeHtml(b.name)+'</strong><span style="font-size:.62rem;padding:2px 6px;border-radius:8px;'+stageCls+'">'+escapeHtml(b.life_stage)+'</span></div>';
         html+='<div style="display:flex;gap:.5rem;align-items:flex-start;margin-bottom:.2rem">';
         html+='<div style="flex:1"><div class="reading-row"><div><span class="reading-label">Temp</span><br><span class="reading-value" data-field="temp">'+tempStr+'</span></div><div style="text-align:right"><span class="reading-label">Hum</span><br><span class="reading-value" data-field="hum">'+humStr+'</span></div></div></div>';
