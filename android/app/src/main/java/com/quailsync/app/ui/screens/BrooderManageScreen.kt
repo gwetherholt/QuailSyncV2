@@ -53,6 +53,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.quailsync.app.data.Bird
+import com.quailsync.app.data.Bloodline
+import com.quailsync.app.data.Brooder
 import com.quailsync.app.data.ChickGroupDto
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.ServerConfig
@@ -73,9 +75,12 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
     val serverUrl = remember { ServerConfig.getServerUrl(context) }
     val api = remember { QuailSyncApi.create(serverUrl) }
     val scope = rememberCoroutineScope()
+    var brooder by remember { mutableStateOf<Brooder?>(null) }
+    var bloodlines by remember { mutableStateOf<List<Bloodline>>(emptyList()) }
     var targetTemp by remember { mutableStateOf<TargetTempResponse?>(null) }
     var allGroups by remember { mutableStateOf<List<ChickGroupDto>>(emptyList()) }
     var residentBirds by remember { mutableStateOf<List<Bird>>(emptyList()) }
+    var showQrScanner by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var refreshKey by remember { mutableStateOf(0) }
@@ -93,6 +98,8 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
         error = null
         Log.d("QuailSync", "BrooderManage: loading data for brooder $brooderId (refresh=$refreshKey)")
         try {
+            brooder = try { api.getBrooders().find { it.id == brooderId } } catch (e: Exception) { Log.e("QuailSync", "brooder fetch failed", e); null }
+            bloodlines = try { api.getBloodlines() } catch (_: Exception) { emptyList() }
             targetTemp = try { api.getBrooderTargetTemp(brooderId) } catch (e: Exception) { Log.e("QuailSync", "targetTemp failed", e); null }
 
             // Fetch chick groups — log raw JSON for debugging
@@ -149,6 +156,47 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
                 CircularProgressIndicator(color = SageGreen)
             }
             return@Column
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // =====================================================
+        // QR Code / Bloodline
+        // =====================================================
+        Card(
+            Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(2.dp),
+        ) {
+            Column(Modifier.padding(16.dp)) {
+                Text("QR Code", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(8.dp))
+                val qr = brooder?.qrCode
+                val blName = brooder?.bloodlineId?.let { bid -> bloodlines.find { it.id == bid }?.name }
+                if (!qr.isNullOrBlank()) {
+                    Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                        Column {
+                            Text(qr, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                            if (blName != null) {
+                                Text("Bloodline: $blName", style = MaterialTheme.typography.bodyMedium, color = SageGreen)
+                            }
+                        }
+                        Box(
+                            Modifier.size(10.dp).clip(CircleShape)
+                                .background(SageGreen)
+                        )
+                    }
+                } else {
+                    Text("No QR code assigned", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { showQrScanner = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
+                ) {
+                    Text("Scan QR Code")
+                }
+            }
         }
 
         Spacer(Modifier.height(16.dp))
@@ -400,5 +448,41 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
                 Text(error!!, Modifier.padding(12.dp), color = AlertRed, style = MaterialTheme.typography.bodyMedium)
             }
         }
+    }
+
+    // QR Scanner dialog
+    if (showQrScanner) {
+        QrScannerDialog(
+            onQrScanned = { qrCode ->
+                showQrScanner = false
+                // Parse brooder-{id}-{bloodline} format
+                val match = Regex("^brooder-(\\d+)-(.+)$", RegexOption.IGNORE_CASE).find(qrCode)
+                if (match != null) {
+                    val scannedBrooderId = match.groupValues[1].toIntOrNull()
+                    val bloodlineName = match.groupValues[2]
+                    scope.launch {
+                        try {
+                            // Update brooder qr_code via PUT
+                            val body = okhttp3.RequestBody.create(
+                                "application/json".toMediaType(),
+                                """{"qr_code": "$qrCode"}"""
+                            )
+                            withContext(Dispatchers.IO) {
+                                val url = "${serverUrl.trimEnd('/')}/api/brooders/$brooderId"
+                                val req = okhttp3.Request.Builder().url(url).put(body).build()
+                                okhttp3.OkHttpClient().newCall(req).execute()
+                            }
+                            Toast.makeText(context, "QR code set: $qrCode", Toast.LENGTH_SHORT).show()
+                            refreshKey++
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } else {
+                    Toast.makeText(context, "Invalid QR format: $qrCode", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onDismiss = { showQrScanner = false },
+        )
     }
 }

@@ -27,6 +27,9 @@ data class Brooder(
     @SerializedName("latest_temperature_f") val latestTemperatureF: Double? = null,
     @SerializedName("latest_humidity_percent") val latestHumidityPercent: Double? = null,
     @SerializedName("camera_url") val cameraUrl: String? = null,
+    @SerializedName("qr_code") val qrCode: String? = null,
+    @SerializedName("bloodline_id") val bloodlineId: Int? = null,
+    @SerializedName("life_stage") val lifeStage: String? = null,
 )
 
 data class UpdateBrooderRequest(

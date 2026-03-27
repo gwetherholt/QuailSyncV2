@@ -4,6 +4,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::response::Response;
 use quailsync_common::TelemetryPayload;
+use rusqlite::params;
 use tokio::sync::broadcast;
 
 use crate::alerts::check_brooder_alerts;
@@ -30,6 +31,12 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                         if let Some(bid) = reading.brooder_id {
                             touch_brooder(&state, bid);
                         }
+                    }
+                    if let TelemetryPayload::QrDetected(ref qr) = payload {
+                        conn.execute(
+                            "UPDATE brooders SET qr_code = ?1 WHERE id = ?2",
+                            params![qr.qr_code, qr.brooder_id],
+                        ).ok();
                     }
                     let _ = state.live_tx.send(text.to_string());
                 }
@@ -112,6 +119,12 @@ fn log_payload(payload: &TelemetryPayload) {
             println!(
                 "[telemetry] camera  | brooder {} stream: {}",
                 ca.brooder_id, ca.stream_url,
+            );
+        }
+        TelemetryPayload::QrDetected(qr) => {
+            println!(
+                "[telemetry] qr     | brooder {} bloodline: {} code: {}",
+                qr.brooder_id, qr.bloodline, qr.qr_code,
             );
         }
     }
