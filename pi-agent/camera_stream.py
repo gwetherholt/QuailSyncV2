@@ -254,10 +254,32 @@ def _announce_camera(brooder_id):
 
 
 def _notify_server(brooder_id):
-    """Send camera-brooder association to server (QR code detected a new brooder)."""
-    # Only announce on QR-triggered brooder change, not reconnects
+    """Send QR detection + camera-brooder association to server."""
     global _announced
-    _announced = False  # Allow re-announce since the brooder actually changed
+
+    # Send QR detected event
+    if WS_AVAILABLE and server_url and current_bloodline_name:
+        try:
+            qr_code = f"brooder-{brooder_id}-{current_bloodline_name}"
+
+            async def _send_qr():
+                async with websockets.connect(server_url) as ws:
+                    payload = json.dumps({
+                        "QrDetected": {
+                            "brooder_id": brooder_id,
+                            "bloodline": current_bloodline_name,
+                            "qr_code": qr_code
+                        }
+                    })
+                    await ws.send(payload)
+                    print(f"\033[32m[qr] Sent QrDetected to server: brooder {brooder_id} bloodline={current_bloodline_name}\033[0m")
+
+            asyncio.run(_send_qr())
+        except Exception as e:
+            print(f"\033[33m[qr] QrDetected send failed: {e}\033[0m")
+
+    # Re-announce camera for the new brooder
+    _announced = False
     _announce_camera(brooder_id)
 
 

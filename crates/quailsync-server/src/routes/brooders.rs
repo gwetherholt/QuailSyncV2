@@ -95,6 +95,28 @@ pub(crate) async fn update_brooder(
         )
         .ok();
     }
+    if let Some(qr) = body.get("qr_code").and_then(|v| v.as_str()) {
+        conn.execute(
+            "UPDATE brooders SET qr_code = ?1 WHERE id = ?2",
+            params![qr, id],
+        )
+        .ok();
+    }
+    if let Some(bl_id) = body.get("bloodline_id") {
+        if bl_id.is_null() {
+            conn.execute(
+                "UPDATE brooders SET bloodline_id = NULL WHERE id = ?1",
+                params![id],
+            )
+            .ok();
+        } else if let Some(v) = bl_id.as_i64() {
+            conn.execute(
+                "UPDATE brooders SET bloodline_id = ?1 WHERE id = ?2",
+                params![v, id],
+            )
+            .ok();
+        }
+    }
     StatusCode::OK.into_response()
 }
 

@@ -47,6 +47,14 @@ pub struct CameraAnnounce {
     pub snapshot_url: Option<String>,
 }
 
+/// QR code detection event from Pi agent camera.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QrDetected {
+    pub brooder_id: i64,
+    pub bloodline: String,
+    pub qr_code: String,
+}
+
 /// Top-level telemetry payload sent from agent to server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TelemetryPayload {
@@ -54,6 +62,7 @@ pub enum TelemetryPayload {
     Brooder(BrooderReading),
     Detection(DetectionEvent),
     CameraAnnounce(CameraAnnounce),
+    QrDetected(QrDetected),
 }
 
 /// Configurable thresholds for brooder alerts.

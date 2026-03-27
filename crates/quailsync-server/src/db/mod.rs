@@ -306,6 +306,17 @@ pub fn store_payload(conn: &Connection, payload: &TelemetryPayload) {
                 ca.brooder_id, ca.stream_url
             );
         }
+        TelemetryPayload::QrDetected(qr) => {
+            conn.execute(
+                "UPDATE brooders SET qr_code = ?1 WHERE id = ?2",
+                params![qr.qr_code, qr.brooder_id],
+            )
+            .ok();
+            println!(
+                "[qr] Updated brooder {} qr_code={} bloodline={}",
+                qr.brooder_id, qr.qr_code, qr.bloodline
+            );
+        }
     }
 }
 
