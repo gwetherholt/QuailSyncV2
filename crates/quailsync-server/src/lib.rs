@@ -131,6 +131,7 @@ pub fn build_app(state: AppState) -> Router {
             get(brooders::brooder_readings),
         )
         .route("/api/brooders/{id}/status", get(brooders::brooder_status))
+        .route("/api/brooders/{id}/alerts", get(brooders::brooder_alerts))
         .route(
             "/api/brooders/{id}/target-temp",
             get(brooders::brooder_target_temp),
