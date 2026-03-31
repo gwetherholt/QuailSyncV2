@@ -51,6 +51,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -147,6 +148,14 @@ class ClutchViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    suspend fun logMortality(groupId: Int, count: Int, reason: String): Boolean {
+        return try {
+            api.logMortality(groupId, com.quailsync.app.data.MortalityRequest(count, reason))
+            loadDataSuspend()
+            true
+        } catch (e: Exception) { Log.e("QuailSync", "Log mortality failed", e); false }
+    }
+
     fun deleteChickGroupById(id: Int, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             val ok = try { api.deleteChickGroup(id); true } catch (e: Exception) { Log.e("QuailSync", "Delete chick group failed", e); false }
@@ -196,8 +205,10 @@ fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
     var deleteClutch by remember { mutableStateOf<Clutch?>(null) }
     var editGroup by remember { mutableStateOf<ChickGroupDto?>(null) }
     var deleteGroup by remember { mutableStateOf<ChickGroupDto?>(null) }
+    var mortalityGroup by remember { mutableStateOf<ChickGroupDto?>(null) }
 
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
@@ -247,7 +258,8 @@ fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
                         item { Spacer(Modifier.height(4.dp)); HorizontalDivider(); Spacer(Modifier.height(4.dp)); Text("Chick Groups", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                         items(activeGroups, key = { "group-${it.id}" }) { group ->
                             ChickGroupCard(group, bloodlineMap[group.bloodlineId]?.name, group.brooderId?.let { brooderMap[it]?.name },
-                                onEdit = { editGroup = group }, onDelete = { deleteGroup = group })
+                                onEdit = { editGroup = group }, onDelete = { deleteGroup = group },
+                                onLogMortality = { mortalityGroup = group })
                         }
                     }
                     if (graduatedGroups.isNotEmpty()) {
@@ -346,6 +358,50 @@ fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
                 }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFCC4444))) { Text("Delete") }
             },
             dismissButton = { TextButton(onClick = { deleteGroup = null }) { Text("Cancel") } },
+        )
+    }
+
+    if (mortalityGroup != null) {
+        val group = mortalityGroup!!
+        var count by remember { mutableStateOf("1") }
+        var reason by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { mortalityGroup = null },
+            title = { Text("Log Mortality — Group #${group.id}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("${group.currentCount} chicks currently alive", style = MaterialTheme.typography.bodyMedium)
+                    OutlinedTextField(
+                        value = count, onValueChange = { count = it.filter { c -> c.isDigit() } },
+                        label = { Text("Number lost") }, modifier = Modifier.fillMaxWidth(), singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    )
+                    OutlinedTextField(
+                        value = reason, onValueChange = { reason = it },
+                        label = { Text("Reason") }, placeholder = { Text("e.g. Failure to thrive") },
+                        modifier = Modifier.fillMaxWidth(), singleLine = true,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val n = count.toIntOrNull() ?: 0
+                        if (n > 0 && reason.isNotBlank()) {
+                            val gid = group.id
+                            mortalityGroup = null
+                            scope.launch {
+                                val ok = viewModel.logMortality(gid, n, reason)
+                                if (ok) Toast.makeText(context, "Logged $n loss${if (n != 1) "es" else ""}", Toast.LENGTH_SHORT).show()
+                                else Toast.makeText(context, "Failed to log mortality", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                    enabled = (count.toIntOrNull() ?: 0) > 0 && reason.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
+                ) { Text("Confirm") }
+            },
+            dismissButton = { TextButton(onClick = { mortalityGroup = null }) { Text("Cancel") } },
         )
     }
 }
@@ -691,10 +747,68 @@ fun ClutchCard(clutch: Clutch, bloodlineName: String?, brooderName: String? = nu
             }
 
             Spacer(Modifier.height(12.dp))
-            Row(Modifier.fillMaxWidth(), Arrangement.SpaceEvenly) {
-                clutch.totalEggs?.let { ClutchStat(it.toString(), "Eggs") }
-                clutch.totalFertile?.let { ClutchStat(it.toString(), "Fertile", clutch.totalEggs?.let { e -> "of $e" }) }
-                clutch.totalHatched?.let { ClutchStat(it.toString(), "Hatched", (clutch.totalFertile ?: clutch.totalEggs)?.let { e -> "of $e" }) }
+
+            if (isComplete) {
+                // Prominent scores for hatched clutches
+                val eggs = clutch.totalEggs ?: 0
+                val fertile = clutch.totalFertile
+                val hatched = clutch.totalHatched
+                val fertilityRate = if (eggs > 0 && fertile != null) (fertile.toFloat() / eggs * 100) else null
+                // Hatch rate: hatched/fertile, fallback to hatched/eggs if no fertile data
+                val hatchRate = if (hatched != null && hatched > 0) {
+                    if (fertile != null && fertile > 0) (hatched.toFloat() / fertile * 100)
+                    else if (eggs > 0) (hatched.toFloat() / eggs * 100)
+                    else null
+                } else null
+                val hatchRateDenom = if (fertile != null && fertile > 0) fertile else eggs
+
+                fun rateColor(rate: Float) = if (rate < 50f) AlertRed else if (rate < 70f) AlertYellow else AlertGreen
+
+                Row(Modifier.fillMaxWidth(), Arrangement.SpaceEvenly) {
+                    clutch.totalEggs?.let { ClutchStat(it.toString(), "Eggs") }
+                    fertilityRate?.let { rate ->
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("${"%.0f".format(rate)}%", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = rateColor(rate))
+                            Text("Fertility", style = MaterialTheme.typography.bodyMedium)
+                            fertile?.let { Text("$it of $eggs", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        }
+                    }
+                    hatchRate?.let { rate ->
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("${"%.0f".format(rate)}%", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = rateColor(rate))
+                            Text("Hatch Rate", style = MaterialTheme.typography.bodyMedium)
+                            hatched?.let { Text("$it of $hatchRateDenom", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        }
+                    }
+                }
+
+                // Detail breakdown — only show non-zero stats
+                val details = listOfNotNull(
+                    clutch.eggsStillborn?.takeIf { it > 0 }?.let { "$it stillborn" },
+                    clutch.eggsInfertile?.takeIf { it > 0 }?.let { "$it infertile" },
+                    clutch.eggsQuit?.takeIf { it > 0 }?.let { "$it quit" },
+                    clutch.eggsDamaged?.takeIf { it > 0 }?.let { "$it damaged" },
+                )
+                if (details.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        details.joinToString(" \u00b7 "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                if (!clutch.hatchNotes.isNullOrBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(clutch.hatchNotes, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else {
+                // Standard egg/fertile/hatched stats for incubating clutches
+                Row(Modifier.fillMaxWidth(), Arrangement.SpaceEvenly) {
+                    clutch.totalEggs?.let { ClutchStat(it.toString(), "Eggs") }
+                    clutch.totalFertile?.let { ClutchStat(it.toString(), "Fertile", clutch.totalEggs?.let { e -> "of $e" }) }
+                    clutch.totalHatched?.let { ClutchStat(it.toString(), "Hatched", (clutch.totalFertile ?: clutch.totalEggs)?.let { e -> "of $e" }) }
+                }
             }
 
             if (setDate != null) {
@@ -738,7 +852,7 @@ fun ClutchCard(clutch: Clutch, bloodlineName: String?, brooderName: String? = nu
 // =====================================================================
 
 @Composable
-fun ChickGroupCard(group: ChickGroupDto, bloodlineName: String?, brooderName: String?, onEdit: () -> Unit = {}, onDelete: () -> Unit = {}) {
+fun ChickGroupCard(group: ChickGroupDto, bloodlineName: String?, brooderName: String?, onEdit: () -> Unit = {}, onDelete: () -> Unit = {}, onLogMortality: () -> Unit = {}) {
     val today = remember { LocalDate.now() }
     val hatchDate = remember(group.hatchDate) { parseDate(group.hatchDate) }
     val ageDays = remember(hatchDate, today) { hatchDate?.let { ChronoUnit.DAYS.between(it, today).toInt() } ?: 0 }
@@ -769,7 +883,7 @@ fun ChickGroupCard(group: ChickGroupDto, bloodlineName: String?, brooderName: St
             if (brooderName != null) { Spacer(Modifier.height(8.dp)); Text("Brooder: $brooderName", style = MaterialTheme.typography.bodyMedium, color = SageGreen) }
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = {}, Modifier.weight(1f)) { Icon(Icons.Default.Pets, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Log Mortality") }
+                OutlinedButton(onClick = onLogMortality, Modifier.weight(1f)) { Icon(Icons.Default.Pets, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Log Mortality") }
                 if (canBand) {
                     Button(onClick = {}, Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = SageGreen)) { Icon(Icons.Default.Nfc, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Band Group") }
                 } else {

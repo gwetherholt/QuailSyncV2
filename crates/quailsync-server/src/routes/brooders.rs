@@ -141,6 +141,8 @@ pub(crate) async fn delete_brooder(
     conn.execute("UPDATE chick_groups SET brooder_id = NULL WHERE brooder_id = ?1", params![id]).ok();
     // Clear bird references to this brooder
     conn.execute("UPDATE birds SET current_brooder_id = NULL WHERE current_brooder_id = ?1", params![id]).ok();
+    // Unlink camera feeds from this brooder
+    conn.execute("UPDATE camera_feeds SET brooder_id = NULL WHERE brooder_id = ?1", params![id]).ok();
     // Delete the brooder
     conn.execute("DELETE FROM brooders WHERE id = ?1", params![id]).ok();
     // Remove from last_seen tracking
