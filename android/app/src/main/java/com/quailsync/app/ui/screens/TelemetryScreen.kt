@@ -27,26 +27,17 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -83,6 +74,9 @@ class TelemetryViewModel(application: Application) : AndroidViewModel(applicatio
     private val _brooders = MutableStateFlow<List<BrooderState>>(emptyList())
     val brooders: StateFlow<List<BrooderState>> = _brooders.asStateFlow()
 
+    private val _chickGroups = MutableStateFlow<List<com.quailsync.app.data.ChickGroupDto>>(emptyList())
+    val chickGroups: StateFlow<List<com.quailsync.app.data.ChickGroupDto>> = _chickGroups.asStateFlow()
+
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
@@ -114,6 +108,7 @@ class TelemetryViewModel(application: Application) : AndroidViewModel(applicatio
                 BrooderState(brooder, readings, alerts, targetTemp)
             }
             _brooders.value = states
+            _chickGroups.value = try { api.getChickGroups() } catch (_: Exception) { emptyList() }
         } catch (e: Exception) {
             Log.e("QuailSync", "Telemetry: failed to load brooders", e)
         } finally {
@@ -121,9 +116,24 @@ class TelemetryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    suspend fun deleteBrooder(id: Int) {
-        api.deleteBrooder(id)
-        loadDataSuspend()
+    fun deleteBrooderAsync(id: Int) {
+        Log.d("QuailSync", "deleteBrooderAsync called for brooder $id")
+        viewModelScope.launch {
+            try {
+                Log.d("QuailSync", "Calling DELETE API for brooder $id")
+                val resp = api.deleteBrooder(id)
+                Log.d("QuailSync", "Delete brooder response: ${resp.code()}")
+                loadDataSuspend()
+                android.widget.Toast.makeText(
+                    getApplication(), "Brooder deleted", android.widget.Toast.LENGTH_SHORT
+                ).show()
+            } catch (e: Exception) {
+                Log.e("QuailSync", "Delete brooder $id failed", e)
+                android.widget.Toast.makeText(
+                    getApplication(), "Delete failed: ${e.message}", android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
     }
 }
 
@@ -141,12 +151,9 @@ fun TelemetryScreen(
     val isLoading by viewModel.isLoading.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val liveReadings by viewModel.webSocketService.readings.collectAsState()
-    val scope = rememberCoroutineScope()
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val chickGroups by viewModel.chickGroups.collectAsState()
 
-    var deleteTarget by remember { mutableStateOf<BrooderState?>(null) }
-
-    val lifecycleOwner = context as LifecycleOwner
+    val lifecycleOwner = androidx.compose.ui.platform.LocalContext.current as LifecycleOwner
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) viewModel.refresh()
@@ -179,45 +186,23 @@ fun TelemetryScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 items(brooders, key = { it.brooder.id }) { state ->
+                    val live = liveReadings[state.brooder.id]
+                    val hasActiveGroup = chickGroups.any { it.brooderId == state.brooder.id && it.status == "Active" }
+                    val sensorSt = computeSensorStatus(live, state.readings.isNotEmpty())
+                    val canDelete = !hasActiveGroup && (sensorSt == SensorStatus.OFFLINE || sensorSt == SensorStatus.UNKNOWN)
                     DetailedBrooderCard(
                         state = state,
-                        liveReading = liveReadings[state.brooder.id],
+                        liveReading = live,
                         onClick = { onBrooderClick(state.brooder.id) },
-                        onDelete = { deleteTarget = state },
+                        onDelete = if (canDelete) ({
+                            Log.d("QuailSync", "Delete tapped for brooder ${state.brooder.id}")
+                            viewModel.deleteBrooderAsync(state.brooder.id)
+                        }) else null,
                     )
                 }
                 item { Spacer(Modifier.height(8.dp)) }
             }
         }
-    }
-
-    // Delete confirmation dialog
-    deleteTarget?.let { target ->
-        AlertDialog(
-            onDismissRequest = { deleteTarget = null },
-            title = { Text("Delete ${target.brooder.name}?") },
-            text = { Text("This will remove all sensor history for this brooder. This cannot be undone.") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val id = target.brooder.id
-                        deleteTarget = null
-                        scope.launch {
-                            try {
-                                viewModel.deleteBrooder(id)
-                                Toast.makeText(context, "Brooder deleted", Toast.LENGTH_SHORT).show()
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "Delete failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = AlertRed),
-                ) { Text("Delete") }
-            },
-            dismissButton = {
-                OutlinedButton(onClick = { deleteTarget = null }) { Text("Cancel") }
-            },
-        )
     }
 }
 
@@ -285,9 +270,9 @@ fun DetailedBrooderCard(state: BrooderState, liveReading: LiveReading?, onClick:
                     }
                     Box(Modifier.size(12.dp).clip(CircleShape).background(statusDotColor))
                     if (onDelete != null) {
-                        Spacer(Modifier.width(8.dp))
-                        IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.Default.Delete, "Delete", Modifier.size(18.dp), tint = AlertRed.copy(alpha = 0.6f))
+                        Spacer(Modifier.width(12.dp))
+                        IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+                            Icon(Icons.Default.Delete, "Delete brooder", Modifier.size(22.dp), tint = AlertRed.copy(alpha = 0.7f))
                         }
                     }
                 }
@@ -397,4 +382,21 @@ fun TrendIcon(current: Double, previous: Double) {
         else -> Icons.Default.Remove to MaterialTheme.colorScheme.onSurfaceVariant
     }
     Icon(icon, "Trend", Modifier.size(18.dp), tint = tint)
+}
+
+/** Compute sensor status from a LiveReading without requiring a composable context. */
+fun computeSensorStatus(liveReading: LiveReading?, hasRestData: Boolean): SensorStatus {
+    val lastReadingMs = liveReading?.receivedAt
+    return if (lastReadingMs != null) {
+        val age = System.currentTimeMillis() - lastReadingMs
+        when {
+            age < STALE_THRESHOLD_MS -> SensorStatus.LIVE
+            age < OFFLINE_THRESHOLD_MS -> SensorStatus.STALE
+            else -> SensorStatus.OFFLINE
+        }
+    } else if (hasRestData) {
+        SensorStatus.UNKNOWN
+    } else {
+        SensorStatus.OFFLINE
+    }
 }

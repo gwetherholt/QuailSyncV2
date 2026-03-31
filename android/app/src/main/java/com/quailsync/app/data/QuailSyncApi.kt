@@ -119,12 +119,14 @@ data class Clutch(
     @SerializedName("expected_hatch_date") val expectedHatchDate: String? = null,
     @SerializedName("status") val status: String? = null,
     @SerializedName("notes") val notes: String? = null,
+    @SerializedName("eggs_stillborn") val eggsStillborn: Int? = null,
+    @SerializedName("eggs_quit") val eggsQuit: Int? = null,
+    @SerializedName("eggs_infertile") val eggsInfertile: Int? = null,
+    @SerializedName("eggs_damaged") val eggsDamaged: Int? = null,
+    @SerializedName("hatch_notes") val hatchNotes: String? = null,
 ) {
-    /** Eggs set — prefers eggs_set (server field) over egg_count (legacy). */
     val totalEggs: Int? get() = eggsSet ?: eggCount
-    /** Fertile eggs — prefers eggs_fertile (server field) over fertile_count (legacy). */
     val totalFertile: Int? get() = eggsFertile ?: fertileCount
-    /** Hatched eggs — prefers eggs_hatched (server field) over hatch_count (legacy). */
     val totalHatched: Int? get() = eggsHatched ?: hatchCount
 }
 
@@ -301,6 +303,11 @@ data class InbreedingCheckResult(
     @SerializedName("warning") val warning: String? = null,
 )
 
+data class MortalityRequest(
+    @SerializedName("count") val count: Int,
+    @SerializedName("reason") val reason: String,
+)
+
 data class CullBatchRequest(
     @SerializedName("bird_ids") val birdIds: List<Int>,
     @SerializedName("reason") val reason: String,
@@ -403,11 +410,14 @@ interface QuailSyncApi {
     @GET("api/chick-groups")
     suspend fun getChickGroups(): List<ChickGroupDto>
 
+    @POST("api/chick-groups/{id}/mortality")
+    suspend fun logMortality(@Path("id") groupId: Int, @Body request: MortalityRequest): ChickGroupDto
+
     @PUT("api/birds/{id}/move")
     suspend fun moveBird(@Path("id") id: Int, @Body request: MoveBirdRequest): Bird
 
     // Delete brooder
-    @DELETE("api/brooders/{id}")
+    @retrofit2.http.HTTP(method = "DELETE", path = "api/brooders/{id}", hasBody = false)
     suspend fun deleteBrooder(@Path("id") id: Int): retrofit2.Response<Unit>
 
     // Breeding groups
