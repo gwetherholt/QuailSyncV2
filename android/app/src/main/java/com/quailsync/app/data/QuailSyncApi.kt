@@ -406,6 +406,10 @@ interface QuailSyncApi {
     @PUT("api/birds/{id}/move")
     suspend fun moveBird(@Path("id") id: Int, @Body request: MoveBirdRequest): Bird
 
+    // Delete brooder
+    @DELETE("api/brooders/{id}")
+    suspend fun deleteBrooder(@Path("id") id: Int): retrofit2.Response<Unit>
+
     // Breeding groups
     @GET("api/breeding-groups")
     suspend fun getBreedingGroups(): List<BreedingGroupDto>

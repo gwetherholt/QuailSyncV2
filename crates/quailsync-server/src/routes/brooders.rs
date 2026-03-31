@@ -120,6 +120,36 @@ pub(crate) async fn update_brooder(
     StatusCode::OK.into_response()
 }
 
+pub(crate) async fn delete_brooder(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+    let exists = conn
+        .query_row(
+            "SELECT COUNT(*) FROM brooders WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0);
+    if exists == 0 {
+        return (StatusCode::NOT_FOUND, "brooder not found").into_response();
+    }
+    // Delete all readings for this brooder
+    conn.execute("DELETE FROM brooder_readings WHERE brooder_id = ?1", params![id]).ok();
+    // Unassign chick groups from this brooder
+    conn.execute("UPDATE chick_groups SET brooder_id = NULL WHERE brooder_id = ?1", params![id]).ok();
+    // Clear bird references to this brooder
+    conn.execute("UPDATE birds SET current_brooder_id = NULL WHERE current_brooder_id = ?1", params![id]).ok();
+    // Delete the brooder
+    conn.execute("DELETE FROM brooders WHERE id = ?1", params![id]).ok();
+    // Remove from last_seen tracking
+    if let Ok(mut map) = state.last_seen.write() {
+        map.remove(&id);
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
 pub(crate) async fn list_brooders(State(state): State<AppState>) -> Json<Vec<Brooder>> {
     let conn = acquire_db(&state);
     let mut stmt = conn.prepare("SELECT id, name, bloodline_id, life_stage, qr_code, notes, camera_url FROM brooders ORDER BY id").expect("prepare failed");
