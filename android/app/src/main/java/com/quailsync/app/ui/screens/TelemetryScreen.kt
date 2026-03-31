@@ -24,19 +24,29 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,7 +62,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.quailsync.app.data.LiveReading
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.ServerConfig
-import com.quailsync.app.data.WebSocketService
+import com.quailsync.app.data.WebSocketManager
 import com.quailsync.app.ui.theme.AlertGreen
 import com.quailsync.app.ui.theme.AlertRed
 import com.quailsync.app.ui.theme.AlertYellow
@@ -68,7 +78,7 @@ import kotlinx.coroutines.launch
 
 class TelemetryViewModel(application: Application) : AndroidViewModel(application) {
     private val api = QuailSyncApi.create(ServerConfig.getServerUrl(application))
-    val webSocketService = WebSocketService(ServerConfig.getServerUrl(application))
+    val webSocketService = WebSocketManager.get(application)
 
     private val _brooders = MutableStateFlow<List<BrooderState>>(emptyList())
     val brooders: StateFlow<List<BrooderState>> = _brooders.asStateFlow()
@@ -79,15 +89,15 @@ class TelemetryViewModel(application: Application) : AndroidViewModel(applicatio
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
-    init {
-        loadData()
-        webSocketService.connect()
-    }
+    init { loadData() }
 
     fun refresh() {
         viewModelScope.launch {
             _isRefreshing.value = true
             loadDataSuspend()
+            if (!webSocketService.isConnected.value) {
+                webSocketService.reconnect()
+            }
             _isRefreshing.value = false
         }
     }
@@ -111,9 +121,9 @@ class TelemetryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    override fun onCleared() {
-        super.onCleared()
-        webSocketService.disconnect()
+    suspend fun deleteBrooder(id: Int) {
+        api.deleteBrooder(id)
+        loadDataSuspend()
     }
 }
 
@@ -131,8 +141,12 @@ fun TelemetryScreen(
     val isLoading by viewModel.isLoading.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val liveReadings by viewModel.webSocketService.readings.collectAsState()
+    val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
 
-    val lifecycleOwner = androidx.compose.ui.platform.LocalContext.current as LifecycleOwner
+    var deleteTarget by remember { mutableStateOf<BrooderState?>(null) }
+
+    val lifecycleOwner = context as LifecycleOwner
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) viewModel.refresh()
@@ -169,11 +183,41 @@ fun TelemetryScreen(
                         state = state,
                         liveReading = liveReadings[state.brooder.id],
                         onClick = { onBrooderClick(state.brooder.id) },
+                        onDelete = { deleteTarget = state },
                     )
                 }
                 item { Spacer(Modifier.height(8.dp)) }
             }
         }
+    }
+
+    // Delete confirmation dialog
+    deleteTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("Delete ${target.brooder.name}?") },
+            text = { Text("This will remove all sensor history for this brooder. This cannot be undone.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val id = target.brooder.id
+                        deleteTarget = null
+                        scope.launch {
+                            try {
+                                viewModel.deleteBrooder(id)
+                                Toast.makeText(context, "Brooder deleted", Toast.LENGTH_SHORT).show()
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Delete failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = AlertRed),
+                ) { Text("Delete") }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { deleteTarget = null }) { Text("Cancel") }
+            },
+        )
     }
 }
 
@@ -182,7 +226,7 @@ fun TelemetryScreen(
 // =====================================================================
 
 @Composable
-fun DetailedBrooderCard(state: BrooderState, liveReading: LiveReading?, onClick: () -> Unit = {}) {
+fun DetailedBrooderCard(state: BrooderState, liveReading: LiveReading?, onClick: () -> Unit = {}, onDelete: (() -> Unit)? = null) {
     val currentTemp = liveReading?.temperature
         ?: state.readings.firstOrNull()?.temperature
         ?: state.brooder.latestTemperature
@@ -230,7 +274,7 @@ fun DetailedBrooderCard(state: BrooderState, liveReading: LiveReading?, onClick:
     ) {
         Column(Modifier.padding(16.dp)) {
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                Text(state.brooder.name, style = MaterialTheme.typography.titleLarge)
+                Text(state.brooder.name, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (sensorStatus == SensorStatus.OFFLINE || sensorStatus == SensorStatus.STALE) {
                         Text(
@@ -240,6 +284,12 @@ fun DetailedBrooderCard(state: BrooderState, liveReading: LiveReading?, onClick:
                         Spacer(Modifier.width(6.dp))
                     }
                     Box(Modifier.size(12.dp).clip(CircleShape).background(statusDotColor))
+                    if (onDelete != null) {
+                        Spacer(Modifier.width(8.dp))
+                        IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.Default.Delete, "Delete", Modifier.size(18.dp), tint = AlertRed.copy(alpha = 0.6f))
+                        }
+                    }
                 }
             }
 

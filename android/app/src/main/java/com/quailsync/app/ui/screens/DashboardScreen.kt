@@ -65,7 +65,7 @@ import com.quailsync.app.data.LiveReading
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.ServerConfig
 import com.quailsync.app.data.TargetTempResponse
-import com.quailsync.app.data.WebSocketService
+import com.quailsync.app.data.WebSocketManager
 import com.quailsync.app.ui.theme.AlertGreen
 import com.quailsync.app.ui.theme.AlertRed
 import com.quailsync.app.ui.theme.AlertYellow
@@ -103,7 +103,7 @@ enum class SensorStatus { LIVE, STALE, OFFLINE, UNKNOWN }
 
 class DashboardViewModel(application: Application) : AndroidViewModel(application) {
     private val api = QuailSyncApi.create(ServerConfig.getServerUrl(application))
-    val webSocketService = WebSocketService(ServerConfig.getServerUrl(application))
+    val webSocketService = WebSocketManager.get(application)
 
     private val _brooders = MutableStateFlow<List<BrooderState>>(emptyList())
     val brooders: StateFlow<List<BrooderState>> = _brooders.asStateFlow()
@@ -128,13 +128,15 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
 
     init {
         loadData()
-        webSocketService.connect()
     }
 
     fun refresh() {
         viewModelScope.launch {
             _isRefreshing.value = true
             loadDataSuspend()
+            if (!webSocketService.isConnected.value) {
+                webSocketService.reconnect()
+            }
             _isRefreshing.value = false
         }
     }
@@ -165,10 +167,6 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    override fun onCleared() {
-        super.onCleared()
-        webSocketService.disconnect()
-    }
 }
 
 // =====================================================================

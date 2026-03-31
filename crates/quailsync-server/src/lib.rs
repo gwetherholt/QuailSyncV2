@@ -123,7 +123,8 @@ pub fn build_app(state: AppState) -> Router {
         )
         .route(
             "/api/brooders/{id}",
-            axum::routing::put(brooders::update_brooder),
+            axum::routing::put(brooders::update_brooder)
+                .delete(brooders::delete_brooder),
         )
         .route(
             "/api/brooders/{id}/readings",
