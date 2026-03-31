@@ -152,6 +152,16 @@ pub(crate) async fn delete_brooder(
     StatusCode::NO_CONTENT.into_response()
 }
 
+/// Per-brooder alerts. The global `alerts` table doesn't track brooder_id,
+/// so we return an empty array for now.  A future migration will add
+/// brooder_id to the alerts table and populate this properly.
+pub(crate) async fn brooder_alerts(
+    _state: State<AppState>,
+    Path(_id): Path<i64>,
+) -> Json<Vec<serde_json::Value>> {
+    Json(vec![])
+}
+
 pub(crate) async fn list_brooders(State(state): State<AppState>) -> Json<Vec<Brooder>> {
     let conn = acquire_db(&state);
     let mut stmt = conn.prepare("SELECT id, name, bloodline_id, life_stage, qr_code, notes, camera_url FROM brooders ORDER BY id").expect("prepare failed");
