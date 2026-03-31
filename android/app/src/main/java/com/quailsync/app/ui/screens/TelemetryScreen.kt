@@ -34,10 +34,17 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -153,6 +160,8 @@ fun TelemetryScreen(
     val liveReadings by viewModel.webSocketService.readings.collectAsState()
     val chickGroups by viewModel.chickGroups.collectAsState()
 
+    var deleteTargetId by remember { mutableStateOf<Int?>(null) }
+
     val lifecycleOwner = androidx.compose.ui.platform.LocalContext.current as LifecycleOwner
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -195,14 +204,37 @@ fun TelemetryScreen(
                         liveReading = live,
                         onClick = { onBrooderClick(state.brooder.id) },
                         onDelete = if (canDelete) ({
-                            Log.d("QuailSync", "Delete tapped for brooder ${state.brooder.id}")
-                            viewModel.deleteBrooderAsync(state.brooder.id)
+                            Log.d("QuailSync", "Delete icon tapped for brooder ${state.brooder.id}")
+                            deleteTargetId = state.brooder.id
                         }) else null,
                     )
                 }
                 item { Spacer(Modifier.height(8.dp)) }
             }
         }
+    }
+
+    if (deleteTargetId != null) {
+        val idToDelete = deleteTargetId!!
+        AlertDialog(
+            onDismissRequest = { deleteTargetId = null },
+            title = { Text("Delete Brooder?") },
+            text = { Text("This will remove brooder #$idToDelete and all its sensor readings. This cannot be undone.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val id = deleteTargetId!!
+                        Log.d("QuailSync", "Delete confirmed for brooder $id")
+                        deleteTargetId = null
+                        viewModel.deleteBrooderAsync(id)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = AlertRed),
+                ) { Text("Delete") }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { deleteTargetId = null }) { Text("Cancel") }
+            },
+        )
     }
 }
 
