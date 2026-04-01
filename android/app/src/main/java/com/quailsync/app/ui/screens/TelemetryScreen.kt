@@ -290,6 +290,17 @@ fun DetailedBrooderCard(state: BrooderState, liveReading: LiveReading?, onClick:
         elevation = CardDefaults.cardElevation(2.dp),
     ) {
         Column(Modifier.padding(16.dp)) {
+            // QR code indicator
+            val qrCode = state.brooder.qrCode
+            if (!qrCode.isNullOrBlank()) {
+                Text(
+                    "\uD83D\uDCF7 $qrCode",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = SageGreen,
+                )
+                Spacer(Modifier.height(4.dp))
+            }
+
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                 Text(state.brooder.name, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                 Row(verticalAlignment = Alignment.CenterVertically) {

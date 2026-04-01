@@ -558,6 +558,12 @@
   .camera-status-badge.offline{background:var(--danger);color:#fff}
   .camera-meta{font-size:.8rem;color:#777;margin-bottom:.5rem}
   .camera-meta span{margin-right:1rem}
+  .qr-status-badge{font-size:.7rem;font-weight:600;padding:3px 10px;border-radius:10px;display:inline-block;margin-top:.3rem}
+  .qr-status-badge.detected{background:var(--safe);color:#fff}
+  .qr-status-badge.none{background:#ccc;color:#666}
+  .camera-feed:-webkit-full-screen{background:#000;display:flex;align-items:center;justify-content:center}
+  .camera-feed:fullscreen{background:#000;display:flex;align-items:center;justify-content:center}
+  .camera-feed:-webkit-full-screen img{max-width:100vw;max-height:100vh;width:auto;height:auto}
   .camera-feed{position:relative;margin-bottom:.6rem}
   .camera-feed img{width:100%;border-radius:8px;display:block;background:var(--beige)}
   .camera-feed-placeholder{
@@ -2293,8 +2299,11 @@
         '<div id="cameras-list">'+loadingHTML()+'</div>';
     },
     start: function(){
+      var self = this;
       this._load();
       addInterval(this._load.bind(this), 60000);
+      setTimeout(function(){ self._pollQrStatus(); }, 2000);
+      addInterval(function(){ self._pollQrStatus(); }, 5000);
     },
     stop: function(){},
 
@@ -2324,8 +2333,10 @@
         var snapUrl = streamUrl.replace(/\/stream\/?$/, '/snapshot');
         html+='<div class="camera-card" data-brooder-cam="'+b.id+'">';
         html+='<div class="camera-card-header"><h4>'+escapeHtml(b.name)+' Camera</h4><div style="display:flex;align-items:center;gap:.4rem"><span class="camera-status-badge active" id="cam-status-'+b.id+'">Live</span><button class="camera-settings-btn" onclick="Page.Cameras.editUrl('+b.id+')" title="Camera settings">&#x2699;</button></div></div>';
-        html+='<div class="camera-feed"><img src="'+escapeHtml(streamUrl)+'" alt="'+escapeHtml(b.name)+' feed" style="width:100%;max-height:400px;object-fit:contain;min-height:200px"></div>';
-        html+='<div class="camera-actions"><button onclick="window.open(\''+escapeHtml(snapUrl)+'\',\'_blank\')">&#x1F4F8; Snapshot</button><button onclick="window.open(\''+escapeHtml(streamUrl)+'\',\'_blank\')">&#x26F6; Full Screen</button></div>';
+        var qrUrl = streamUrl.replace(/\/stream\/?$/, '/qr-status');
+        html+='<div class="camera-feed" id="cam-feed-'+b.id+'"><img src="'+escapeHtml(streamUrl)+'" alt="'+escapeHtml(b.name)+' feed" style="width:100%;max-height:400px;object-fit:contain;min-height:200px"></div>';
+        html+='<div class="camera-actions"><button onclick="window.open(\''+escapeHtml(snapUrl)+'\',\'_blank\')">&#x1F4F8; Snapshot</button><button onclick="Page.Cameras.fullscreen(\'cam-feed-'+b.id+'\')">&#x26F6; Full Screen</button></div>';
+        html+='<div id="qr-badge-'+b.id+'" style="margin-top:.3rem"><span class="qr-status-badge none">No QR</span></div>';
         html+='<div class="camera-meta"><span>'+escapeHtml(streamUrl)+'</span></div>';
         html+='</div>';
       });
@@ -2335,9 +2346,12 @@
         var statusCls = cam.status==='Active'?'active':'offline';
         html+='<div class="camera-card">';
         html+='<div class="camera-card-header"><h4>'+escapeHtml(cam.name)+'</h4><span class="camera-status-badge '+statusCls+'">'+escapeHtml(cam.status)+'</span></div>';
-        html+='<div class="camera-feed"><img src="'+escapeHtml(cam.feed_url)+'" alt="'+escapeHtml(cam.name)+'" style="width:100%;max-height:400px;object-fit:contain;min-height:200px"></div>';
+        var camFeedId = 'cam-feed-s'+cam.id;
+        html+='<div class="camera-feed" id="'+camFeedId+'"><img src="'+escapeHtml(cam.feed_url)+'" alt="'+escapeHtml(cam.name)+'" style="width:100%;max-height:400px;object-fit:contain;min-height:200px"></div>';
         var camSnapUrl = cam.feed_url.replace(/\/stream\/?$/, '/snapshot');
-        html+='<div class="camera-actions"><button onclick="window.open(\''+escapeHtml(camSnapUrl)+'\',\'_blank\')">&#x1F4F8; Snapshot</button><button onclick="window.open(\''+escapeHtml(cam.feed_url)+'\',\'_blank\')">&#x26F6; Full Screen</button></div>';
+        html+='<div class="camera-actions"><button onclick="window.open(\''+escapeHtml(camSnapUrl)+'\',\'_blank\')">&#x1F4F8; Snapshot</button><button onclick="Page.Cameras.fullscreen(\''+camFeedId+'\')">&#x26F6; Full Screen</button></div>';
+        var camQrUrl = cam.feed_url.replace(/\/stream\/?$/, '/qr-status');
+        html+='<div id="qr-badge-s'+cam.id+'" style="margin-top:.3rem"><span class="qr-status-badge none">No QR</span></div>';
         html+='<div class="camera-meta"><span>'+escapeHtml(cam.location)+'</span><span>'+escapeHtml(cam.feed_url)+'</span></div>';
         html+='</div>';
       });
@@ -2346,13 +2360,52 @@
       el.innerHTML=html;
     },
 
-    fullscreen: function(btn){
-      var card = btn.closest('.camera-card');
-      var img = card ? card.querySelector('.camera-feed img') : null;
-      if(img && img.style.display!=='none'){
-        if(img.requestFullscreen) img.requestFullscreen();
-        else if(img.webkitRequestFullscreen) img.webkitRequestFullscreen();
+    fullscreen: function(feedId){
+      var feed = document.getElementById(feedId);
+      if(feed){
+        if(feed.requestFullscreen) feed.requestFullscreen();
+        else if(feed.webkitRequestFullscreen) feed.webkitRequestFullscreen();
       }
+    },
+
+    // Poll /qr-status from each camera's base URL every 5 seconds
+    _qrPollTimer: null,
+    _pollQrStatus: function(){
+      var self = this;
+      // Brooder cameras
+      self._brooders.forEach(function(b){
+        if(!b.camera_url) return;
+        var qrUrl = b.camera_url.replace(/\/stream\/?$/, '/qr-status');
+        var badgeEl = document.getElementById('qr-badge-'+b.id);
+        if(!badgeEl) return;
+        fetch(qrUrl, {mode:'cors'}).then(function(r){return r.json()}).then(function(d){
+          if(d.brooder_id || d.last_raw){
+            var text = d.last_raw || ('Brooder '+d.brooder_id);
+            badgeEl.innerHTML = '<span class="qr-status-badge detected">QR: '+escapeHtml(text)+'</span>';
+          } else {
+            badgeEl.innerHTML = '<span class="qr-status-badge none">No QR</span>';
+          }
+        }).catch(function(){
+          badgeEl.innerHTML = '<span class="qr-status-badge none">No QR</span>';
+        });
+      });
+      // Standalone cameras
+      self._cameras.forEach(function(cam){
+        if(!cam.feed_url) return;
+        var qrUrl = cam.feed_url.replace(/\/stream\/?$/, '/qr-status');
+        var badgeEl = document.getElementById('qr-badge-s'+cam.id);
+        if(!badgeEl) return;
+        fetch(qrUrl, {mode:'cors'}).then(function(r){return r.json()}).then(function(d){
+          if(d.brooder_id || d.last_raw){
+            var text = d.last_raw || ('Brooder '+d.brooder_id);
+            badgeEl.innerHTML = '<span class="qr-status-badge detected">QR: '+escapeHtml(text)+'</span>';
+          } else {
+            badgeEl.innerHTML = '<span class="qr-status-badge none">No QR</span>';
+          }
+        }).catch(function(){
+          badgeEl.innerHTML = '<span class="qr-status-badge none">No QR</span>';
+        });
+      });
     },
 
     editUrl: function(brooderId){

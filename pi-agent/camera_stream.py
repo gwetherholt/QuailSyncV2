@@ -27,7 +27,8 @@ Multi-camera example (two cameras on one Pi):
 """
 
 from picamera2 import Picamera2
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
 import io
 import time
 import json
@@ -586,7 +587,7 @@ def main():
     print("\033[32m[camera] First frame captured, starting HTTP server\033[0m")
 
     try:
-        server = HTTPServer(("0.0.0.0", args.port), StreamHandler)
+        server = ThreadingHTTPServer(("0.0.0.0", args.port), StreamHandler)
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n[camera] Shutting down...")

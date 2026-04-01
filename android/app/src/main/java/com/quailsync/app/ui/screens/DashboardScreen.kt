@@ -510,6 +510,20 @@ private fun CompactBrooderCard(
                 overflow = TextOverflow.Ellipsis,
             )
 
+            // QR badge (if set)
+            val qr = state.brooder.qrCode
+            if (!qr.isNullOrBlank()) {
+                Text(
+                    qr,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SageGreen,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.width(70.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+
             // Temp + Humidity
             Column(horizontalAlignment = Alignment.End) {
                 Text(
