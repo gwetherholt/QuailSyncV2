@@ -1,0 +1,27 @@
+# QuailSync Camera Stream — systemd service
+# Runs directly on the Pi as a systemd service, NOT in Docker.
+# Camera 2 (--camera-index 1, port 8081) is currently disabled.
+#
+# Install:
+#   sudo cp quailsync-camera.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now quailsync-camera
+#
+# Logs:
+#   journalctl -u quailsync-camera -f
+
+[Unit]
+Description=QuailSync Camera Stream (Brooder 1)
+After=network.target
+
+[Service]
+Type=simple
+User=gwetherholt
+WorkingDirectory=/home/gwetherholt/quailsync-agent
+ExecStart=/usr/bin/python3 /home/gwetherholt/quailsync-agent/camera_stream.py --server ws://localhost:3000/ws --brooder-id 1 --camera-index 0 --port 8080
+Restart=always
+RestartSec=30
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

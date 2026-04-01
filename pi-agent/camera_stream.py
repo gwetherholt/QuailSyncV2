@@ -7,14 +7,15 @@ to auto-identify which brooder the camera is looking at.
 QR code format: brooder-{id}-{name}  (e.g., brooder-1-texas, brooder-2-pharaoh)
 
 Endpoints:
-  /stream    - live MJPEG stream
-  /snapshot  - single JPEG capture
+  /stream    - live MJPEG stream (supports multiple simultaneous clients)
+  /snapshot  - single JPEG from latest frame
   /qr-status - JSON with current detected brooder
   /          - simple HTML page with stream + QR status
 
 Dependencies:
   pip3 install pyzbar pillow --break-system-packages
   sudo apt install libzbar0
+  pip3 install opencv-python-headless --break-system-packages  (optional, for QR overlay)
 
 Usage:
   python3 camera_stream.py [--server ws://192.168.0.114:3000/ws] [--port 8080] [--camera-index 0] [--brooder-id 1]
@@ -35,6 +36,7 @@ import argparse
 import re
 import sys
 import html as html_mod
+import numpy as np
 
 # Try importing QR scanning library
 try:
@@ -48,6 +50,14 @@ except ImportError:
     print("     Install with: pip3 install pyzbar pillow --break-system-packages")
     print("     Also: sudo apt install libzbar0")
 
+# Try importing OpenCV for QR overlay drawing
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+    print("\033[33m[camera] OpenCV not installed — QR overlay disabled\033[0m")
+
 # Try importing websockets for server communication
 try:
     import asyncio
@@ -55,6 +65,14 @@ try:
     WS_AVAILABLE = True
 except ImportError:
     WS_AVAILABLE = False
+
+# Try importing requests for HTTP POST
+try:
+    import requests as http_requests
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
+
 
 # === Global State ===
 current_brooder_id = None
@@ -64,6 +82,7 @@ qr_scan_interval = 2.0  # scan every 2 seconds (not every frame)
 qr_detections = {}       # track detection counts for stability
 qr_stable_threshold = 3  # need 3 consecutive detections to confirm
 last_qr_raw = None
+last_qr_rects = []       # list of (x, y, w, h) bounding boxes for QR overlay
 server_url = None
 default_brooder_id = 1
 stream_port = 8080
@@ -77,6 +96,12 @@ snapshot_dir = "./snapshots"
 max_snapshots = 1000
 last_snapshot_time = 0
 _snapshot_lock = threading.Lock()
+
+# === Shared Frame Buffer (multi-client support) ===
+_frame_lock = threading.Lock()
+_frame_condition = threading.Condition(_frame_lock)
+_latest_frame = None       # latest JPEG bytes
+_frame_counter = 0         # increments each new frame
 
 
 def init_camera(camera_index=0, width=2028, height=1080):
@@ -98,32 +123,88 @@ def init_camera(camera_index=0, width=2028, height=1080):
     print(f"\033[32m[camera] Started camera {camera_index} — {width}x{height} RGB888\033[0m")
 
 
-def scan_frame_for_qr(frame_bytes):
-    """Scan a JPEG frame for QR codes. Returns brooder ID or None."""
-    global current_brooder_id, current_bloodline_name, last_qr_scan_time, qr_detections, last_qr_raw
+# === Camera Capture Thread ===
+
+def _capture_loop():
+    """Continuously capture frames from the camera and store in shared buffer.
+    One thread does all capturing; HTTP handlers just read the latest frame."""
+    global _latest_frame, _frame_counter
+    frame_count = 0
+    while True:
+        try:
+            # Capture as numpy array for potential overlay drawing
+            array = picam2.capture_array()
+            frame_count += 1
+
+            # QR scan every Nth frame (~every 30 frames ≈ 3s at 10fps)
+            qr_rects = []
+            if frame_count % 30 == 0:
+                qr_rects = _scan_array_for_qr(array)
+
+            # Draw QR overlay if we have recent detections
+            rects_to_draw = qr_rects if qr_rects else last_qr_rects
+            if rects_to_draw and CV2_AVAILABLE:
+                for (x, y, w, h) in rects_to_draw:
+                    cv2.rectangle(array, (x, y), (x + w, y + h), (0, 255, 0), 3)
+                    label = last_qr_raw or ""
+                    if label:
+                        cv2.putText(array, label, (x, y - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+            # Encode to JPEG
+            if CV2_AVAILABLE:
+                # cv2 expects BGR but picamera2 gives RGB — convert
+                bgr = cv2.cvtColor(array, cv2.COLOR_RGB2BGR)
+                _, jpeg_buf = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+                frame = jpeg_buf.tobytes()
+            else:
+                img = Image.fromarray(array)
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=jpeg_quality)
+                frame = buf.getvalue()
+
+            # Save snapshot for YOLO training if enabled
+            _maybe_save_snapshot(frame)
+
+            # Publish to shared buffer
+            with _frame_condition:
+                _latest_frame = frame
+                _frame_counter += 1
+                _frame_condition.notify_all()
+
+            time.sleep(0.1)  # ~10 FPS
+        except Exception as e:
+            print(f"\033[31m[capture] Error: {e}\033[0m")
+            time.sleep(1)
+
+
+def _scan_array_for_qr(array):
+    """Scan a numpy RGB array for QR codes. Returns list of bounding rects."""
+    global current_brooder_id, current_bloodline_name, last_qr_scan_time
+    global qr_detections, last_qr_raw, last_qr_rects
 
     if not QR_AVAILABLE:
-        return None
+        return []
 
-    now = time.time()
-    if now - last_qr_scan_time < qr_scan_interval:
-        return current_brooder_id
-    last_qr_scan_time = now
+    last_qr_scan_time = time.time()
+    rects = []
 
     try:
-        img = Image.open(io.BytesIO(frame_bytes))
+        img = Image.fromarray(array)
         decoded = pyzbar.decode(img)
 
         for obj in decoded:
             data = obj.data.decode("utf-8").strip()
+            rect = obj.rect
+            rects.append((rect.left, rect.top, rect.width, rect.height))
 
-            # Match brooder-{id}-{name} pattern (e.g. brooder-1-texas)
+            # Match brooder-{id}-{name} pattern
             match = re.match(r"^brooder-(\d+)-(.+)$", data, re.IGNORECASE)
             if match:
                 brooder_id = int(match.group(1))
                 bloodline_name = match.group(2)
 
-                # Stability check — need consecutive detections
+                # Stability check
                 if data.lower() == (last_qr_raw or "").lower():
                     qr_detections[data] = qr_detections.get(data, 0) + 1
                 else:
@@ -136,21 +217,32 @@ def scan_frame_for_qr(frame_bytes):
                         current_brooder_id = brooder_id
                         current_bloodline_name = bloodline_name
                         print(f"\033[36m[qr] Brooder changed: {old} → {brooder_id} (bloodline: {bloodline_name})\033[0m")
-                        # Notify server in background
                         if WS_AVAILABLE and server_url:
-                            threading.Thread(
-                                target=_notify_server,
-                                args=(brooder_id,),
-                                daemon=True
-                            ).start()
-                    return brooder_id
+                            threading.Thread(target=_notify_server, args=(brooder_id,), daemon=True).start()
 
-        # No QR found this scan — don't clear immediately (might be momentary)
-        return current_brooder_id
+        last_qr_rects = rects
+        return rects
 
     except Exception as e:
         print(f"\033[31m[qr] Scan error: {e}\033[0m")
+        return []
+
+
+def scan_frame_for_qr(frame_bytes):
+    """Legacy wrapper: scan JPEG bytes. Used only if needed externally."""
+    global last_qr_scan_time
+    if not QR_AVAILABLE:
+        return None
+    now = time.time()
+    if now - last_qr_scan_time < qr_scan_interval:
         return current_brooder_id
+    try:
+        img = Image.open(io.BytesIO(frame_bytes))
+        arr = np.array(img)
+        _scan_array_for_qr(arr)
+    except Exception:
+        pass
+    return current_brooder_id
 
 
 def _maybe_save_snapshot(frame_bytes):
@@ -162,7 +254,6 @@ def _maybe_save_snapshot(frame_bytes):
     if now - last_snapshot_time < snapshot_interval:
         return
     last_snapshot_time = now
-    # Copy the bytes and hand off to a background thread so the MJPEG stream isn't blocked
     data = bytes(frame_bytes)
     threading.Thread(target=_save_snapshot, args=(data,), daemon=True).start()
 
@@ -187,7 +278,6 @@ def _save_snapshot(frame_bytes):
             print(f"\033[31m[snapshot] Save failed: {e}\033[0m")
             return
 
-        # Count existing snapshots and enforce limit
         existing = sorted(
             [f for f in os.listdir(snapshot_dir) if f.endswith(".jpg")],
             key=lambda f: os.path.getmtime(os.path.join(snapshot_dir, f))
@@ -250,14 +340,14 @@ def _announce_camera(brooder_id):
         _announced = True
     except Exception as e:
         print(f"\033[33m[camera] Announce failed: {e} (will not retry)\033[0m")
-        _announced = True  # Don't retry on failure either — manual config takes over
+        _announced = True
 
 
 def _notify_server(brooder_id):
     """Send QR detection + camera-brooder association to server."""
     global _announced
 
-    # Send QR detected event
+    # Send QR detected event via WebSocket
     if WS_AVAILABLE and server_url and current_bloodline_name:
         try:
             qr_code = f"brooder-{brooder_id}-{current_bloodline_name}"
@@ -278,10 +368,33 @@ def _notify_server(brooder_id):
         except Exception as e:
             print(f"\033[33m[qr] QrDetected send failed: {e}\033[0m")
 
+    # POST to /api/qr-scan so the server can do its own lookup
+    if server_url and current_bloodline_name:
+        try:
+            # Derive HTTP base URL from the WebSocket URL
+            http_base = server_url.replace("ws://", "http://").replace("wss://", "https://")
+            http_base = re.sub(r"/ws$", "", http_base)
+            url = f"{http_base}/api/qr-scan"
+            body = {"brooder_id": brooder_id, "qr_text": last_qr_raw or ""}
+            if REQUESTS_AVAILABLE:
+                resp = http_requests.post(url, json=body, timeout=5)
+                print(f"\033[32m[qr] POST /api/qr-scan -> {resp.status_code}\033[0m")
+            else:
+                # Fallback with urllib
+                import urllib.request
+                req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                            headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    print(f"\033[32m[qr] POST /api/qr-scan -> {resp.status}\033[0m")
+        except Exception as e:
+            print(f"\033[33m[qr] POST /api/qr-scan failed: {e}\033[0m")
+
     # Re-announce camera for the new brooder
     _announced = False
     _announce_camera(brooder_id)
 
+
+# === HTTP Handler ===
 
 class StreamHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -295,38 +408,42 @@ class StreamHandler(BaseHTTPRequestHandler):
             self._handle_index()
 
     def _handle_stream(self):
+        """MJPEG stream — reads from shared frame buffer so multiple clients work."""
         self.send_response(200)
         self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
+        last_counter = 0
         try:
             while True:
-                buf = io.BytesIO()
-                picam2.capture_file(buf, format="jpeg")
-                frame = buf.getvalue()
+                with _frame_condition:
+                    # Wait until a new frame is available
+                    while _frame_counter == last_counter:
+                        _frame_condition.wait(timeout=2.0)
+                    frame = _latest_frame
+                    last_counter = _frame_counter
 
-                # QR scan on this frame (throttled internally)
-                scan_frame_for_qr(frame)
-
-                # Save snapshot for YOLO training if enabled
-                _maybe_save_snapshot(frame)
+                if frame is None:
+                    continue
 
                 self.wfile.write(b"--frame\r\n")
                 self.wfile.write(b"Content-Type: image/jpeg\r\n")
                 self.wfile.write(f"Content-Length: {len(frame)}\r\n\r\n".encode())
                 self.wfile.write(frame)
                 self.wfile.write(b"\r\n")
-                time.sleep(0.1)  # ~10 FPS
         except (BrokenPipeError, ConnectionResetError):
             pass
 
     def _handle_snapshot(self):
-        buf = io.BytesIO()
-        picam2.capture_file(buf, format="jpeg")
-        frame = buf.getvalue()
+        """Return the latest frame from the shared buffer (no new capture needed)."""
+        with _frame_lock:
+            frame = _latest_frame
 
-        # Also scan this frame
-        scan_frame_for_qr(frame)
+        if frame is None:
+            self.send_response(503)
+            self.end_headers()
+            self.wfile.write(b"Camera not ready")
+            return
 
         self.send_response(200)
         self.send_header("Content-Type", "image/jpeg")
@@ -374,7 +491,6 @@ class StreamHandler(BaseHTTPRequestHandler):
   <a href="/snapshot" style="color:#00d4ff">Snapshot</a> |
   <a href="/qr-status" style="color:#00d4ff">QR Status JSON</a>
   <script>
-    // Auto-refresh status every 5 seconds
     setInterval(() => {{
       fetch('/qr-status')
         .then(r => r.json())
@@ -392,7 +508,6 @@ class StreamHandler(BaseHTTPRequestHandler):
         self.wfile.write(html.encode())
 
     def log_message(self, format, *args):
-        # Quiet logging — only show non-200 or errors
         if len(args) > 1 and "200" not in str(args[1]):
             print(f"[camera] {args[0]}")
 
@@ -445,11 +560,16 @@ def main():
     print(f"  Snapshot:   http://0.0.0.0:{args.port}/snapshot")
     print(f"  QR JSON:    http://0.0.0.0:{args.port}/qr-status")
     print(f"  QR Scan:    {'enabled' if QR_AVAILABLE else 'DISABLED'}")
+    print(f"  QR Overlay: {'enabled' if CV2_AVAILABLE else 'disabled (install opencv-python-headless)'}")
     print(f"  Server:     {server_url or 'not configured'}")
     print(f"  Brooder:    {default_brooder_id}")
     if collect_snapshots:
         print(f"  Snapshots:  every {snapshot_interval}s -> {snapshot_dir}/ (max {max_snapshots})")
     print()
+
+    # Start the background capture thread
+    capture_thread = threading.Thread(target=_capture_loop, daemon=True)
+    capture_thread.start()
 
     # Auto-register this camera with the server on startup
     if server_url:
@@ -459,8 +579,15 @@ def main():
             daemon=True
         ).start()
 
+    # Wait for first frame before starting HTTP server
+    with _frame_condition:
+        while _latest_frame is None:
+            _frame_condition.wait(timeout=5.0)
+    print("\033[32m[camera] First frame captured, starting HTTP server\033[0m")
+
     try:
-        HTTPServer(("0.0.0.0", args.port), StreamHandler).serve_forever()
+        server = HTTPServer(("0.0.0.0", args.port), StreamHandler)
+        server.serve_forever()
     except KeyboardInterrupt:
         print("\n[camera] Shutting down...")
         picam2.stop()
