@@ -1,53 +1,81 @@
-# QuailSync — IoT Quail Lifecycle Management Platform
+# QuailSync V2 🐦
 
-Full-stack IoT platform for managing coturnix quail breeding operations. Tracks eggs from incubation through hatching, brooding, banding, breeding, and processing. Real-time environmental monitoring with smart alerts, NFC-based bird identification, and a native Android app for mobile management.
+**IoT-powered quail lifecycle management — from egg to adult.**
+
+A full-stack IoT platform for managing a coturnix quail breeding operation. Real-time temperature monitoring, live camera feeds with QR detection, NFC bird tagging, hatchery tracking with fertility metrics, breeding intelligence with inbreeding analysis, and a native Android app — all built from scratch.
 
 <img width="1180" height="702" alt="QuailSync Dashboard" src="https://github.com/user-attachments/assets/b1afa4fc-961c-413b-b3ba-00821f493f5e" />
+
+---
+
+## The Story
+
+QuailSync started as a "how hard can it be" weekend project to monitor brooder temperatures with a Raspberry Pi. It turned into something much bigger.
+
+During our first real hatch — 45 coturnix eggs across two incubators — I woke up at 2am to a critical alert on my phone. QuailSync had detected Brooder 2 dropping below 60°F while the chicks were only 3 days old. I went out to check and found a corroded connection on the heating panel. The wire insulation had melted and was starting to discolor the plastic housing. If it had gone unnoticed for another few hours, those chicks would have died from cold stress. If it had gone a few days, it could have been a fire.
+
+That was the moment QuailSync stopped being a hobby project and became something I actually depend on. Every feature since then — the age-based temperature scheduling, the Android alerts, the camera feeds — came from a real need on the farm.
+
+<!-- TODO: Screenshot of the 2am critical alert notification -->
 
 ---
 
 ## Architecture
 
 ```
-                              ┌──────────────────────────────────────────────────────┐
-                              │              QuailSync Server                        │
-                              │           Rust / Axum / SQLite                       │
- ┌─────────────────────┐      │                                                      │      ┌───────────────────┐
- │   Raspberry Pi 5    │      │   ┌────────────┐  ┌──────────┐  ┌───────────────┐   │      │   Web Dashboard   │
- │                     │ WS   │   │  WebSocket │  │   REST   │  │    Alert      │   │ WS   │                   │
- │  DHT22 ──► pi_agent ├─────►│   │    Hub     │  │   API    │  │    Engine     │   ├─────►│  Real-time temps  │
- │  (kernel IIO)       │      │   │  /ws       │  │          │  │  smart temp   │   │      │  Live MJPEG feed  │
- │                     │      │   │  /ws/live  │  │          │  │  scheduling   │   │ HTTPS│  Full mgmt UI     │
- │  ArduCam ► camera_  │ HTTP │   └────────────┘  └──────────┘  └───────────────┘   │      └───────────────────┘
- │  Module 3  stream   ├─────►│                                                      │
- │                     │      │   ┌────────────┐  ┌──────────┐  ┌───────────────┐   │      ┌───────────────────┐
- │  QR Scanner (pyzbar)│      │   │   SQLite   │  │   TLS    │  │  rust-embed   │   │      │  Android App      │
- └─────────────────────┘      │   │  quailsync │  │  :3443   │  │  dashboard    │   │ HTTPS│  Kotlin / Compose │
-                              │   │   .db      │  │  rcgen   │  │  baked into   │   ├─────►│  NFC R/W          │
-                              │   └────────────┘  └──────────┘  │  the binary   │   │      │  Live temps       │
-                              │                                 └───────────────┘   │      │  MJPEG feeds      │
-                              └──────────────────────────────────────────────────────┘      └───────────────────┘
+  ┌──────────────┐         ┌──────────────┐
+  │  ESP32-C3    │         │  Pi Camera   │
+  │  DHT22       │         │  ArduCam     │
+  │  sensors     │         │  IMX477 HQ   │
+  └──────┬───────┘         └──────┬───────┘
+         │ WebSocket              │ MJPEG :8080
+         ▼                        ▼
+  ┌─────────────────────────────────────────┐
+  │         Raspberry Pi 5                  │
+  │                                         │
+  │   pi_agent.py        camera_stream.py   │
+  │   (telemetry)        (stream + QR scan) │
+  └──────────┬──────────────────────────────┘
+             │ WebSocket :3000/ws
+             ▼
+  ┌─────────────────────────────────────────┐
+  │        Rust/Axum Server (Docker)        │
+  │                                         │
+  │  REST API ◄──► SQLite ◄──► Alert Engine │
+  │  WebSocket Hub    │     Temp Scheduling  │
+  │  rust-embed SPA   │     Breeding Calc    │
+  └────────┬──────────┼────────┬────────────┘
+           │          │        │
+     WebSocket    Dashboard   REST + MJPEG
+     /ws/live     index.html
+           │                   │
+           ▼                   ▼
+  ┌────────────────┐  ┌────────────────────┐
+  │ Web Dashboard  │  │  Android App       │
+  │ Vanilla JS SPA │  │  Kotlin / Compose  │
+  │ Real-time WS   │  │  NFC tagging       │
+  │ Sparkline      │  │  Live temps        │
+  │ charts         │  │  QR scanner        │
+  └────────────────┘  │  Background alerts │
+                      └────────────────────┘
 ```
-
-**Rust/Axum Server** — REST API + WebSocket hub running on Windows (moving to Pi soon). SQLite database. Handles telemetry ingestion, alert engine, breeding genetics calculations, and serves the web dashboard as a single HTML file baked into the binary with `rust-embed`.
-
-**Raspberry Pi 5 Sensor Agent** — Python agent reading 3x DHT22 temperature/humidity sensors via kernel IIO driver (`dht11` dtoverlay). Sends telemetry to server over WebSocket every 5 seconds. Runs as systemd service (`quailsync-sensors`).
-
-**Raspberry Pi 5 Camera Stream** — MJPEG camera stream using ArduCam Module 3 (IMX708). Auto-registers with the server on startup. Supports QR code scanning for brooder identification. Runs as systemd service (`quailsync-camera`).
-
-**Android App (Kotlin/Jetpack Compose)** — Native app with 5 tabs: Dashboard (live temps with smart age-based targets), Cameras (MJPEG feeds), Flock (bird profiles with photos), NFC (tag scanning/writing + batch graduation workflow), Clutches (incubation tracking with progress rings).
-
-**Web Dashboard** — Single-page vanilla JS dashboard with real-time WebSocket updates. Full management UI for all entities — brooders, flock, breeding, clutches, processing, cameras.
 
 ---
 
-## Key Features
+## Features
 
-### Smart Temperature Scheduling
-Auto-adjusts alert thresholds by chick age — 95°F in week 1, stepping down 5°F per week to room temp by week 6. Three DHT22 sensors (one per brooder) feed readings every 5 seconds. The alert engine evaluates every reading against age-appropriate targets and fires warnings or critical alerts immediately. The dashboard updates in real-time via WebSocket without polling.
+### Real-Time Telemetry Dashboard
+Live temperature and humidity from each brooder, updated every 5 seconds over WebSocket. Sparkline charts show trends. Status dots go green/yellow/red based on age-appropriate thresholds — week 1 chicks need 97°F, week 6 needs 72°F, and the system knows the difference.
 
-### NFC Bird Identification
-Every bird gets an NTAG215 NFC tag on its leg band, written with a `QUAIL-XXXXXX` identifier. The Android app reads/writes tags natively. Tapping a tagged bird opens its full profile — weight history, lineage, breeding group, notes. Overwrite protection prevents accidentally reassigning tags.
+<!-- TODO: Dashboard screenshot with sparklines -->
+
+### Live Camera with QR Overlay
+MJPEG streaming from Arducam IMX477 via the Pi. Multi-client support — dashboard, phone, and browser can all watch simultaneously. QR codes on each brooder box are automatically detected with pyzbar; green bounding boxes are drawn with OpenCV when a code is in frame.
+
+<img width="606" height="531" alt="Live camera" src="https://github.com/user-attachments/assets/58c60717-4dea-4419-b523-cf14c7f0b3f2" />
+
+### NFC Bird Tagging
+Every bird gets an NTAG215 NFC tag on its leg band. Tap the phone to a bird, get its full profile — weight history, lineage, breeding group, notes. Batch graduation workflow lets you tag an entire chick group in one session.
 
 <table>
   <tr>
@@ -56,65 +84,24 @@ Every bird gets an NTAG215 NFC tag on its leg band, written with a `QUAIL-XXXXXX
   </tr>
 </table>
 
-### Batch Graduation Workflow
-Per-bird sex selection, photo capture, weight logging, and NFC tag writing — all in one flow on the Android app. Graduate chick groups from the nursery into the main flock with full traceability.
+### Hatchery Tracking
+17-day incubation timeline with visual progress rings. Candling records, hatch outcome logging — eggs hatched, stillborn, quit, infertile, damaged. Fertility rate and hatch rate displayed prominently with color coding. Android push notifications at key milestones (day 7 candle, day 14 lockdown, hatch day).
 
-### Live Camera Streaming
-<img width="606" height="531" alt="Live camera" src="https://github.com/user-attachments/assets/58c60717-4dea-4419-b523-cf14c7f0b3f2" />
-
-ArduCam Module 3 (IMX708) streams MJPEG at 640x480. QR codes on each brooder box enable automatic camera-to-brooder association — the camera scans every frame with `pyzbar`, requires 3 consecutive matching detections before committing, and sends a `CameraAssign` message to the server. Camera auto-registers its stream URL on boot.
-
-### Breeding Genetics
-<img width="1187" height="483" alt="Flock management" src="https://github.com/user-attachments/assets/6460b755-756c-4e41-aa97-1d175ea0f4e4" />
-<img width="1164" height="413" alt="Breeding page" src="https://github.com/user-attachments/assets/dfed3688-052f-4f46-bbd6-6f3275c33e3e" />
-
-Inbreeding coefficient calculation for every possible male-female pairing. Flags anything above 0.0625 as risky. Breeding groups enforce 3-to-5 females-per-male ratio. Safe pairing suggestions scored by genetics.
-
-### Clutch & Incubation Tracking
 <img width="1185" height="494" alt="Clutches page" src="https://github.com/user-attachments/assets/3f63f6fb-fe06-4c97-8ec3-784a46e33a5d" />
 
-Automatic 17-day hatch date calculation, visual progress rings color-coded by stage, candling records, and detailed hatch outcome logging — eggs hatched, stillborn, quit, infertile, damaged. Horizontal timeline of all active incubations.
+### Nursery with Graduation
+Chick groups track mortality daily. When birds are old enough (28 days), graduate them to the main flock with per-bird sex selection, NFC tag writing, and weight logging — all in one flow on the Android app.
+
+### Breeding Intelligence
+Inbreeding coefficient calculated for every possible male-female pairing. Flags anything above 6.25% as risky. Breeding groups enforce 3-to-5 females per male. Safe pairing suggestions scored by genetic distance across bloodlines.
+
+<img width="1164" height="413" alt="Breeding page" src="https://github.com/user-attachments/assets/dfed3688-052f-4f46-bbd6-6f3275c33e3e" />
 
 ### Processing Pipeline
-Cull recommendations based on flock criteria, scheduling, and kanban tracking (Recommended → Scheduled → Completed).
+Cull recommendations based on excess male ratio, underweight birds, and inbreeding risk. Batch cull operations update multiple birds in one call. Kanban tracking from recommended through scheduled to completed.
 
-### Background Notifications
-Temperature alerts, sensor offline detection, and hatch countdown — delivered as Android notifications.
-
----
-
-## Hardware
-
-| Component | Details |
-|---|---|
-| Raspberry Pi 5 | 8GB, runs sensor agent + camera stream as systemd services |
-| DHT22 sensors | x3, one per brooder, kernel IIO driver on GPIO 4, 17, 27 |
-| ArduCam Module 3 | IMX708 sensor, MJPEG streaming |
-| NFC tags | NTAG215 on leg bands, read/written via Android NFC |
-| Nurture Right 360 | Incubator for coturnix quail eggs (17-day hatch) |
-| Brooder enclosures | x3, each with QR code, DHT22 sensor, and camera coverage |
-
-### Sensor Wiring (Pi 5 GPIO)
-
-| Sensor | VCC | DATA | GND |
-|---|---|---|---|
-| Brooder 1 (Texas) | Pin 1 (3.3V) | Pin 7 (GPIO4) | Pin 9 |
-| Brooder 2 (Pharaoh) | Pin 1 (3.3V) | Pin 11 (GPIO17) | Pin 9 |
-| Brooder 3 (Fernbank) | Pin 17 (3.3V) | Pin 13 (GPIO27) | Pin 9 |
-
-### Pi Setup
-
-Add to `/boot/firmware/config.txt` under `[all]`:
-
-```
-dtoverlay=dht11,gpiopin=4
-dtoverlay=dht11,gpiopin=17
-dtoverlay=dht11,gpiopin=27
-```
-
-This creates IIO devices at `/sys/bus/iio/devices/iio:device{0,1,2}/` with `in_temp_input` (millidegrees C) and `in_humidityrelative_input` (millipercent) sysfs files.
-
-Systemd services: `quailsync-sensors`, `quailsync-camera`
+### Temperature Scheduling by Chick Age
+The alert engine automatically adjusts thresholds based on the youngest chick group in each brooder. Week 1: 97°F target. Steps down 5°F per week until week 6 when they're at room temperature. No manual threshold management needed.
 
 ---
 
@@ -123,11 +110,35 @@ Systemd services: `quailsync-sensors`, `quailsync-camera`
 | Layer | Technology |
 |---|---|
 | Server | Rust, Axum 0.8, SQLite (rusqlite), Tokio, rust-embed |
-| Web Dashboard | Vanilla JS single-file SPA, WebSocket, hash-based routing |
-| Android App | Kotlin, Jetpack Compose, NFC/NDEF, MJPEG, background notifications |
-| Pi Sensor Agent | Python 3, Linux kernel IIO drivers, websockets, psutil |
-| Pi Camera | Python 3, picamera2, pyzbar, Pillow |
-| Deployment | Self-signed TLS via rcgen, HTTP :3000 + HTTPS :3443 |
+| Web Dashboard | Vanilla JS single-file SPA, WebSocket, hash-based routing, no build step |
+| Android App | Kotlin, Jetpack Compose, ML Kit barcode scanning, CameraX, NFC/NDEF |
+| Pi Sensor Agent | Python 3, Linux kernel IIO drivers (DHT22), websockets, psutil |
+| Pi Camera | Python 3, picamera2, pyzbar, OpenCV, ThreadingHTTPServer |
+| ESP32 Nodes | ESP32-C3 Super Mini, DHT22, Arduino framework, WebSocket client |
+| CI/CD | GitHub Actions — `cargo fmt`, `clippy`, `cargo test` |
+| Deployment | Docker Compose (server), systemd (cameras), Arduino IDE (ESP32) |
+
+---
+
+## Hardware
+
+| Component | Details |
+|---|---|
+| Raspberry Pi 5 (8GB) | Runs server (Docker), sensor agent + camera stream (systemd) |
+| ESP32-C3 Super Mini | Wireless DHT22 sensor nodes, one per brooder |
+| Arducam IMX477 HQ Camera | 12.3MP Sony sensor, 6mm CS-mount lens, MJPEG streaming |
+| DHT22 Sensors | Temperature + humidity, one per brooder (3 wired + ESP32 wireless) |
+| XH-W3002 Controller | Backup thermostat, hardware failsafe independent of QuailSync |
+| NFC Tags | NTAG215 on leg bands, read/written via Android |
+| Nurture Right 360 | Incubator for coturnix quail eggs (17-day hatch cycle) |
+
+### 3D Printed Camera Stand
+
+Two-piece parametric design in OpenSCAD (`CAD/camera_stand_v4.scad`). Weighted base with coin pockets, tapered column with cable channel, 3-sided cradle holding the Arducam at a 3-degree downward tilt. Snap-on back plate with ribbon cable exit slots.
+
+**Print settings:** PLA, 0.2mm layer height, 20% infill, no supports needed.
+
+<!-- TODO: Photo of printed camera stand -->
 
 ---
 
@@ -135,95 +146,89 @@ Systemd services: `quailsync-sensors`, `quailsync-camera`
 
 ```
 QuailSyncV2/
-├── Cargo.toml                        # Workspace root
 ├── crates/
-│   ├── quailsync-common/             # Shared types, constants, serde models
-│   │   └── src/lib.rs
-│   ├── quailsync-server/             # Axum web server + REST API + WebSocket hub
-│   │   ├── src/lib.rs                #   All routes, DB schema, alert engine
-│   │   ├── src/main.rs               #   Startup, TLS cert gen, dual HTTP/HTTPS listeners
-│   │   └── tests/api_tests.rs        #   Integration tests
-│   ├── quailsync-agent/              # Mock Rust agent (dev/testing — generates fake telemetry)
-│   │   └── src/main.rs
-│   └── quailsync-cli/                # Full CLI — clap-based, colored output, QR gen
-│       └── src/main.rs
+│   ├── quailsync-server/        # Axum REST API + WebSocket + alert engine
+│   │   ├── src/
+│   │   │   ├── lib.rs           # Router setup, static file handler
+│   │   │   ├── main.rs          # Startup, TLS, dual HTTP/HTTPS
+│   │   │   ├── routes/          # Modular route handlers
+│   │   │   ├── db/              # Schema, migrations, helpers
+│   │   │   ├── ws.rs            # WebSocket telemetry + broadcast
+│   │   │   ├── state.rs         # AppState, sensor tracking
+│   │   │   └── alerts.rs        # Temperature alert engine
+│   │   └── tests/               # Integration tests
+│   ├── quailsync-common/        # Shared types, enums, constants
+│   ├── quailsync-agent/         # Mock agent for dev (fake telemetry)
+│   └── quailsync-cli/           # CLI tool — flock mgmt, QR generation
 ├── dashboard/
-│   └── index.html                    # Single-file SPA (HTML + CSS + JS, no build step)
-├── android/                          # Native Android app (Kotlin/Jetpack Compose)
+│   └── index.html               # Single-file SPA (HTML + CSS + JS)
+├── android/                     # Kotlin/Jetpack Compose native app
 ├── pi-agent/
-│   ├── pi_agent.py                   # Real Pi agent — DHT22 via IIO + system metrics over WS
-│   ├── camera_stream.py              # MJPEG server + QR scanner + brooder auto-ID
-│   └── requirements-pi.txt           # Python deps
+│   ├── pi_agent.py              # DHT22 sensor agent (IIO + WebSocket)
+│   ├── camera_stream.py         # MJPEG + QR scanner + multi-client
+│   └── requirements-pi.txt
+├── hardware/
+│   └── esp32/                   # ESP32-C3 sensor firmware (Arduino)
 ├── CAD/
-│   ├── camera_stand_v4.scad          # Parametric OpenSCAD source (current version)
-│   ├── camera_stand_v4.stl           # Print-ready STL
-│   ├── quailsync_backplate.stl       # Snap-on camera back plate
-│   └── quailsync_stand.stl           # Stand column piece
-├── certs/                            # Auto-generated self-signed TLS certs
-└── quailsync.db                      # SQLite database (created on first run)
+│   ├── camera_stand_v4.scad     # Parametric OpenSCAD source
+│   └── *.stl                    # Print-ready meshes
+├── deploy/
+│   └── quailsync-camera.service # systemd unit for camera stream
+├── docker-compose.yml           # Server deployment
+└── brooder-*-qr.svg             # Pre-generated QR codes per brooder
 ```
 
 ---
 
-## Getting Started
+## Setup & Deployment
 
-### Server
-
-```bash
-# Build everything
-cargo build --release
-
-# Start the server (HTTP :3000, HTTPS :3443, WebSocket on both)
-cargo run --bin quailsync-server
-```
-
-TLS certificates are generated automatically on first launch. Open `http://localhost:3000` for the dashboard, or `https://localhost:3443` for NFC support (Web NFC requires HTTPS).
-
-The mock agent is useful for development without a Pi:
+### Server (Docker on Pi)
 
 ```bash
-cargo run --bin quailsync-agent
+docker compose up -d --build
 ```
 
-### Raspberry Pi
+The server runs on port 3000 (HTTP) and 3443 (HTTPS with auto-generated self-signed certs). The SQLite database is created on first run.
 
-Copy the `pi-agent/` directory to the Pi, then install dependencies:
+### Camera (systemd on Pi)
+
+Cameras run as systemd services directly on the Pi — not in Docker, because the Pi camera driver needs direct hardware access.
 
 ```bash
-pip3 install websockets psutil --break-system-packages
-pip3 install pyzbar pillow --break-system-packages
-sudo apt install libzbar0
+sudo cp deploy/quailsync-camera.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now quailsync-camera
 ```
 
-Start the sensor agent and camera stream:
+### ESP32 Sensor Nodes
 
-```bash
-# Sensor telemetry (reads DHT22 via kernel IIO driver)
-python3 pi_agent.py --server ws://192.168.0.228:3000/ws
-
-# MJPEG camera + QR scanning
-python3 camera_stream.py --server ws://192.168.0.228:3000/ws --port 8080
-```
-
-The sensor agent sends brooder readings every 5 seconds and system metrics every 30 seconds. If IIO devices aren't available (testing on a desktop), it gracefully skips sensor reads and still sends system metrics.
+Flash via Arduino IDE. Set the WebSocket server URL and brooder ID in the firmware. Each ESP32-C3 Super Mini reads its DHT22 and sends telemetry every 5 seconds.
 
 ### Android App
 
-Build and install the Android app from the `android/` directory using Android Studio or Gradle. Requires an Android device with NFC for tag scanning/writing.
+Build from the `android/` directory in Android Studio. Requires a device with NFC for tag scanning. The server URL is configurable in Settings (defaults to `192.168.0.114:3000`).
 
-### CLI
+### Deployment Workflow
+
+My actual workflow: edit locally with Claude Code, `git push`, then on the Pi:
 
 ```bash
-# Check server connection
-cargo run --bin quailsync-cli -- status
-
-# Manage bloodlines and birds
-cargo run --bin quailsync-cli -- bloodline add "Texas A&M" --source "Stromberg's" --notes "White Coturnix"
-cargo run --bin quailsync-cli -- bird add --sex Female --bloodline 1 --band-color gold
-
-# Breeding suggestions with inbreeding scoring
-cargo run --bin quailsync-cli -- breeding suggest
+cd ~/quailsync && git reset --hard origin/main && docker compose up -d --build
 ```
+
+Camera service picks up changes with `sudo systemctl restart quailsync-camera`.
+
+---
+
+## Testing
+
+```bash
+cargo fmt --check    # Formatting
+cargo clippy         # Lints
+cargo test           # Unit + integration tests
+```
+
+CI runs all three on every push via GitHub Actions. Tests cover serde roundtrips for all telemetry payloads, alert threshold logic, inbreeding coefficient calculations, clutch status handling, and API integration tests.
 
 ---
 
@@ -231,114 +236,94 @@ cargo run --bin quailsync-cli -- breeding suggest
 
 ### WebSocket
 
-| Path | Direction | Description |
-|---|---|---|
-| `/ws` | Pi → Server | Agent telemetry — receives `Brooder`, `System`, and `Detection` payloads |
-| `/ws/live` | Server → Dashboard | Broadcasts every telemetry message to connected clients |
+| Path | Description |
+|---|---|
+| `/ws` | Agent telemetry ingestion (Brooder, System, Detection, CameraAnnounce, QrDetected) |
+| `/ws/live` | Live broadcast to dashboard/app clients |
 
 ### REST
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/health` | Health check |
-| GET | `/api/status` | Agent connection status + last-seen timestamps |
-| GET | `/api/alerts?minutes=N` | Recent alerts (default 60 min) |
-| **Brooders** | | |
-| GET | `/api/brooders` | List all brooders |
-| POST | `/api/brooders` | Create a brooder |
-| PUT | `/api/brooders/{id}` | Update brooder (name, camera_url, notes) |
-| GET | `/api/brooders/{id}/status` | Latest reading + alert status for a brooder |
-| GET | `/api/brooders/{id}/readings?minutes=N` | Reading history for a brooder |
-| GET | `/api/brooder/latest` | Most recent reading (any brooder) |
-| GET | `/api/brooder/history?minutes=N` | All readings in time window |
-| **Birds & Flock** | | |
+| GET | `/api/brooders` | List brooders with latest readings |
+| POST | `/api/brooders` | Create brooder |
+| PUT | `/api/brooders/{id}` | Update brooder (name, camera_url, qr_code, bloodline_id) |
+| DELETE | `/api/brooders/{id}` | Delete brooder + all readings |
+| GET | `/api/brooders/{id}/status` | Current reading + alert state |
+| GET | `/api/brooders/{id}/readings` | Historical readings |
+| GET | `/api/brooders/{id}/target-temp` | Age-based temperature schedule |
+| GET | `/api/brooders/{id}/alerts` | Per-brooder alerts |
 | GET | `/api/birds` | List all birds |
-| POST | `/api/birds` | Create a bird |
-| PUT | `/api/birds/{id}` | Update bird (status, notes, nfc_tag_id) |
-| POST | `/api/birds/{id}/weight` | Log a weight record |
-| GET | `/api/birds/{id}/weights` | Weight history for a bird |
-| GET | `/api/flock/summary` | Flock stats — totals, sex counts, bloodline breakdown |
-| GET | `/api/flock/cull-recommendations` | Birds flagged for processing |
-| GET | `/api/nfc/{tag_id}` | Look up a bird by NFC tag |
-| **Bloodlines** | | |
-| GET | `/api/bloodlines` | List all bloodlines |
-| POST | `/api/bloodlines` | Create a bloodline |
-| **Breeding** | | |
-| GET | `/api/breeding-pairs` | List breeding pairs |
-| POST | `/api/breeding-pairs` | Create a breeding pair |
+| POST | `/api/birds` | Create bird |
+| PUT | `/api/birds/{id}` | Update bird |
+| DELETE | `/api/birds/{id}` | Delete bird |
+| POST | `/api/birds/{id}/weights` | Log weight |
+| GET | `/api/birds/{id}/weights` | Weight history |
+| GET | `/api/nfc/{tag_id}` | Look up bird by NFC tag |
+| GET | `/api/bloodlines` | List bloodlines |
+| POST | `/api/bloodlines` | Create bloodline |
 | GET | `/api/breeding-groups` | List breeding groups |
-| POST | `/api/breeding-groups` | Create a breeding group (male + females) |
-| GET | `/api/breeding-groups/{id}` | Get a breeding group with member IDs |
+| POST | `/api/breeding-groups` | Create group (validates male:female ratio) |
 | GET | `/api/breeding/suggest` | Inbreeding-scored pair suggestions |
-| **Clutches** | | |
-| GET | `/api/clutches` | List all clutches |
-| POST | `/api/clutches` | Create a clutch (auto-calculates 17-day hatch date) |
-| PUT | `/api/clutches/{id}` | Update clutch (fertile count, hatch outcome, status) |
-| **Nursery** | | |
+| GET | `/api/inbreeding-check` | Check single male-female pair |
+| GET | `/api/clutches` | List clutches |
+| POST | `/api/clutches` | Create clutch (auto 17-day hatch date) |
+| PUT | `/api/clutches/{id}` | Update (candling, hatch outcome) |
 | GET | `/api/chick-groups` | List chick groups |
-| POST | `/api/chick-groups` | Create a chick group |
-| GET | `/api/chick-groups/{id}` | Get a chick group |
-| PUT | `/api/chick-groups/{id}/mortality` | Log chick losses |
-| PUT | `/api/chick-groups/{id}/graduate` | Promote chicks to the main flock |
-| **Processing** | | |
-| GET | `/api/processing` | List all processing records |
-| POST | `/api/processing` | Schedule a bird for processing |
-| GET | `/api/processing/queue` | Active queue (Scheduled only) |
-| PUT | `/api/processing/{id}` | Update record (complete, cancel, add final weight) |
-| **Cameras & Detection** | | |
+| POST | `/api/chick-groups` | Create chick group |
+| POST | `/api/chick-groups/{id}/mortality` | Log chick losses |
+| POST | `/api/chick-groups/{id}/graduate` | Promote to main flock |
+| GET | `/api/flock/summary` | Flock statistics |
+| GET | `/api/flock/cull-recommendations` | Birds flagged for processing |
+| POST | `/api/cull-batch` | Batch cull operation |
+| GET | `/api/processing` | Processing records |
+| POST | `/api/processing` | Schedule processing |
 | GET | `/api/cameras` | List cameras |
-| POST | `/api/cameras` | Add a camera |
-| PUT | `/api/cameras/{id}/brooder` | Link camera to a brooder |
-| GET | `/api/cameras/{id}/detections/summary` | Detection counts by label (last 60 min) |
-| GET | `/api/frames` | List frame captures |
-| POST | `/api/frames` | Store a captured frame |
-| POST | `/api/frames/{id}/detections` | Store detection results for a frame |
-| **System** | | |
-| GET | `/api/system/latest` | Most recent system metrics |
-| POST | `/api/backup` | Create a database backup |
-| GET | `/api/backups` | List available backups |
-| POST | `/api/restore` | Restore from a backup |
+| POST | `/api/cameras` | Add camera |
+| POST | `/api/backup` | Create database backup |
+| GET | `/api/backups` | List backups |
+| POST | `/api/restore` | Restore from backup |
 
 ---
 
-## Current Flock (March 2026)
+## Roadmap
 
-| Clutch | Eggs | Set Date | Expected Hatch | Line |
-|---|---|---|---|---|
-| Fernbank Poultry | 21 | March 6 | ~March 23 | Texas A&M (white) |
-| NWQuail | 24 | March 6 | ~March 23 | Heritage pharaoh |
-| Bryants Roost | 24 | March 20 | ~April 6 | Tuxedo pattern (16 more waiting) |
+### Done
+- [x] Real-time temperature & humidity monitoring
+- [x] Live MJPEG camera streaming (multi-client)
+- [x] QR code detection with OpenCV overlay
+- [x] NFC bird tagging with batch graduation
+- [x] WebSocket telemetry broadcast
+- [x] Age-based temperature alert engine
+- [x] Hatchery tracking with fertility/hatch rate metrics
+- [x] Breeding intelligence with inbreeding coefficients
+- [x] Nursery management with mortality logging
+- [x] Processing pipeline with batch cull
+- [x] ESP32-C3 wireless sensor nodes
+- [x] Native Android app (Compose)
+- [x] 3D printed camera hardware
+- [x] Docker Compose deployment
+- [x] systemd service for cameras
+- [x] CI pipeline (fmt, clippy, test)
+- [x] Brooder deletion with cascade cleanup
+- [x] Configurable server URL (Android Settings)
 
----
-
-## 3D Printed Camera Stand
-
-The camera mount is a two-piece parametric design in OpenSCAD (`CAD/camera_stand_v4.scad`). Weighted base with coin pockets, tapered column with cable channel, and a 3-sided cradle holding the ArduCam at 3-degree downward tilt. Snap-on back plate with ribbon cable exit slots.
-
-**Print settings:** PLA, 0.2mm layer height, 20% infill, no supports needed.
-
----
-
-## Tests
-
-```bash
-cargo test
-```
-
-Unit tests cover serde roundtrips for all telemetry payload variants, alert config defaults, inbreeding coefficient thresholds, clutch status handling, and server API integration tests.
-
----
-
-## Future Plans
-
-- ESP32-C3 wireless sensor nodes (replace wired DHT22s)
-- YOLO-based bird counting and sex detection from camera feeds
-- Move server to Pi (eliminate Windows PC dependency)
-- Second camera on Pi cam1 port
-- 3D printed sensor pod redesign for ESP32 boards
+### Planned
+- [ ] YOLOv8 quail detection from camera feeds
+- [ ] Automated headcount from video
+- [ ] Male/female classification by plumage
+- [ ] Behavior anomaly detection
+- [ ] Weight estimation from camera (no scale needed)
+- [ ] Historical data export (CSV/JSON)
+- [ ] Multi-Pi support (separate sensor clusters)
+- [ ] Second camera on Pi cam1 port
 
 ---
 
-Built with Rust, Kotlin, Python, solder, and way too many quail eggs.
+## License
 
-[Georgia](https://github.com/gwetherholt)
+Personal project by [Georgia Wetherholt](https://github.com/gwetherholt).
+
+---
+
+*Built with Rust, Python, solder, and way too many quail eggs.*
