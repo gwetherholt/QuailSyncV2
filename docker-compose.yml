@@ -8,57 +8,7 @@ services:
 
   # sensors service removed — ESP32 wireless nodes now send data directly via WebSocket
 
-  camera1:
-    build:
-      context: ./pi-agent
-      dockerfile: Dockerfile.camera
-    network_mode: host
-    privileged: true
-    environment:
-      - PYTHONUNBUFFERED=1
-    volumes:
-      - ./pi-agent:/app
-      - /mnt/pc-snapshots:/app/snapshots
-      - /usr/lib/python3/dist-packages:/host-packages:ro
-      - /usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu:ro
-      - /usr/share/libpisp:/usr/share/libpisp:ro
-      - /usr/share/libcamera:/usr/share/libcamera:ro
-      - /run/udev:/run/udev:ro
-    depends_on:
-      - server
-    command: >
-      python3 camera_stream.py
-      --server ws://localhost:3000/ws
-      --brooder-id 1
-      --camera-index 0
-      --port 8080
-      --collect-snapshots
-    restart: always
-
-  # camera2 disabled — only one camera physically connected; camera2 grabs the device and causes camera1 to fail
-  # camera2:
-  #   build:
-  #     context: ./pi-agent
-  #     dockerfile: Dockerfile.camera
-  #   network_mode: host
-  #   privileged: true
-  #   environment:
-  #     - PYTHONUNBUFFERED=1
-  #   volumes:
-  #     - ./pi-agent:/app
-  #     - /mnt/pc-snapshots:/app/snapshots
-  #     - /usr/lib/python3/dist-packages:/host-packages:ro
-  #     - /usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu:ro
-  #     - /usr/share/libpisp:/usr/share/libpisp:ro
-  #     - /usr/share/libcamera:/usr/share/libcamera:ro
-  #     - /run/udev:/run/udev:ro
-  #   depends_on:
-  #     - server
-  #   command: >
-  #     python3 camera_stream.py
-  #     --server ws://localhost:3000/ws
-  #     --brooder-id 2
-  #     --camera-index 1
-  #     --port 8081
-  #     --collect-snapshots
-  #   restart: always
+  # Camera runs via systemd (quailsync-camera.service) — Docker containers cannot
+  # reliably access Pi camera hardware. The libcamera/picamera2 stack requires direct
+  # access to /dev/video*, DMA buffers, and GPU firmware that don't survive container
+  # isolation even with --privileged and volume mounts. See deploy/quailsync-camera.service.
