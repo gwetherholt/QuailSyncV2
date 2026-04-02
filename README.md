@@ -1,10 +1,19 @@
 # QuailSync V2 🐦
 
+
 **IoT-powered quail lifecycle management — from egg to adult.**
 
 A full-stack IoT platform for managing a coturnix quail breeding operation. Real-time temperature monitoring, live camera feeds with QR detection, NFC bird tagging, hatchery tracking with fertility metrics, breeding intelligence with inbreeding analysis, and a native Android app — all built from scratch.
+<p align="center">
+<img width="200" alt="QuailSync Logo" src="https://github.com/user-attachments/assets/1270090b-1e2f-43c4-87a7-5a7b1bb22bd8" />
+</p>
 
-<img width="1180" height="702" alt="QuailSync Dashboard" src="https://github.com/user-attachments/assets/b1afa4fc-961c-413b-b3ba-00821f493f5e" />
+<p align="center">
+  <img width="700" alt="QuailSync Dashboard" src="https://github.com/user-attachments/assets/b1afa4fc-961c-413b-b3ba-00821f493f5e" />
+</p>
+<p align="center">
+  <img width="700" alt="QuailSync Dashboard Detail" src="https://github.com/user-attachments/assets/2f48c9ab-fce4-4728-ac91-e3f911cff6fe" />
+</p>
 
 ---
 
@@ -12,11 +21,17 @@ A full-stack IoT platform for managing a coturnix quail breeding operation. Real
 
 QuailSync started as a "how hard can it be" weekend project to monitor brooder temperatures with a Raspberry Pi. It turned into something much bigger.
 
+<p align="center">
+  <img width="300" alt="Quail chick" src="https://github.com/user-attachments/assets/ea72dbf2-f348-49cb-a22d-fa6431ba335e" />
+</p>
+
 During our first real hatch — 45 coturnix eggs across two incubators — I woke up at 2am to a critical alert on my phone. QuailSync had detected Brooder 2 dropping below 60°F while the chicks were only 3 days old. I went out to check and found a corroded connection on the heating panel. The wire insulation had melted and was starting to discolor the plastic housing. If it had gone unnoticed for another few hours, those chicks would have died from cold stress. If it had gone a few days, it could have been a fire.
 
-That was the moment QuailSync stopped being a hobby project and became something I actually depend on. Every feature since then — the age-based temperature scheduling, the Android alerts, the camera feeds — came from a real need on the farm.
+<p align="center">
+  <img width="220" alt="Critical alert notification" src="https://github.com/user-attachments/assets/60a7a6ac-67bb-42d3-944a-07144c740025" />
+</p>
 
-<!-- TODO: Screenshot of the 2am critical alert notification -->
+That was the moment QuailSync stopped being a hobby project and became something I actually depend on. Every feature since then — the age-based temperature scheduling, the Android alerts, the camera feeds — came from a real need on the farm.
 
 ---
 
@@ -65,42 +80,93 @@ That was the moment QuailSync stopped being a hobby project and became something
 ## Features
 
 ### Real-Time Telemetry Dashboard
+
 Live temperature and humidity from each brooder, updated every 5 seconds over WebSocket. Sparkline charts show trends. Status dots go green/yellow/red based on age-appropriate thresholds — week 1 chicks need 97°F, week 6 needs 72°F, and the system knows the difference.
 
-<!-- TODO: Dashboard screenshot with sparklines -->
+<p align="center">
+  <img width="300" alt="Temperature scheduling by age" src="https://github.com/user-attachments/assets/8a153088-bc53-4a57-851e-1444c1fabce2" />
+</p>
 
 ### Live Camera with QR Overlay
+
 MJPEG streaming from Arducam IMX477 via the Pi. Multi-client support — dashboard, phone, and browser can all watch simultaneously. QR codes on each brooder box are automatically detected with pyzbar; green bounding boxes are drawn with OpenCV when a code is in frame.
 
-<img width="606" height="531" alt="Live camera" src="https://github.com/user-attachments/assets/58c60717-4dea-4419-b523-cf14c7f0b3f2" />
+<p align="center">
+  <img width="500" alt="Camera with QR overlay" src="https://github.com/user-attachments/assets/ec1e1e32-44b6-4924-ba8c-ba647196bb58" />
+</p>
 
 ### NFC Bird Tagging
+
 Every bird gets an NTAG215 NFC tag on its leg band. Tap the phone to a bird, get its full profile — weight history, lineage, breeding group, notes. Batch graduation workflow lets you tag an entire chick group in one session.
 
 <table>
   <tr>
-    <td><img width="306" alt="NFC pull up" src="https://github.com/user-attachments/assets/91da687c-a133-404b-9785-101893f89e02" /></td>
-    <td><img width="306" alt="NFC page" src="https://github.com/user-attachments/assets/5a79a0b4-2a87-411a-a610-541f092bba58" /></td>
+    <td><img width="280" alt="NFC pull up" src="https://github.com/user-attachments/assets/91da687c-a133-404b-9785-101893f89e02" /></td>
+    <td><img width="280" alt="NFC page" src="https://github.com/user-attachments/assets/5a79a0b4-2a87-411a-a610-541f092bba58" /></td>
+    <td><img width="280" alt="NFC graduation flow" src="https://github.com/user-attachments/assets/d9fef58a-cb39-4b81-a852-37ab8cd271b9" /></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Tap to pull up bird</em></td>
+    <td align="center"><em>NFC tag management</em></td>
+    <td align="center"><em>Batch graduation</em></td>
   </tr>
 </table>
 
 ### Hatchery Tracking
+
 17-day incubation timeline with visual progress rings. Candling records, hatch outcome logging — eggs hatched, stillborn, quit, infertile, damaged. Fertility rate and hatch rate displayed prominently with color coding. Android push notifications at key milestones (day 7 candle, day 14 lockdown, hatch day).
 
-<img width="1185" height="494" alt="Clutches page" src="https://github.com/user-attachments/assets/3f63f6fb-fe06-4c97-8ec3-784a46e33a5d" />
+<table>
+  <tr>
+    <td><img width="300" alt="Clutch progress rings" src="https://github.com/user-attachments/assets/bc159339-9b8f-4770-967f-f7af726c1a81" /></td>
+    <td><img width="300" alt="Hatch outcomes" src="https://github.com/user-attachments/assets/45f6c4e7-e68f-44f1-9980-b3ae678c1017" /></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Incubation progress</em></td>
+    <td align="center"><em>Hatch outcome tracking</em></td>
+  </tr>
+</table>
 
 ### Nursery with Graduation
+
 Chick groups track mortality daily. When birds are old enough (28 days), graduate them to the main flock with per-bird sex selection, NFC tag writing, and weight logging — all in one flow on the Android app.
 
+<table>
+  <tr>
+    <td><img width="300" alt="Nursery chick groups" src="https://github.com/user-attachments/assets/622bd568-780f-4878-8d8d-b76dced49bea" /></td>
+    <td><img width="300" alt="Graduation workflow" src="https://github.com/user-attachments/assets/c44d33ac-1b8c-4d58-80e1-0725b7dd5ab5" /></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Chick group tracking</em></td>
+    <td align="center"><em>Graduation to flock</em></td>
+  </tr>
+</table>
+
 ### Breeding Intelligence
+
 Inbreeding coefficient calculated for every possible male-female pairing. Flags anything above 6.25% as risky. Breeding groups enforce 3-to-5 females per male. Safe pairing suggestions scored by genetic distance across bloodlines.
 
-<img width="1164" height="413" alt="Breeding page" src="https://github.com/user-attachments/assets/dfed3688-052f-4f46-bbd6-6f3275c33e3e" />
+<table>
+  <tr>
+    <td><img width="300" height="1520" alt="image" src="https://github.com/user-attachments/assets/c5c510aa-0589-435c-9f12-5a13185d218d" /></td>
+    <td><img width="300" alt="Breeding suggestions" src="https://github.com/user-attachments/assets/729f1a70-73fe-4247-ba42-19dd21ddc8a4" /></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Pair check with coefficient</em></td>
+    <td align="center"><em>Breeding group management</em></td>
+  </tr>
+</table>
+
+<p align="center">
+  <img width="600" alt="Breeding page — web dashboard" src="https://github.com/user-attachments/assets/dfed3688-052f-4f46-bbd6-6f3275c33e3e" />
+</p>
 
 ### Processing Pipeline
+
 Cull recommendations based on excess male ratio, underweight birds, and inbreeding risk. Batch cull operations update multiple birds in one call. Kanban tracking from recommended through scheduled to completed.
 
 ### Temperature Scheduling by Chick Age
+
 The alert engine automatically adjusts thresholds based on the youngest chick group in each brooder. Week 1: 97°F target. Steps down 5°F per week until week 6 when they're at room temperature. No manual threshold management needed.
 
 ---
@@ -120,25 +186,115 @@ The alert engine automatically adjusts thresholds based on the youngest chick gr
 
 ---
 
+## Testing
+
+```bash
+cargo fmt --check    # Formatting
+cargo clippy         # Lints
+cargo test           # Unit + integration tests
+```
+
+### Rust — 59 tests across two suites
+
+**`boundary_tests.rs` — 40 boundary & stress tests**
+
+These are the "try to break it" tests. They cover:
+- **API input validation** — empty names, 10,000-character strings, SQL injection attempts, XSS payloads, unicode/emoji, null bytes in every POST/PUT endpoint
+- **Database boundaries** — inserting readings for non-existent brooders, duplicate NFC tag IDs, deleting bloodlines that have birds referencing them, querying brooders with zero readings vs. 100,000 readings
+- **WebSocket edge cases** — connect and immediately disconnect, send empty messages, send 1MB messages, send binary instead of text, send 1,000 messages per second, 100 concurrent client connections
+- **Alert engine boundaries** — readings exactly at threshold, rapid oscillation above/below threshold, alerts with no config set, negative values, NaN, Infinity
+- **Path traversal / security** — backup restore with filenames like `../../etc/passwd`, null bytes, encoded characters (`%2e%2e%2f`), extremely long URL paths
+- **Concurrent write stress** — 50 simultaneous tasks inserting readings to verify SQLite handles contention without data loss
+
+**`api_tests.rs` — 19 unit + integration tests**
+
+Each test spins up a fresh Axum server on a random port with an in-memory SQLite database — fully isolated, no shared state:
+- Serde roundtrip tests for all `TelemetryPayload` variants (System, Brooder, Detection, Unknown)
+- `AlertConfig` default values and serialization
+- `InbreedingCoefficient` threshold logic — safe below 6.25%, unsafe at/above, serde roundtrip
+- `ClutchStatus` enum behavior and JSON string values
+- Full API integration: create and list bloodlines, create and list birds, breeding suggestions for same-bloodline pairs (coefficient 0.25, unsafe), different-bloodline pairs (coefficient 0.0, safe), and full siblings (coefficient 0.5, unsafe)
+
+### Python — 58 tests
+
+**`test_pi_agent.py`**
+- **Sensor edge cases** — `None` temperature, `None` humidity, both `None`, checksum failures 10 times in a row, extreme values (-40°C, 80°C, 0% humidity, 100% humidity)
+- **WebSocket resilience** — server unreachable on startup, connection drops mid-send, reconnection backoff verification (confirms it actually backs off instead of hammering the server)
+- **Camera stream** — multi-client MJPEG serving, snapshot endpoint under load
+- **QR code parsing** — empty strings, 10,000-character payloads, XSS injection, SQL injection, null bytes, unicode, brooder IDs of 0, -1, and 999999999
+
+### CI Pipeline
+
+GitHub Actions runs `cargo fmt --check`, `cargo clippy`, and `cargo test` on every push to `main`. All three must pass before merging.
+
+---
+
 ## Hardware
 
-| Component | Details |
-|---|---|
-| Raspberry Pi 5 (8GB) | Runs server (Docker), sensor agent + camera stream (systemd) |
-| ESP32-C3 Super Mini | Wireless DHT22 sensor nodes, one per brooder |
-| Arducam IMX477 HQ Camera | 12.3MP Sony sensor, 6mm CS-mount lens, MJPEG streaming |
-| DHT22 Sensors | Temperature + humidity, one per brooder (3 wired + ESP32 wireless) |
-| XH-W3002 Controller | Backup thermostat, hardware failsafe independent of QuailSync |
-| NFC Tags | NTAG215 on leg bands, read/written via Android |
-| Nurture Right 360 | Incubator for coturnix quail eggs (17-day hatch cycle) |
+### Raspberry Pi 5 (8GB)
 
-### 3D Printed Camera Stand
+The brain of the operation. Runs the Rust/Axum server in Docker, the camera stream as a systemd service, and coordinates all sensor data. Ubuntu Server, headless, accessed via SSH.
 
-Two-piece parametric design in OpenSCAD (`CAD/camera_stand_v4.scad`). Weighted base with coin pockets, tapered column with cable channel, 3-sided cradle holding the Arducam at a 3-degree downward tilt. Snap-on back plate with ribbon cable exit slots.
+### ESP32-C3 Super Mini — Wireless Sensor Nodes
 
-**Print settings:** PLA, 0.2mm layer height, 20% infill, no supports needed.
+One per brooder. Each board has a DHT22 wired to GPIO4, connects over WiFi, and sends temperature/humidity readings every 5 seconds via WebSocket. Auto-creates its brooder entry on the server when it first connects. Powered by USB-C wall adapters.
+
+### Arducam IMX477 HQ Camera
+
+12.3MP Sony sensor with a 6mm CS-mount manual focus lens. Streams MJPEG at 640x480 to support dual simultaneous streams without exhausting DMA memory. Runs outside Docker via systemd because Pi camera drivers need direct hardware access.
+
+### DHT22 Temperature/Humidity Sensors
+
+One per brooder, soldered to the ESP32-C3 nodes. Reads every 5 seconds. The alert engine cross-references these readings against age-based temperature targets for whatever chick group is in that brooder.
+
+### XH-W3002 Temperature Controller
+
+Hardware backup thermostat on the brooders, independent of QuailSync. P0/P1 set points control the heating panel directly. This is the failsafe — if the Pi goes down, the brooders still have heat control.
+
+### NFC Tags (NTAG215)
+
+Attached to leg bands on each bird. Read/written via the Android app using the phone's built-in NFC. Stores the bird's database ID so a tap pulls up its full profile instantly.
+
+### Incubators
+
+Nurture Right 360 (primary) and Magicfly (secondary) for staggered hatches across bloodlines. Coturnix quail have a 17-day incubation cycle.
+
+---
+
+## 3D Printed Parts
+
+All parts designed in OpenSCAD and trimesh, printed on an Artillery Sidewinder X in PLA.
+
+**Print settings:** 0.2mm layer height, 20% infill, no supports needed.
+
+### Camera Stand
+
+Two-piece parametric design (`CAD/camera_stand_v4.scad`). Weighted base with coin pockets for stability, tapered column with cable channel, 3-sided cradle holding the Arducam at a 3° downward tilt. Snap-on backplate with ribbon cable exit slots and a catch lip.
 
 <!-- TODO: Photo of printed camera stand -->
+
+### ESP32 Sensor Enclosures
+
+Vented housing with an L-hook for mounting on 15mm brooder walls. Snap-fit lid, USB cable trough along the hook, and internal standoffs for the DHT22. Three labeled versions (Sensor 1, 2, 3). Iterated from wired sensor pods to wireless ESP32 enclosures as the project evolved.
+
+<table>
+  <tr>
+    <td><img width="400" alt="Sensor enclosure v1 — wired" src="https://github.com/user-attachments/assets/b60ee06d-a7c7-402d-9583-6c4cce3b5c83" /></td>
+    <td><img width="400" alt="Sensor enclosure v2 — ESP32 wireless with C bracket" src="https://github.com/user-attachments/assets/4696f9f6-58b1-4ad4-961b-4d35fff2bc07" /></td>
+  </tr>
+  <tr>
+    <td align="center"><em>v1 — Wired sensor pods</em></td>
+    <td align="center"><em>v2 — Wireless ESP32 with C bracket</em></td>
+  </tr>
+</table>
+
+### Pi 5 Case Lid
+
+Custom lid for the CanaKit Turbine case with camera ribbon cable slots rotated 90° for cleaner routing.
+
+<!-- TODO: Upload camera case STLs and incubator dividers -->
+
+STL files are in the `/CAD` directory.
 
 ---
 
@@ -156,7 +312,7 @@ QuailSyncV2/
 │   │   │   ├── ws.rs            # WebSocket telemetry + broadcast
 │   │   │   ├── state.rs         # AppState, sensor tracking
 │   │   │   └── alerts.rs        # Temperature alert engine
-│   │   └── tests/               # Integration tests
+│   │   └── tests/               # Integration + boundary tests
 │   ├── quailsync-common/        # Shared types, enums, constants
 │   ├── quailsync-agent/         # Mock agent for dev (fake telemetry)
 │   └── quailsync-cli/           # CLI tool — flock mgmt, QR generation
@@ -217,18 +373,6 @@ cd ~/quailsync && git reset --hard origin/main && docker compose up -d --build
 ```
 
 Camera service picks up changes with `sudo systemctl restart quailsync-camera`.
-
----
-
-## Testing
-
-```bash
-cargo fmt --check    # Formatting
-cargo clippy         # Lints
-cargo test           # Unit + integration tests
-```
-
-CI runs all three on every push via GitHub Actions. Tests cover serde roundtrips for all telemetry payloads, alert threshold logic, inbreeding coefficient calculations, clutch status handling, and API integration tests.
 
 ---
 
@@ -322,7 +466,7 @@ CI runs all three on every push via GitHub Actions. Tests cover serde roundtrips
 
 ## License
 
-Personal project by [Georgia Wetherholt](https://github.com/gwetherholt).
+Personal project by [Georgia Wetherholt](https://linkedin.com/in/gwetherholt).
 
 ---
 
