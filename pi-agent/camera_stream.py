@@ -233,24 +233,17 @@ def _scan_array_for_qr(array):
             if match:
                 brooder_id = int(match.group(1))
                 bloodline_name = match.group(2)  # None for simple 'brooder-N' format
-
-                # Stability check
-                if data.lower() == (last_qr_raw or "").lower():
-                    qr_detections[data] = qr_detections.get(data, 0) + 1
-                else:
-                    qr_detections = {data: 1}
                 last_qr_raw = data
 
-                if qr_detections.get(data, 0) >= qr_stable_threshold:
-                    if current_brooder_id != brooder_id:
-                        old = current_brooder_id
-                        current_brooder_id = brooder_id
-                        current_bloodline_name = bloodline_name
-                        bl_str = f" (bloodline: {bloodline_name})" if bloodline_name else ""
-                        print(f"\033[36m[qr] Brooder changed: {old} → {brooder_id}{bl_str}\033[0m")
-                    # Update active assignment if it changed
-                    if active_brooder_id != brooder_id:
-                        _set_active_brooder(brooder_id)
+                if current_brooder_id != brooder_id:
+                    old = current_brooder_id
+                    current_brooder_id = brooder_id
+                    current_bloodline_name = bloodline_name
+                    bl_str = f" (bloodline: {bloodline_name})" if bloodline_name else ""
+                    print(f"\033[36m[qr] Detected: {old} → {brooder_id}{bl_str}\033[0m")
+                # Update active assignment immediately on first detection
+                if active_brooder_id != brooder_id:
+                    _set_active_brooder(brooder_id)
 
         last_qr_rects = rects
         return rects
