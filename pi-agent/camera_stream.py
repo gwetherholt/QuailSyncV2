@@ -90,6 +90,7 @@ stream_port = 8080
 picam2 = None  # initialized in main()
 jpeg_quality = 85
 _camera_ready_time = 0  # set after AWB settling in init_camera
+_awb_gains = None  # set from CLI args, applied every frame in capture loop
 
 # Snapshot collection for YOLO training
 collect_snapshots = False
@@ -108,7 +109,8 @@ _frame_counter = 0         # increments each new frame
 
 def init_camera(camera_index=0, width=2028, height=1080, awb_gains=None):
     """Initialize the Picamera2 instance with the given camera index."""
-    global picam2, _camera_ready_time
+    global picam2, _camera_ready_time, _awb_gains
+    _awb_gains = awb_gains
     picam2 = Picamera2(camera_index)
     config = picam2.create_video_configuration(
         main={"size": (width, height), "format": "RGB888"}
@@ -122,27 +124,19 @@ def init_camera(camera_index=0, width=2028, height=1080, awb_gains=None):
         print(f"\033[32m[camera] Continuous autofocus enabled\033[0m")
     except Exception:
         print(f"\033[33m[camera] Autofocus not available on this camera\033[0m")
-    # Manual white balance for UVA/UVB brooder lighting
+    # Manual white balance for UVA/UVB brooder lighting — initial apply + settle
     if awb_gains is not None:
         try:
             picam2.set_controls({"AwbEnable": False, "ColourGains": (awb_gains[0], awb_gains[1])})
             print(f"\033[32m[camera] Manual white balance: red={awb_gains[0]}, blue={awb_gains[1]}\033[0m")
         except Exception as e:
             print(f"\033[33m[camera] Failed to set white balance: {e}\033[0m")
-        # Wait for gains to take effect, then discard stale frames
+        # Wait for ISP to apply gains, discard stale auto-AWB frames
         print(f"\033[33m[camera] Waiting for AWB gains to settle...\033[0m")
         time.sleep(2)
-        for _ in range(5):
-            picam2.capture_array()  # discard frames with old AWB
-        # Re-apply gains — some ISP pipelines reset after initial frames
-        try:
-            picam2.set_controls({"AwbEnable": False, "ColourGains": (awb_gains[0], awb_gains[1])})
-        except Exception:
-            pass
-        time.sleep(1)
-        for _ in range(3):
-            picam2.capture_array()  # discard again after re-apply
-        print(f"\033[32m[camera] AWB gains settled\033[0m")
+        for _ in range(10):
+            picam2.capture_array()
+        print(f"\033[32m[camera] AWB gains settled (will re-apply every frame)\033[0m")
     _camera_ready_time = time.time()
     print(f"\033[32m[camera] Started camera {camera_index} — {width}x{height} RGB888\033[0m")
 
@@ -156,6 +150,11 @@ def _capture_loop():
     frame_count = 0
     while True:
         try:
+            # Re-apply manual AWB every frame — Picamera2's ISP can silently
+            # re-enable auto WB, especially under systemd where timing differs.
+            if _awb_gains is not None:
+                picam2.set_controls({"AwbEnable": False, "ColourGains": (_awb_gains[0], _awb_gains[1])})
+
             # Capture as numpy array for potential overlay drawing
             array = picam2.capture_array()
             frame_count += 1
