@@ -89,6 +89,7 @@ default_brooder_id = 1
 stream_port = 8080
 picam2 = None  # initialized in main()
 jpeg_quality = 85
+_camera_ready_time = 0  # set after AWB settling in init_camera
 
 # Snapshot collection for YOLO training
 collect_snapshots = False
@@ -107,7 +108,7 @@ _frame_counter = 0         # increments each new frame
 
 def init_camera(camera_index=0, width=2028, height=1080, awb_gains=None):
     """Initialize the Picamera2 instance with the given camera index."""
-    global picam2
+    global picam2, _camera_ready_time
     picam2 = Picamera2(camera_index)
     config = picam2.create_video_configuration(
         main={"size": (width, height), "format": "RGB888"}
@@ -128,6 +129,21 @@ def init_camera(camera_index=0, width=2028, height=1080, awb_gains=None):
             print(f"\033[32m[camera] Manual white balance: red={awb_gains[0]}, blue={awb_gains[1]}\033[0m")
         except Exception as e:
             print(f"\033[33m[camera] Failed to set white balance: {e}\033[0m")
+        # Wait for gains to take effect, then discard stale frames
+        print(f"\033[33m[camera] Waiting for AWB gains to settle...\033[0m")
+        time.sleep(2)
+        for _ in range(5):
+            picam2.capture_array()  # discard frames with old AWB
+        # Re-apply gains — some ISP pipelines reset after initial frames
+        try:
+            picam2.set_controls({"AwbEnable": False, "ColourGains": (awb_gains[0], awb_gains[1])})
+        except Exception:
+            pass
+        time.sleep(1)
+        for _ in range(3):
+            picam2.capture_array()  # discard again after re-apply
+        print(f"\033[32m[camera] AWB gains settled\033[0m")
+    _camera_ready_time = time.time()
     print(f"\033[32m[camera] Started camera {camera_index} — {width}x{height} RGB888\033[0m")
 
 
@@ -266,6 +282,9 @@ def _maybe_save_snapshot(frame_bytes):
     if not collect_snapshots:
         return
     now = time.time()
+    # Don't save snapshots until 3s after camera is ready (AWB settling)
+    if now - _camera_ready_time < 3.0:
+        return
     if now - last_snapshot_time < snapshot_interval:
         return
     last_snapshot_time = now
