@@ -90,7 +90,43 @@ stream_port = 8080
 picam2 = None  # initialized in main()
 jpeg_quality = 85
 _camera_ready_time = 0  # set after AWB settling in init_camera
-_awb_gains = None  # set from CLI args, applied every frame in capture loop
+
+# White balance: RGB multipliers applied per-frame via numpy.
+# Protected by a lock so the /wb-settings POST can update mid-stream.
+_wb_lock = threading.Lock()
+_wb_gains = {"r": 1.0, "g": 1.0, "b": 1.0}
+WB_SETTINGS_FILE = "wb_settings.json"
+
+
+def _load_wb_settings():
+    """Load saved white balance from wb_settings.json if it exists."""
+    global _wb_gains
+    try:
+        import os
+        if os.path.exists(WB_SETTINGS_FILE):
+            with open(WB_SETTINGS_FILE) as f:
+                data = json.load(f)
+            with _wb_lock:
+                _wb_gains = {
+                    "r": float(data.get("r", 1.0)),
+                    "g": float(data.get("g", 1.0)),
+                    "b": float(data.get("b", 1.0)),
+                }
+            print(f"\033[32m[wb] Loaded from {WB_SETTINGS_FILE}: R={_wb_gains['r']:.2f} G={_wb_gains['g']:.2f} B={_wb_gains['b']:.2f}\033[0m")
+    except Exception as e:
+        print(f"\033[33m[wb] Could not load {WB_SETTINGS_FILE}: {e}\033[0m")
+
+
+def _save_wb_settings():
+    """Save current white balance to wb_settings.json."""
+    try:
+        with _wb_lock:
+            data = dict(_wb_gains)
+        with open(WB_SETTINGS_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+        print(f"\033[32m[wb] Saved to {WB_SETTINGS_FILE}: R={data['r']:.2f} G={data['g']:.2f} B={data['b']:.2f}\033[0m")
+    except Exception as e:
+        print(f"\033[31m[wb] Save failed: {e}\033[0m")
 
 # Snapshot collection for YOLO training
 collect_snapshots = False
@@ -107,10 +143,9 @@ _latest_frame = None       # latest JPEG bytes
 _frame_counter = 0         # increments each new frame
 
 
-def init_camera(camera_index=0, width=2028, height=1080, awb_gains=None):
+def init_camera(camera_index=0, width=2028, height=1080):
     """Initialize the Picamera2 instance with the given camera index."""
-    global picam2, _camera_ready_time, _awb_gains
-    _awb_gains = awb_gains
+    global picam2, _camera_ready_time
     picam2 = Picamera2(camera_index)
     config = picam2.create_video_configuration(
         main={"size": (width, height), "format": "RGB888"}
@@ -124,19 +159,6 @@ def init_camera(camera_index=0, width=2028, height=1080, awb_gains=None):
         print(f"\033[32m[camera] Continuous autofocus enabled\033[0m")
     except Exception:
         print(f"\033[33m[camera] Autofocus not available on this camera\033[0m")
-    # White balance correction via numpy channel scaling (not ISP controls —
-    # Picamera2 set_controls AwbEnable/ColourGains is unreliable under systemd
-    # in video mode). The correction is applied per-frame in _capture_loop().
-    if awb_gains is not None:
-        # --awb-gains 2.5 2.3 means: red_gain=2.5, blue_gain=2.3
-        # Under UVA/UVB brooder lighting, auto-AWB produces roughly:
-        #   red ~2.0x baseline, blue ~3.2x baseline (too blue/purple)
-        # We want to correct to the user's target gains, so we compute
-        # per-channel multipliers: boost red, cut blue relative to auto.
-        r_mult = awb_gains[0] / 2.0   # e.g. 2.5/2.0 = 1.25x red boost
-        b_mult = awb_gains[1] / 3.2   # e.g. 2.3/3.2 = 0.72x blue cut
-        _awb_gains = (r_mult, b_mult)
-        print(f"\033[32m[camera] WB correction: red x{r_mult:.2f}, blue x{b_mult:.2f} (from gains {awb_gains[0]}, {awb_gains[1]})\033[0m")
     _camera_ready_time = time.time()
     print(f"\033[32m[camera] Started camera {camera_index} — {width}x{height} RGB888\033[0m")
 
@@ -154,13 +176,17 @@ def _capture_loop():
             array = picam2.capture_array()
 
             # Apply white balance correction via numpy channel scaling.
-            # _awb_gains stores pre-computed (red_mult, blue_mult) ratios.
-            # Vectorized — runs under 1ms on Pi 5 for 2028x1080.
-            if _awb_gains is not None:
-                r_mult, b_mult = _awb_gains
+            # Reads _wb_gains under lock; vectorized ops — under 1ms on Pi 5.
+            with _wb_lock:
+                r, g, b = _wb_gains["r"], _wb_gains["g"], _wb_gains["b"]
+            if r != 1.0 or g != 1.0 or b != 1.0:
                 array = array.copy()  # don't mutate picamera2's buffer
-                array[:, :, 0] = np.clip(array[:, :, 0].astype(np.uint16) * r_mult, 0, 255).astype(np.uint8)
-                array[:, :, 2] = np.clip(array[:, :, 2].astype(np.uint16) * b_mult, 0, 255).astype(np.uint8)
+                if r != 1.0:
+                    array[:, :, 0] = np.clip(array[:, :, 0].astype(np.uint16) * r, 0, 255).astype(np.uint8)
+                if g != 1.0:
+                    array[:, :, 1] = np.clip(array[:, :, 1].astype(np.uint16) * g, 0, 255).astype(np.uint8)
+                if b != 1.0:
+                    array[:, :, 2] = np.clip(array[:, :, 2].astype(np.uint16) * b, 0, 255).astype(np.uint8)
             frame_count += 1
 
             # QR scan every Nth frame (~every 30 frames ≈ 3s at 10fps)
@@ -441,8 +467,19 @@ class StreamHandler(BaseHTTPRequestHandler):
             self._handle_snapshot()
         elif self.path == "/qr-status":
             self._handle_qr_status()
+        elif self.path == "/settings":
+            self._handle_settings_page()
+        elif self.path == "/wb-settings":
+            self._handle_wb_get()
         else:
             self._handle_index()
+
+    def do_POST(self):
+        if self.path == "/wb-settings":
+            self._handle_wb_post()
+        else:
+            self.send_response(404)
+            self.end_headers()
 
     def _handle_stream(self):
         """MJPEG stream — reads from shared frame buffer so multiple clients work."""
@@ -544,6 +581,127 @@ class StreamHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(html.encode())
 
+    def _handle_wb_get(self):
+        with _wb_lock:
+            data = dict(_wb_gains)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
+
+    def _handle_wb_post(self):
+        global _wb_gains
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+            with _wb_lock:
+                if "r" in body:
+                    _wb_gains["r"] = max(0.0, min(3.0, float(body["r"])))
+                if "g" in body:
+                    _wb_gains["g"] = max(0.0, min(3.0, float(body["g"])))
+                if "b" in body:
+                    _wb_gains["b"] = max(0.0, min(3.0, float(body["b"])))
+            save = body.get("save", False)
+            if save:
+                _save_wb_settings()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            with _wb_lock:
+                self.wfile.write(json.dumps(_wb_gains).encode())
+        except Exception as e:
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(f'{{"error": "{e}"}}'.encode())
+
+    def _handle_settings_page(self):
+        html = """<!DOCTYPE html>
+<html>
+<head><title>QuailSync Camera — White Balance</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, sans-serif; background: #1a1a2e; color: #eee; padding: 20px; max-width: 800px; margin: 0 auto; }
+  h1 { font-size: 1.3rem; margin-bottom: 12px; }
+  .preview { width: 100%; border-radius: 8px; margin-bottom: 16px; background: #111; }
+  .panel { background: #16213e; border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+  .slider-row { display: flex; align-items: center; gap: 12px; margin: 10px 0; }
+  .slider-row label { width: 50px; font-weight: 600; }
+  .slider-row input[type=range] { flex: 1; accent-color: #7d8b6a; }
+  .slider-row .val { width: 50px; text-align: right; font-family: monospace; font-size: 1.1rem; }
+  .actions { display: flex; gap: 10px; margin-top: 14px; }
+  .btn { padding: 10px 24px; border: none; border-radius: 8px; font-size: .9rem; font-weight: 600; cursor: pointer; }
+  .btn-save { background: #7d8b6a; color: #fff; }
+  .btn-reset { background: #444; color: #ccc; }
+  .btn:hover { opacity: 0.85; }
+  .status { font-size: .8rem; color: #7d8b6a; margin-top: 8px; min-height: 1.2em; }
+  a { color: #7d8b6a; }
+</style>
+</head>
+<body>
+  <h1>White Balance Tuning</h1>
+  <img class="preview" src="/stream">
+  <div class="panel">
+    <div class="slider-row">
+      <label style="color:#ff6b6b">Red</label>
+      <input type="range" id="r" min="0.5" max="2.0" step="0.01" value="1.0">
+      <span class="val" id="rv">1.00</span>
+    </div>
+    <div class="slider-row">
+      <label style="color:#6bff6b">Green</label>
+      <input type="range" id="g" min="0.5" max="2.0" step="0.01" value="1.0">
+      <span class="val" id="gv">1.00</span>
+    </div>
+    <div class="slider-row">
+      <label style="color:#6b6bff">Blue</label>
+      <input type="range" id="b" min="0.5" max="2.0" step="0.01" value="1.0">
+      <span class="val" id="bv">1.00</span>
+    </div>
+    <div class="actions">
+      <button class="btn btn-save" onclick="save()">Save</button>
+      <button class="btn btn-reset" onclick="reset()">Reset (1.0)</button>
+    </div>
+    <div class="status" id="status"></div>
+  </div>
+  <p style="font-size:.8rem;color:#666;margin-top:8px"><a href="/">Back to main</a></p>
+<script>
+  const rs=document.getElementById('r'), gs=document.getElementById('g'), bs=document.getElementById('b');
+  const rv=document.getElementById('rv'), gv=document.getElementById('gv'), bv=document.getElementById('bv');
+  const st=document.getElementById('status');
+  let debounce=null;
+
+  function show(r,g,b){ rs.value=r; gs.value=g; bs.value=b; rv.textContent=Number(r).toFixed(2); gv.textContent=Number(g).toFixed(2); bv.textContent=Number(b).toFixed(2); }
+
+  function send(){
+    const body={r:parseFloat(rs.value),g:parseFloat(gs.value),b:parseFloat(bs.value)};
+    rv.textContent=body.r.toFixed(2); gv.textContent=body.g.toFixed(2); bv.textContent=body.b.toFixed(2);
+    fetch('/wb-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  }
+
+  function onSlider(){ clearTimeout(debounce); debounce=setTimeout(send, 80); rv.textContent=parseFloat(rs.value).toFixed(2); gv.textContent=parseFloat(gs.value).toFixed(2); bv.textContent=parseFloat(bs.value).toFixed(2); }
+  rs.addEventListener('input', onSlider);
+  gs.addEventListener('input', onSlider);
+  bs.addEventListener('input', onSlider);
+
+  function save(){
+    const body={r:parseFloat(rs.value),g:parseFloat(gs.value),b:parseFloat(bs.value),save:true};
+    fetch('/wb-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+      .then(()=>{ st.textContent='Saved!'; setTimeout(()=>st.textContent='',3000); });
+  }
+
+  function reset(){ show(1.0,1.0,1.0); send(); st.textContent='Reset to defaults'; setTimeout(()=>st.textContent='',3000); }
+
+  // Load current values on page open
+  fetch('/wb-settings').then(r=>r.json()).then(d=>show(d.r,d.g,d.b));
+</script>
+</body>
+</html>"""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(html.encode())
+
     def log_message(self, format, *args):
         if len(args) > 1 and "200" not in str(args[1]):
             print(f"[camera] {args[0]}")
@@ -575,8 +733,8 @@ def main():
                         help="Directory for saved snapshots (default: ./snapshots)")
     parser.add_argument("--max-snapshots", type=int, default=1000,
                         help="Max snapshots to keep; oldest deleted when exceeded (default: 1000)")
-    parser.add_argument("--awb-gains", type=float, nargs=2, metavar=("RED", "BLUE"), default=None,
-                        help="Manual white balance gains (e.g. --awb-gains 2.5 2.3 for UVA/UVB brooder lighting). Omit for auto WB.")
+    parser.add_argument("--awb-gains", type=float, nargs="+", metavar="VAL", default=None,
+                        help="White balance multipliers: R G B (3 values) or R B (2 values, G=1.0). e.g. --awb-gains 1.25 1.0 0.72. Overrides saved wb_settings.json.")
     args = parser.parse_args()
 
     server_url = args.server
@@ -588,14 +746,34 @@ def main():
     snapshot_dir = args.snapshot_dir
     max_snapshots = args.max_snapshots
 
-    # Initialize the selected camera
-    init_camera(args.camera_index, args.width, args.height, awb_gains=args.awb_gains)
+    # Load saved WB settings first, then CLI override if given
+    _load_wb_settings()
+    if args.awb_gains is not None:
+        gains = args.awb_gains
+        with _wb_lock:
+            if len(gains) >= 3:
+                _wb_gains["r"] = gains[0]
+                _wb_gains["g"] = gains[1]
+                _wb_gains["b"] = gains[2]
+            elif len(gains) == 2:
+                _wb_gains["r"] = gains[0]
+                _wb_gains["g"] = 1.0
+                _wb_gains["b"] = gains[1]
+            elif len(gains) == 1:
+                _wb_gains["r"] = gains[0]
+        print(f"\033[32m[wb] CLI override: R={_wb_gains['r']:.2f} G={_wb_gains['g']:.2f} B={_wb_gains['b']:.2f}\033[0m")
 
+    # Initialize the selected camera
+    init_camera(args.camera_index, args.width, args.height)
+
+    with _wb_lock:
+        wb_str = f"R={_wb_gains['r']:.2f} G={_wb_gains['g']:.2f} B={_wb_gains['b']:.2f}"
     print(f"\n\033[1m[QuailSync Camera]\033[0m")
     print(f"  Camera:     index {args.camera_index}")
     print(f"  Resolution: {args.width}x{args.height}")
     print(f"  JPEG:       quality {jpeg_quality}")
-    print(f"  AWB:        {'manual red={} blue={}'.format(*args.awb_gains) if args.awb_gains else 'auto'}")
+    print(f"  WB:         {wb_str}")
+    print(f"  WB Tuning:  http://0.0.0.0:{args.port}/settings")
     print(f"  Stream:     http://0.0.0.0:{args.port}/stream")
     print(f"  Snapshot:   http://0.0.0.0:{args.port}/snapshot")
     print(f"  QR JSON:    http://0.0.0.0:{args.port}/qr-status")
