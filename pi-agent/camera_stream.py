@@ -51,14 +51,6 @@ except ImportError:
     print("     Install with: pip3 install pyzbar pillow --break-system-packages")
     print("     Also: sudo apt install libzbar0")
 
-# Try importing OpenCV for QR overlay drawing
-try:
-    import cv2
-    CV2_AVAILABLE = True
-except ImportError:
-    CV2_AVAILABLE = False
-    print("\033[33m[camera] OpenCV not installed — QR overlay disabled\033[0m")
-
 # Try importing websockets for server communication
 try:
     import asyncio
@@ -83,7 +75,7 @@ qr_scan_interval = 2.0  # scan every 2 seconds (not every frame)
 qr_detections = {}       # track detection counts for stability
 qr_stable_threshold = 3  # need 3 consecutive detections to confirm
 last_qr_raw = None
-last_qr_rects = []       # list of (x, y, w, h) bounding boxes for QR overlay
+last_qr_rects = []       # bounding boxes from last QR scan (for /qr-status)
 server_url = None
 default_brooder_id = 1
 stream_port = 8080
@@ -193,34 +185,15 @@ def _capture_loop():
             if frame_count % 30 == 0:
                 qr_rects = _scan_array_for_qr(array)
 
-            # Encode raw frame FIRST (no overlay) for clean YOLO snapshots.
-            # Use PIL for all JPEG encoding — cv2.imencode assumes BGR input
-            # but capture_array() returns RGB, causing blue color cast.
-            raw_img = Image.fromarray(array)
-            raw_buf = io.BytesIO()
-            raw_img.save(raw_buf, format="JPEG", quality=jpeg_quality)
-            raw_frame = raw_buf.getvalue()
+            # Encode frame to JPEG via PIL (correct RGB handling).
+            # No overlay drawing — clean frames for YOLO training and streaming.
+            frame_img = Image.fromarray(array)
+            frame_buf = io.BytesIO()
+            frame_img.save(frame_buf, format="JPEG", quality=jpeg_quality)
+            frame = frame_buf.getvalue()
 
-            # Save raw (no overlay) snapshot for YOLO training
-            _maybe_save_snapshot(raw_frame)
-
-            # Draw QR overlay on the array for the live stream.
-            # cv2 drawing only — rectangle/putText don't depend on channel order.
-            rects_to_draw = qr_rects if qr_rects else last_qr_rects
-            if rects_to_draw and CV2_AVAILABLE:
-                array = array.copy()
-                for (x, y, w, h) in rects_to_draw:
-                    cv2.rectangle(array, (x, y), (x + w, y + h), (0, 255, 0), 3)
-                    label = last_qr_raw or ""
-                    if label:
-                        cv2.putText(array, label, (x, y - 10),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                overlay_img = Image.fromarray(array)
-                overlay_buf = io.BytesIO()
-                overlay_img.save(overlay_buf, format="JPEG", quality=jpeg_quality)
-                frame = overlay_buf.getvalue()
-            else:
-                frame = raw_frame
+            # Save snapshot for YOLO training
+            _maybe_save_snapshot(frame)
 
             # Publish to shared buffer
             with _frame_condition:
@@ -254,11 +227,11 @@ def _scan_array_for_qr(array):
             rect = obj.rect
             rects.append((rect.left, rect.top, rect.width, rect.height))
 
-            # Match brooder-{id}-{name} pattern
-            match = re.match(r"^brooder-(\d+)-(.+)$", data, re.IGNORECASE)
+            # Match 'brooder-N' or 'brooder-N-bloodline' format
+            match = re.match(r"^brooder-(\d+)(?:-(.+))?$", data, re.IGNORECASE)
             if match:
                 brooder_id = int(match.group(1))
-                bloodline_name = match.group(2)
+                bloodline_name = match.group(2)  # None for simple 'brooder-N' format
 
                 # Stability check
                 if data.lower() == (last_qr_raw or "").lower():
@@ -272,7 +245,10 @@ def _scan_array_for_qr(array):
                         old = current_brooder_id
                         current_brooder_id = brooder_id
                         current_bloodline_name = bloodline_name
-                        print(f"\033[36m[qr] Brooder changed: {old} → {brooder_id} (bloodline: {bloodline_name})\033[0m")
+                        bl_str = f" (bloodline: {bloodline_name})" if bloodline_name else ""
+                        print(f"\033[36m[qr] Brooder changed: {old} → {brooder_id}{bl_str}\033[0m")
+                        if default_brooder_id and brooder_id != default_brooder_id:
+                            print(f"\033[33m[qr] WARNING: QR says brooder {brooder_id} but --brooder-id is {default_brooder_id} — wrong QR code?\033[0m")
                         if WS_AVAILABLE and server_url:
                             threading.Thread(target=_notify_server, args=(brooder_id,), daemon=True).start()
 
@@ -774,7 +750,6 @@ def main():
     print(f"  Snapshot:   http://0.0.0.0:{args.port}/snapshot")
     print(f"  QR JSON:    http://0.0.0.0:{args.port}/qr-status")
     print(f"  QR Scan:    {'enabled' if QR_AVAILABLE else 'DISABLED'}")
-    print(f"  QR Overlay: {'enabled' if CV2_AVAILABLE else 'disabled (install opencv-python-headless)'}")
     print(f"  Server:     {server_url or 'not configured'}")
     print(f"  Brooder:    {default_brooder_id}")
     if collect_snapshots:
