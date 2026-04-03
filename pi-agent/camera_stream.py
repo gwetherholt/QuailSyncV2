@@ -148,7 +148,7 @@ def init_camera(camera_index=0, width=2028, height=1080):
     global picam2, _camera_ready_time
     picam2 = Picamera2(camera_index)
     config = picam2.create_still_configuration(
-        main={"size": (width, height), "format": "RGB888"}
+        main={"size": (width, height)}
     )
     picam2.configure(config)
     picam2.start()
@@ -160,7 +160,7 @@ def init_camera(camera_index=0, width=2028, height=1080):
     except Exception:
         print(f"\033[33m[camera] Autofocus not available on this camera\033[0m")
     _camera_ready_time = time.time()
-    print(f"\033[32m[camera] Started camera {camera_index} — {width}x{height} RGB888\033[0m")
+    print(f"\033[32m[camera] Started camera {camera_index} — {width}x{height} (still mode, native format)\033[0m")
 
 
 # === Camera Capture Thread ===
@@ -172,29 +172,31 @@ def _capture_loop():
     frame_count = 0
     while True:
         try:
-            # Capture as numpy array for potential overlay drawing.
-            # Still configuration mode — auto AWB produces correct colors natively.
+            # Capture as numpy array. Still config default format is BGR888.
+            # Flip to RGB immediately so all downstream code uses RGB order.
             array = picam2.capture_array()
+            array = array[:, :, ::-1].copy()  # BGR → RGB + contiguous copy
+            frame_count += 1
 
-            # Optional fine-tune WB via /settings page (all default to 1.0)
+            # Optional fine-tune WB via /settings page (defaults 1.0 = no-op)
             with _wb_lock:
                 r, g, b = _wb_gains["r"], _wb_gains["g"], _wb_gains["b"]
             if r != 1.0 or g != 1.0 or b != 1.0:
-                array = array.copy()
+                # RGB order: channel 0=R, 1=G, 2=B
                 if r != 1.0:
                     array[:, :, 0] = np.clip(array[:, :, 0].astype(np.uint16) * r, 0, 255).astype(np.uint8)
                 if g != 1.0:
                     array[:, :, 1] = np.clip(array[:, :, 1].astype(np.uint16) * g, 0, 255).astype(np.uint8)
                 if b != 1.0:
                     array[:, :, 2] = np.clip(array[:, :, 2].astype(np.uint16) * b, 0, 255).astype(np.uint8)
-            frame_count += 1
 
             # QR scan every Nth frame (~every 30 frames ≈ 3s at 10fps)
             qr_rects = []
             if frame_count % 30 == 0:
                 qr_rects = _scan_array_for_qr(array)
 
-            # Encode raw frame FIRST (no overlay) for clean YOLO snapshots
+            # Encode raw frame FIRST (no overlay) for clean YOLO snapshots.
+            # Array is RGB; cv2.imencode expects BGR, PIL expects RGB.
             if CV2_AVAILABLE:
                 bgr_raw = cv2.cvtColor(array, cv2.COLOR_RGB2BGR)
                 _, jpeg_raw = cv2.imencode('.jpg', bgr_raw, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
@@ -208,7 +210,9 @@ def _capture_loop():
             # Save raw (no overlay) snapshot for YOLO training
             _maybe_save_snapshot(raw_frame)
 
-            # Draw QR overlay on the array for the live stream
+            # Draw QR overlay on the array for the live stream.
+            # cv2 drawing functions work on any channel order — color tuples
+            # are (B,G,R) for BGR or (R,G,B) for RGB. Green = (0,255,0) either way.
             rects_to_draw = qr_rects if qr_rects else last_qr_rects
             if rects_to_draw and CV2_AVAILABLE:
                 for (x, y, w, h) in rects_to_draw:
