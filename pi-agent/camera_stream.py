@@ -147,7 +147,7 @@ def init_camera(camera_index=0, width=2028, height=1080):
     """Initialize the Picamera2 instance with the given camera index."""
     global picam2, _camera_ready_time
     picam2 = Picamera2(camera_index)
-    config = picam2.create_video_configuration(
+    config = picam2.create_still_configuration(
         main={"size": (width, height), "format": "RGB888"}
     )
     picam2.configure(config)
@@ -172,15 +172,15 @@ def _capture_loop():
     frame_count = 0
     while True:
         try:
-            # Capture as numpy array for potential overlay drawing
+            # Capture as numpy array for potential overlay drawing.
+            # Still configuration mode — auto AWB produces correct colors natively.
             array = picam2.capture_array()
 
-            # Apply white balance correction via numpy channel scaling.
-            # Reads _wb_gains under lock; vectorized ops — under 1ms on Pi 5.
+            # Optional fine-tune WB via /settings page (all default to 1.0)
             with _wb_lock:
                 r, g, b = _wb_gains["r"], _wb_gains["g"], _wb_gains["b"]
             if r != 1.0 or g != 1.0 or b != 1.0:
-                array = array.copy()  # don't mutate picamera2's buffer
+                array = array.copy()
                 if r != 1.0:
                     array[:, :, 0] = np.clip(array[:, :, 0].astype(np.uint16) * r, 0, 255).astype(np.uint8)
                 if g != 1.0:
