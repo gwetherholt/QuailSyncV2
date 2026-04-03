@@ -250,21 +250,25 @@ pub(crate) async fn brooder_status(
 
     let (latest_temp, latest_humidity, has_alert, alert_message) = match latest {
         Ok((temp, hum)) => {
-            let config = state.alert_config.clone();
+            // Use age-based temperature range if a chick group is assigned
+            let (temp_min, temp_max) =
+                if let Some((_gid, age)) = youngest_chick_age_in_brooder(&conn, id) {
+                    let (target, tolerance) = target_temp_for_age(age);
+                    (target - tolerance, target + tolerance)
+                } else {
+                    (ADULT_TEMP_MIN, ADULT_TEMP_MAX)
+                };
             let mut alert = false;
             let mut msg = None;
-            if temp < config.brooder_temp_min || temp > config.brooder_temp_max {
+            if temp < temp_min || temp > temp_max {
                 alert = true;
                 msg = Some(format!(
-                    "Temperature {:.1}\u{00b0}F out of range ({:.1}-{:.1})",
-                    temp, config.brooder_temp_min, config.brooder_temp_max
+                    "Temperature {:.1}\u{00b0}F out of range ({:.0}-{:.0})",
+                    temp, temp_min, temp_max
                 ));
-            } else if hum < config.humidity_min || hum > config.humidity_max {
+            } else if hum < 40.0 {
                 alert = true;
-                msg = Some(format!(
-                    "Humidity {:.1}% out of range ({:.1}-{:.1})",
-                    hum, config.humidity_min, config.humidity_max
-                ));
+                msg = Some(format!("Humidity {:.1}% below 40%", hum));
             }
             (Some(temp), Some(hum), alert, msg)
         }

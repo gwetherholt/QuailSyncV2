@@ -159,6 +159,7 @@ pub(crate) async fn alerts(
             let sev_str: String = row.get(0)?;
             let severity = match sev_str.as_str() {
                 "critical" => Severity::Critical,
+                "info" => Severity::Info,
                 _ => Severity::Warning,
             };
             Ok(Alert {

@@ -322,6 +322,7 @@ pub fn store_payload(conn: &Connection, payload: &TelemetryPayload) {
 
 pub fn store_alert(conn: &Connection, severity: &Severity, message: &str) {
     let sev_str = match severity {
+        Severity::Info => "info",
         Severity::Warning => "warning",
         Severity::Critical => "critical",
     };

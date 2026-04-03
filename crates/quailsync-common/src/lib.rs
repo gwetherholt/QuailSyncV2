@@ -77,8 +77,8 @@ pub struct AlertConfig {
 impl Default for AlertConfig {
     fn default() -> Self {
         Self {
-            brooder_temp_min: 95.0,
-            brooder_temp_max: 100.0,
+            brooder_temp_min: 68.0,
+            brooder_temp_max: 72.0,
             humidity_min: 40.0,
             humidity_max: 60.0,
         }
@@ -88,6 +88,7 @@ impl Default for AlertConfig {
 /// Severity level for an alert.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Severity {
+    Info,
     Warning,
     Critical,
 }
@@ -537,14 +538,21 @@ pub struct GraduateBird {
 
 /// Target temperature (°F) by chick age. Returns (target, tolerance).
 pub fn target_temp_for_age(age_days: i64) -> (f64, f64) {
-    let tolerance = 2.5;
+    // Returns (target_temp_f, tolerance_f).
+    // Week 1: 93-97 (target 95, ±2)
+    // Week 2: 88-92 (target 90, ±2)
+    // Week 3: 83-87 (target 85, ±2)
+    // Week 4: 78-82 (target 80, ±2)
+    // Week 5: 73-77 (target 75, ±2)
+    // Week 6+: 68-72 (target 70, ±2)
+    let tolerance = 2.0;
     let target = match age_days {
-        0..=6 => 97.0,
-        7..=13 => 92.0,
-        14..=20 => 87.0,
-        21..=27 => 82.0,
-        28..=34 => 77.0,
-        _ => 72.0, // feathered out, room temp
+        0..=7 => 95.0,
+        8..=14 => 90.0,
+        15..=21 => 85.0,
+        22..=28 => 80.0,
+        29..=35 => 75.0,
+        _ => 70.0, // feathered out
     };
     (target, tolerance)
 }

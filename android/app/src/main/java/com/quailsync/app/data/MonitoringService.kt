@@ -19,11 +19,14 @@ class MonitoringService : Service() {
     companion object {
         private const val TAG = "QuailSync-Monitor"
 
-        // Temperature thresholds (°F)
-        private const val TEMP_CRITICAL_LOW = 60.0
-        private const val TEMP_CRITICAL_HIGH = 75.0
-        private const val TEMP_WARNING_LOW = 65.0
-        private const val TEMP_WARNING_HIGH = 72.0
+        // Temperature thresholds (°F) — wide range covering all chick ages.
+        // Week 1 chicks need 93-97°F, week 6+ adults need 68-72°F.
+        // The Android app doesn't know chick age, so we only alert on extremes.
+        // Server-side alerts handle age-based thresholds precisely.
+        private const val TEMP_CRITICAL_LOW = 58.0   // dangerously cold for any age
+        private const val TEMP_CRITICAL_HIGH = 102.0  // dangerously hot for any age
+        private const val TEMP_WARNING_LOW = 63.0     // below week 6 range
+        private const val TEMP_WARNING_HIGH = 100.0   // above week 1 range
 
         // Humidity thresholds (%)
         private const val HUMIDITY_WARNING_LOW = 40.0
