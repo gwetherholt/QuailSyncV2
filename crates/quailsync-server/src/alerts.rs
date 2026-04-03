@@ -118,10 +118,7 @@ pub fn check_brooder_alerts(conn: &Connection, reading: &BrooderReading, config:
         log_alert(&Severity::Critical, &msg);
         store_alert(conn, &Severity::Critical, &msg);
     } else if hum < 40.0 {
-        let msg = format!(
-            "Humidity LOW on {}: {:.1}% (below 40%)",
-            age_label, hum,
-        );
+        let msg = format!("Humidity LOW on {}: {:.1}% (below 40%)", age_label, hum,);
         log_alert(&Severity::Warning, &msg);
         store_alert(conn, &Severity::Warning, &msg);
     }
