@@ -68,8 +68,9 @@ except ImportError:
 
 
 # === Global State ===
-current_brooder_id = None
+current_brooder_id = None       # last QR-detected brooder ID (raw detection)
 current_bloodline_name = None
+active_brooder_id = None        # the brooder this camera is currently assigned to
 last_qr_scan_time = 0
 qr_scan_interval = 2.0  # scan every 2 seconds (not every frame)
 qr_detections = {}       # track detection counts for stability
@@ -247,10 +248,9 @@ def _scan_array_for_qr(array):
                         current_bloodline_name = bloodline_name
                         bl_str = f" (bloodline: {bloodline_name})" if bloodline_name else ""
                         print(f"\033[36m[qr] Brooder changed: {old} → {brooder_id}{bl_str}\033[0m")
-                        if default_brooder_id and brooder_id != default_brooder_id:
-                            print(f"\033[33m[qr] WARNING: QR says brooder {brooder_id} but --brooder-id is {default_brooder_id} — wrong QR code?\033[0m")
-                        if WS_AVAILABLE and server_url:
-                            threading.Thread(target=_notify_server, args=(brooder_id,), daemon=True).start()
+                    # Update active assignment if it changed
+                    if active_brooder_id != brooder_id:
+                        _set_active_brooder(brooder_id)
 
         last_qr_rects = rects
         return rects
@@ -301,7 +301,7 @@ def _save_snapshot(frame_bytes):
     with _snapshot_lock:
         os.makedirs(snapshot_dir, exist_ok=True)
 
-        bid = current_brooder_id if current_brooder_id is not None else default_brooder_id
+        bid = active_brooder_id if active_brooder_id is not None else default_brooder_id
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"brooder{bid}_{timestamp}.jpg"
         filepath = os.path.join(snapshot_dir, filename)
@@ -334,99 +334,89 @@ def _save_snapshot(frame_bytes):
         print(msg)
 
 
-_announced = False
+def _get_local_ip():
+    """Get the Pi's LAN IP address."""
+    import socket
+    local_ip = socket.gethostbyname(socket.gethostname())
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        pass
+    return local_ip
 
 
-def _announce_camera(brooder_id):
-    """Announce this camera's stream URL to the server via WebSocket. Only once per process."""
-    global _announced
-    if _announced:
-        print(f"[camera] Already announced, skipping (restart script to re-announce)")
-        return
+def _set_active_brooder(new_id):
+    """Change which brooder this camera is assigned to. Clears the old
+    brooder's camera_url on the server and announces to the new one."""
+    global active_brooder_id
+    old_id = active_brooder_id
+    active_brooder_id = new_id
+    print(f"\033[32m[camera] Active brooder: {old_id} → {new_id}\033[0m")
+    if WS_AVAILABLE and server_url:
+        threading.Thread(target=_announce_to_server, args=(new_id, old_id), daemon=True).start()
+
+
+def _announce_to_server(new_brooder_id, old_brooder_id=None):
+    """Announce camera stream URL to new brooder; clear old brooder's camera_url."""
     if not WS_AVAILABLE or not server_url:
         return
     try:
-        import socket
-        local_ip = socket.gethostbyname(socket.gethostname())
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-            s.close()
-        except Exception:
-            pass
-
+        local_ip = _get_local_ip()
         stream_url = f"http://{local_ip}:{stream_port}/stream"
         snapshot_url = f"http://{local_ip}:{stream_port}/snapshot"
 
+        # Clear old brooder's camera_url via REST
+        if old_brooder_id is not None and old_brooder_id != new_brooder_id:
+            try:
+                http_base = server_url.replace("ws://", "http://").replace("wss://", "https://")
+                http_base = re.sub(r"/ws$", "", http_base)
+                url = f"{http_base}/api/brooders/{old_brooder_id}"
+                body = json.dumps({"camera_url": None}).encode()
+                import urllib.request
+                req = urllib.request.Request(url, data=body, method="PUT",
+                                            headers={"Content-Type": "application/json"})
+                urllib.request.urlopen(req, timeout=5)
+                print(f"\033[33m[camera] Cleared camera_url on brooder {old_brooder_id}\033[0m")
+            except Exception as e:
+                print(f"\033[33m[camera] Failed to clear old brooder {old_brooder_id}: {e}\033[0m")
+
+        # Announce to new brooder via WebSocket
         async def _send():
             async with websockets.connect(server_url) as ws:
                 payload = json.dumps({
                     "CameraAnnounce": {
-                        "brooder_id": brooder_id,
+                        "brooder_id": new_brooder_id,
                         "stream_url": stream_url,
                         "snapshot_url": snapshot_url
                     }
                 })
                 await ws.send(payload)
-                print(f"\033[32m[camera] Announced to server: brooder {brooder_id} stream={stream_url}\033[0m")
+                print(f"\033[32m[camera] Announced to server: brooder {new_brooder_id} stream={stream_url}\033[0m")
 
         asyncio.run(_send())
-        _announced = True
+
+        # Also send QrDetected if we have QR data
+        if last_qr_raw:
+            try:
+                async def _send_qr():
+                    async with websockets.connect(server_url) as ws:
+                        payload = json.dumps({
+                            "QrDetected": {
+                                "brooder_id": new_brooder_id,
+                                "bloodline": current_bloodline_name or "",
+                                "qr_code": last_qr_raw
+                            }
+                        })
+                        await ws.send(payload)
+                asyncio.run(_send_qr())
+            except Exception:
+                pass
+
     except Exception as e:
-        print(f"\033[33m[camera] Announce failed: {e} (will not retry)\033[0m")
-        _announced = True
-
-
-def _notify_server(brooder_id):
-    """Send QR detection + camera-brooder association to server."""
-    global _announced
-
-    # Send QR detected event via WebSocket
-    if WS_AVAILABLE and server_url and current_bloodline_name:
-        try:
-            qr_code = f"brooder-{brooder_id}-{current_bloodline_name}"
-
-            async def _send_qr():
-                async with websockets.connect(server_url) as ws:
-                    payload = json.dumps({
-                        "QrDetected": {
-                            "brooder_id": brooder_id,
-                            "bloodline": current_bloodline_name,
-                            "qr_code": qr_code
-                        }
-                    })
-                    await ws.send(payload)
-                    print(f"\033[32m[qr] Sent QrDetected to server: brooder {brooder_id} bloodline={current_bloodline_name}\033[0m")
-
-            asyncio.run(_send_qr())
-        except Exception as e:
-            print(f"\033[33m[qr] QrDetected send failed: {e}\033[0m")
-
-    # POST to /api/qr-scan so the server can do its own lookup
-    if server_url and current_bloodline_name:
-        try:
-            # Derive HTTP base URL from the WebSocket URL
-            http_base = server_url.replace("ws://", "http://").replace("wss://", "https://")
-            http_base = re.sub(r"/ws$", "", http_base)
-            url = f"{http_base}/api/qr-scan"
-            body = {"brooder_id": brooder_id, "qr_text": last_qr_raw or ""}
-            if REQUESTS_AVAILABLE:
-                resp = http_requests.post(url, json=body, timeout=5)
-                print(f"\033[32m[qr] POST /api/qr-scan -> {resp.status_code}\033[0m")
-            else:
-                # Fallback with urllib
-                import urllib.request
-                req = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                            headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    print(f"\033[32m[qr] POST /api/qr-scan -> {resp.status}\033[0m")
-        except Exception as e:
-            print(f"\033[33m[qr] POST /api/qr-scan failed: {e}\033[0m")
-
-    # Re-announce camera for the new brooder
-    _announced = False
-    _announce_camera(brooder_id)
+        print(f"\033[33m[camera] Announce failed: {e}\033[0m")
 
 
 # === HTTP Handler ===
@@ -499,6 +489,7 @@ class StreamHandler(BaseHTTPRequestHandler):
 
     def _handle_qr_status(self):
         status = {
+            "active_brooder_id": active_brooder_id,
             "brooder_id": current_brooder_id,
             "bloodline_name": current_bloodline_name,
             "qr_scanning": QR_AVAILABLE,
@@ -680,7 +671,7 @@ class StreamHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    global server_url, default_brooder_id, stream_port, jpeg_quality
+    global server_url, default_brooder_id, stream_port, jpeg_quality, active_brooder_id
     global collect_snapshots, snapshot_interval, snapshot_dir, max_snapshots
 
     parser = argparse.ArgumentParser(description="QuailSync Camera Stream")
@@ -760,10 +751,11 @@ def main():
     capture_thread = threading.Thread(target=_capture_loop, daemon=True)
     capture_thread.start()
 
-    # Auto-register this camera with the server on startup
+    # Set initial active brooder from CLI arg and announce to server
+    active_brooder_id = default_brooder_id
     if server_url:
         threading.Thread(
-            target=_announce_camera,
+            target=_announce_to_server,
             args=(default_brooder_id,),
             daemon=True
         ).start()
