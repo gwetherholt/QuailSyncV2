@@ -172,17 +172,15 @@ def _capture_loop():
     frame_count = 0
     while True:
         try:
-            # Capture as numpy array. Still config default format is BGR888.
-            # Flip to RGB immediately so all downstream code uses RGB order.
+            # Capture array directly — use as-is, no channel flipping.
             array = picam2.capture_array()
-            array = array[:, :, ::-1].copy()  # BGR → RGB + contiguous copy
             frame_count += 1
 
             # Optional fine-tune WB via /settings page (defaults 1.0 = no-op)
             with _wb_lock:
                 r, g, b = _wb_gains["r"], _wb_gains["g"], _wb_gains["b"]
             if r != 1.0 or g != 1.0 or b != 1.0:
-                # RGB order: channel 0=R, 1=G, 2=B
+                array = array.copy()
                 if r != 1.0:
                     array[:, :, 0] = np.clip(array[:, :, 0].astype(np.uint16) * r, 0, 255).astype(np.uint8)
                 if g != 1.0:
@@ -195,11 +193,9 @@ def _capture_loop():
             if frame_count % 30 == 0:
                 qr_rects = _scan_array_for_qr(array)
 
-            # Encode raw frame FIRST (no overlay) for clean YOLO snapshots.
-            # Array is RGB; cv2.imencode expects BGR, PIL expects RGB.
+            # Encode raw frame FIRST (no overlay) for clean YOLO snapshots
             if CV2_AVAILABLE:
-                bgr_raw = cv2.cvtColor(array, cv2.COLOR_RGB2BGR)
-                _, jpeg_raw = cv2.imencode('.jpg', bgr_raw, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+                _, jpeg_raw = cv2.imencode('.jpg', array, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
                 raw_frame = jpeg_raw.tobytes()
             else:
                 img = Image.fromarray(array)
@@ -210,9 +206,7 @@ def _capture_loop():
             # Save raw (no overlay) snapshot for YOLO training
             _maybe_save_snapshot(raw_frame)
 
-            # Draw QR overlay on the array for the live stream.
-            # cv2 drawing functions work on any channel order — color tuples
-            # are (B,G,R) for BGR or (R,G,B) for RGB. Green = (0,255,0) either way.
+            # Draw QR overlay on the array for the live stream
             rects_to_draw = qr_rects if qr_rects else last_qr_rects
             if rects_to_draw and CV2_AVAILABLE:
                 for (x, y, w, h) in rects_to_draw:
@@ -224,8 +218,7 @@ def _capture_loop():
 
             # Encode overlaid frame for stream/snapshot clients
             if rects_to_draw and CV2_AVAILABLE:
-                bgr_overlay = cv2.cvtColor(array, cv2.COLOR_RGB2BGR)
-                _, jpeg_overlay = cv2.imencode('.jpg', bgr_overlay, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+                _, jpeg_overlay = cv2.imencode('.jpg', array, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
                 frame = jpeg_overlay.tobytes()
             else:
                 frame = raw_frame
