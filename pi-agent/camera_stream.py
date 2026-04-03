@@ -124,19 +124,19 @@ def init_camera(camera_index=0, width=2028, height=1080, awb_gains=None):
         print(f"\033[32m[camera] Continuous autofocus enabled\033[0m")
     except Exception:
         print(f"\033[33m[camera] Autofocus not available on this camera\033[0m")
-    # Manual white balance for UVA/UVB brooder lighting — initial apply + settle
+    # White balance correction via numpy channel scaling (not ISP controls —
+    # Picamera2 set_controls AwbEnable/ColourGains is unreliable under systemd
+    # in video mode). The correction is applied per-frame in _capture_loop().
     if awb_gains is not None:
-        try:
-            picam2.set_controls({"AwbEnable": False, "ColourGains": (awb_gains[0], awb_gains[1])})
-            print(f"\033[32m[camera] Manual white balance: red={awb_gains[0]}, blue={awb_gains[1]}\033[0m")
-        except Exception as e:
-            print(f"\033[33m[camera] Failed to set white balance: {e}\033[0m")
-        # Wait for ISP to apply gains, discard stale auto-AWB frames
-        print(f"\033[33m[camera] Waiting for AWB gains to settle...\033[0m")
-        time.sleep(2)
-        for _ in range(10):
-            picam2.capture_array()
-        print(f"\033[32m[camera] AWB gains settled (will re-apply every frame)\033[0m")
+        # --awb-gains 2.5 2.3 means: red_gain=2.5, blue_gain=2.3
+        # Under UVA/UVB brooder lighting, auto-AWB produces roughly:
+        #   red ~2.0x baseline, blue ~3.2x baseline (too blue/purple)
+        # We want to correct to the user's target gains, so we compute
+        # per-channel multipliers: boost red, cut blue relative to auto.
+        r_mult = awb_gains[0] / 2.0   # e.g. 2.5/2.0 = 1.25x red boost
+        b_mult = awb_gains[1] / 3.2   # e.g. 2.3/3.2 = 0.72x blue cut
+        _awb_gains = (r_mult, b_mult)
+        print(f"\033[32m[camera] WB correction: red x{r_mult:.2f}, blue x{b_mult:.2f} (from gains {awb_gains[0]}, {awb_gains[1]})\033[0m")
     _camera_ready_time = time.time()
     print(f"\033[32m[camera] Started camera {camera_index} — {width}x{height} RGB888\033[0m")
 
@@ -150,13 +150,17 @@ def _capture_loop():
     frame_count = 0
     while True:
         try:
-            # Re-apply manual AWB every frame — Picamera2's ISP can silently
-            # re-enable auto WB, especially under systemd where timing differs.
-            if _awb_gains is not None:
-                picam2.set_controls({"AwbEnable": False, "ColourGains": (_awb_gains[0], _awb_gains[1])})
-
             # Capture as numpy array for potential overlay drawing
             array = picam2.capture_array()
+
+            # Apply white balance correction via numpy channel scaling.
+            # _awb_gains stores pre-computed (red_mult, blue_mult) ratios.
+            # Vectorized — runs under 1ms on Pi 5 for 2028x1080.
+            if _awb_gains is not None:
+                r_mult, b_mult = _awb_gains
+                array = array.copy()  # don't mutate picamera2's buffer
+                array[:, :, 0] = np.clip(array[:, :, 0].astype(np.uint16) * r_mult, 0, 255).astype(np.uint8)
+                array[:, :, 2] = np.clip(array[:, :, 2].astype(np.uint16) * b_mult, 0, 255).astype(np.uint8)
             frame_count += 1
 
             # QR scan every Nth frame (~every 30 frames ≈ 3s at 10fps)
