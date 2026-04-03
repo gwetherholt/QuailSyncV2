@@ -177,7 +177,9 @@ pub(crate) async fn alerts(
 /// DELETE /api/readings — clear all brooder readings and alerts (fresh start)
 pub(crate) async fn clear_readings(State(state): State<AppState>) -> impl IntoResponse {
     let conn = acquire_db(&state);
-    let readings_deleted = conn.execute("DELETE FROM brooder_readings", []).unwrap_or(0);
+    let readings_deleted = conn
+        .execute("DELETE FROM brooder_readings", [])
+        .unwrap_or(0);
     let alerts_deleted = conn.execute("DELETE FROM alerts", []).unwrap_or(0);
     let metrics_deleted = conn.execute("DELETE FROM system_metrics", []).unwrap_or(0);
     Json(serde_json::json!({

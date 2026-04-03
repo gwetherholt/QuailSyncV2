@@ -52,7 +52,10 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/system/latest", get(telemetry::system_latest))
         .route("/api/status", get(telemetry::status))
         .route("/api/alerts", get(telemetry::alerts))
-        .route("/api/readings", axum::routing::delete(telemetry::clear_readings))
+        .route(
+            "/api/readings",
+            axum::routing::delete(telemetry::clear_readings),
+        )
         .route(
             "/api/bloodlines",
             get(birds::list_bloodlines).post(birds::create_bloodline),
@@ -123,8 +126,7 @@ pub fn build_app(state: AppState) -> Router {
         )
         .route(
             "/api/brooders/{id}",
-            axum::routing::put(brooders::update_brooder)
-                .delete(brooders::delete_brooder),
+            axum::routing::put(brooders::update_brooder).delete(brooders::delete_brooder),
         )
         .route(
             "/api/brooders/{id}/readings",

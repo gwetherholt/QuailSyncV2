@@ -36,7 +36,8 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                         conn.execute(
                             "UPDATE brooders SET qr_code = ?1 WHERE id = ?2",
                             params![qr.qr_code, qr.brooder_id],
-                        ).ok();
+                        )
+                        .ok();
                     }
                     let _ = state.live_tx.send(text.to_string());
                 }
