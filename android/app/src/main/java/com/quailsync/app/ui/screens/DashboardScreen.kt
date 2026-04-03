@@ -510,16 +510,13 @@ private fun CompactBrooderCard(
                 overflow = TextOverflow.Ellipsis,
             )
 
-            // QR badge (if set)
-            val qr = state.brooder.qrCode
-            if (!qr.isNullOrBlank()) {
+            // Camera status indicator
+            if (!state.brooder.cameraUrl.isNullOrBlank()) {
                 Text(
-                    qr,
+                    "\uD83D\uDCF9 Cam",
                     style = MaterialTheme.typography.labelSmall,
-                    color = SageGreen,
+                    color = AlertGreen,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.width(70.dp),
                 )
                 Spacer(Modifier.width(8.dp))
             }

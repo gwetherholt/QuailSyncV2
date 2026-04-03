@@ -576,6 +576,7 @@ fun CameraCard(
 
             if (item.streamUrl != null) {
                 MjpegStreamView(item.streamUrl, Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp)), streamRefreshKey)
+                QrStatusIndicator(item.streamUrl)
                 Spacer(Modifier.height(12.dp))
                 Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
@@ -932,6 +933,54 @@ fun MjpegStreamView(url: String, modifier: Modifier = Modifier, refreshKey: Int 
     }
 }
 
+/**
+ * Polls a camera's /qr-status endpoint every 5 seconds and shows
+ * green "QR: brooder-1" when detected or gray "No QR" when not.
+ */
+@Composable
+fun QrStatusIndicator(streamUrl: String) {
+    // Derive qr-status URL from stream URL: http://host:port/stream → http://host:port/qr-status
+    val qrUrl = remember(streamUrl) {
+        streamUrl.replace(Regex("/stream/?$"), "/qr-status")
+    }
+    var qrText by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(qrUrl) {
+        while (true) {
+            try {
+                val text = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val conn = java.net.URL(qrUrl).openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 3000
+                    conn.readTimeout = 3000
+                    try {
+                        val body = conn.inputStream.bufferedReader().readText()
+                        val json = org.json.JSONObject(body)
+                        val raw = json.optString("last_raw", "").ifEmpty { null }
+                        val bid = if (json.isNull("brooder_id")) null else json.optInt("brooder_id", -1)
+                        if (raw != null) raw
+                        else if (bid != null && bid >= 0) "brooder-$bid"
+                        else null
+                    } finally {
+                        conn.disconnect()
+                    }
+                }
+                qrText = text
+            } catch (_: Exception) {
+                qrText = null
+            }
+            kotlinx.coroutines.delay(5000)
+        }
+    }
+
+    val detected = qrText != null
+    Text(
+        text = if (detected) "\uD83D\uDCF7 QR: $qrText" else "No QR",
+        style = MaterialTheme.typography.labelSmall,
+        color = if (detected) SageGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp),
+    )
+}
+
 @Composable
 fun CameraOfflinePlaceholder() {
     Box(
@@ -952,7 +1001,10 @@ fun FullScreenStreamDialog(url: String, cameraName: String, onDismiss: () -> Uni
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             Column(Modifier.fillMaxSize()) {
                 Row(Modifier.fillMaxWidth().padding(8.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                    Text(cameraName, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(start = 8.dp))
+                    Column {
+                        Text(cameraName, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(start = 8.dp))
+                        QrStatusIndicator(url)
+                    }
                     OutlinedButton(onClick = onDismiss) { Text("Close") }
                 }
                 MjpegStreamView(url, Modifier.fillMaxSize().padding(8.dp).clip(RoundedCornerShape(8.dp)))

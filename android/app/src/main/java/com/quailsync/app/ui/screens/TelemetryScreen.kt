@@ -290,13 +290,12 @@ fun DetailedBrooderCard(state: BrooderState, liveReading: LiveReading?, onClick:
         elevation = CardDefaults.cardElevation(2.dp),
     ) {
         Column(Modifier.padding(16.dp)) {
-            // QR code indicator
-            val qrCode = state.brooder.qrCode
-            if (!qrCode.isNullOrBlank()) {
+            // Camera status indicator
+            if (!state.brooder.cameraUrl.isNullOrBlank()) {
                 Text(
-                    "\uD83D\uDCF7 $qrCode",
+                    "\uD83D\uDCF9 Camera connected",
                     style = MaterialTheme.typography.labelMedium,
-                    color = SageGreen,
+                    color = AlertGreen,
                 )
                 Spacer(Modifier.height(4.dp))
             }
