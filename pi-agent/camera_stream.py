@@ -105,7 +105,7 @@ _latest_frame = None       # latest JPEG bytes
 _frame_counter = 0         # increments each new frame
 
 
-def init_camera(camera_index=0, width=2028, height=1080):
+def init_camera(camera_index=0, width=2028, height=1080, awb_gains=None):
     """Initialize the Picamera2 instance with the given camera index."""
     global picam2
     picam2 = Picamera2(camera_index)
@@ -121,6 +121,13 @@ def init_camera(camera_index=0, width=2028, height=1080):
         print(f"\033[32m[camera] Continuous autofocus enabled\033[0m")
     except Exception:
         print(f"\033[33m[camera] Autofocus not available on this camera\033[0m")
+    # Manual white balance for UVA/UVB brooder lighting
+    if awb_gains is not None:
+        try:
+            picam2.set_controls({"AwbEnable": False, "ColourGains": (awb_gains[0], awb_gains[1])})
+            print(f"\033[32m[camera] Manual white balance: red={awb_gains[0]}, blue={awb_gains[1]}\033[0m")
+        except Exception as e:
+            print(f"\033[33m[camera] Failed to set white balance: {e}\033[0m")
     print(f"\033[32m[camera] Started camera {camera_index} — {width}x{height} RGB888\033[0m")
 
 
@@ -142,7 +149,21 @@ def _capture_loop():
             if frame_count % 30 == 0:
                 qr_rects = _scan_array_for_qr(array)
 
-            # Draw QR overlay if we have recent detections
+            # Encode raw frame FIRST (no overlay) for clean YOLO snapshots
+            if CV2_AVAILABLE:
+                bgr_raw = cv2.cvtColor(array, cv2.COLOR_RGB2BGR)
+                _, jpeg_raw = cv2.imencode('.jpg', bgr_raw, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+                raw_frame = jpeg_raw.tobytes()
+            else:
+                img = Image.fromarray(array)
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=jpeg_quality)
+                raw_frame = buf.getvalue()
+
+            # Save raw (no overlay) snapshot for YOLO training
+            _maybe_save_snapshot(raw_frame)
+
+            # Draw QR overlay on the array for the live stream
             rects_to_draw = qr_rects if qr_rects else last_qr_rects
             if rects_to_draw and CV2_AVAILABLE:
                 for (x, y, w, h) in rects_to_draw:
@@ -152,20 +173,13 @@ def _capture_loop():
                         cv2.putText(array, label, (x, y - 10),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
-            # Encode to JPEG
-            if CV2_AVAILABLE:
-                # cv2 expects BGR but picamera2 gives RGB — convert
-                bgr = cv2.cvtColor(array, cv2.COLOR_RGB2BGR)
-                _, jpeg_buf = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
-                frame = jpeg_buf.tobytes()
+            # Encode overlaid frame for stream/snapshot clients
+            if rects_to_draw and CV2_AVAILABLE:
+                bgr_overlay = cv2.cvtColor(array, cv2.COLOR_RGB2BGR)
+                _, jpeg_overlay = cv2.imencode('.jpg', bgr_overlay, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+                frame = jpeg_overlay.tobytes()
             else:
-                img = Image.fromarray(array)
-                buf = io.BytesIO()
-                img.save(buf, format="JPEG", quality=jpeg_quality)
-                frame = buf.getvalue()
-
-            # Save snapshot for YOLO training if enabled
-            _maybe_save_snapshot(frame)
+                frame = raw_frame
 
             # Publish to shared buffer
             with _frame_condition:
@@ -539,6 +553,8 @@ def main():
                         help="Directory for saved snapshots (default: ./snapshots)")
     parser.add_argument("--max-snapshots", type=int, default=1000,
                         help="Max snapshots to keep; oldest deleted when exceeded (default: 1000)")
+    parser.add_argument("--awb-gains", type=float, nargs=2, metavar=("RED", "BLUE"), default=None,
+                        help="Manual white balance gains (e.g. --awb-gains 2.5 2.3 for UVA/UVB brooder lighting). Omit for auto WB.")
     args = parser.parse_args()
 
     server_url = args.server
@@ -551,12 +567,13 @@ def main():
     max_snapshots = args.max_snapshots
 
     # Initialize the selected camera
-    init_camera(args.camera_index, args.width, args.height)
+    init_camera(args.camera_index, args.width, args.height, awb_gains=args.awb_gains)
 
     print(f"\n\033[1m[QuailSync Camera]\033[0m")
     print(f"  Camera:     index {args.camera_index}")
     print(f"  Resolution: {args.width}x{args.height}")
     print(f"  JPEG:       quality {jpeg_quality}")
+    print(f"  AWB:        {'manual red={} blue={}'.format(*args.awb_gains) if args.awb_gains else 'auto'}")
     print(f"  Stream:     http://0.0.0.0:{args.port}/stream")
     print(f"  Snapshot:   http://0.0.0.0:{args.port}/snapshot")
     print(f"  QR JSON:    http://0.0.0.0:{args.port}/qr-status")
