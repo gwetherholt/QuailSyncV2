@@ -193,33 +193,32 @@ def _capture_loop():
             if frame_count % 30 == 0:
                 qr_rects = _scan_array_for_qr(array)
 
-            # Encode raw frame FIRST (no overlay) for clean YOLO snapshots
-            if CV2_AVAILABLE:
-                _, jpeg_raw = cv2.imencode('.jpg', array, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
-                raw_frame = jpeg_raw.tobytes()
-            else:
-                img = Image.fromarray(array)
-                buf = io.BytesIO()
-                img.save(buf, format="JPEG", quality=jpeg_quality)
-                raw_frame = buf.getvalue()
+            # Encode raw frame FIRST (no overlay) for clean YOLO snapshots.
+            # Use PIL for all JPEG encoding — cv2.imencode assumes BGR input
+            # but capture_array() returns RGB, causing blue color cast.
+            raw_img = Image.fromarray(array)
+            raw_buf = io.BytesIO()
+            raw_img.save(raw_buf, format="JPEG", quality=jpeg_quality)
+            raw_frame = raw_buf.getvalue()
 
             # Save raw (no overlay) snapshot for YOLO training
             _maybe_save_snapshot(raw_frame)
 
-            # Draw QR overlay on the array for the live stream
+            # Draw QR overlay on the array for the live stream.
+            # cv2 drawing only — rectangle/putText don't depend on channel order.
             rects_to_draw = qr_rects if qr_rects else last_qr_rects
             if rects_to_draw and CV2_AVAILABLE:
+                array = array.copy()
                 for (x, y, w, h) in rects_to_draw:
                     cv2.rectangle(array, (x, y), (x + w, y + h), (0, 255, 0), 3)
                     label = last_qr_raw or ""
                     if label:
                         cv2.putText(array, label, (x, y - 10),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-
-            # Encode overlaid frame for stream/snapshot clients
-            if rects_to_draw and CV2_AVAILABLE:
-                _, jpeg_overlay = cv2.imencode('.jpg', array, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
-                frame = jpeg_overlay.tobytes()
+                overlay_img = Image.fromarray(array)
+                overlay_buf = io.BytesIO()
+                overlay_img.save(overlay_buf, format="JPEG", quality=jpeg_quality)
+                frame = overlay_buf.getvalue()
             else:
                 frame = raw_frame
 
