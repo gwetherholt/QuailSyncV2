@@ -562,10 +562,12 @@ async fn cmd_alerts(base: &str, minutes: u64) -> anyhow::Result<()> {
         let sev_tag = match alert.severity {
             Severity::Critical => "[CRIT]".red().bold(),
             Severity::Warning => "[WARN]".yellow().bold(),
+            Severity::Info => "[INFO]".blue().bold(),
         };
         let msg = match alert.severity {
             Severity::Critical => alert.message.red().to_string(),
             Severity::Warning => alert.message.yellow().to_string(),
+            Severity::Info => alert.message.blue().to_string(),
         };
         println!("  {} {} {}", alert.timestamp.dimmed(), sev_tag, msg);
     }
