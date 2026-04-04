@@ -10,10 +10,12 @@ pub use routes::backup::auto_backup_if_needed;
 pub use state::AppState;
 
 use axum::extract::State;
-use axum::http::{header, StatusCode, Uri};
+use axum::http::{header, Request, StatusCode, Uri};
+use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse};
 use axum::routing::get;
 use axum::Router;
+use metrics::counter;
 use rust_embed::Embed;
 
 #[derive(Embed)]
@@ -39,6 +41,12 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
             None => (StatusCode::NOT_FOUND, "not found").into_response(),
         },
     }
+}
+
+async fn request_counter(req: Request<axum::body::Body>, next: Next) -> impl IntoResponse {
+    let path = req.uri().path().to_string();
+    counter!("quailsync_http_requests_total", "endpoint" => path).increment(1);
+    next.run(req).await
 }
 
 async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
@@ -207,5 +215,6 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/backups", get(backup::list_backups))
         .route("/api/restore", axum::routing::post(backup::restore_backup))
         .fallback(static_handler)
+        .layer(middleware::from_fn(request_counter))
         .with_state(state)
 }

@@ -12,3 +12,33 @@ services:
   # reliably access Pi camera hardware. The libcamera/picamera2 stack requires direct
   # access to /dev/video*, DMA buffers, and GPU firmware that don't survive container
   # isolation even with --privileged and volume mounts. See deploy/quailsync-camera.service.
+
+  prometheus:
+    image: prom/prometheus:latest
+    network_mode: host
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.listen-address=:9090"
+    depends_on:
+      - server
+    restart: always
+
+  grafana:
+    image: grafana/grafana:latest
+    network_mode: host
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=quailsync
+      - GF_SERVER_HTTP_PORT=3001
+    depends_on:
+      - prometheus
+    restart: always
+
+volumes:
+  prometheus_data:
+  grafana_data:
