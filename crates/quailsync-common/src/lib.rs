@@ -698,9 +698,10 @@ mod tests {
 
     #[test]
     fn alert_config_defaults() {
+        // Default is the adult/unassigned range (68-72°F)
         let config = AlertConfig::default();
-        assert!((config.brooder_temp_min - 95.0).abs() < f64::EPSILON);
-        assert!((config.brooder_temp_max - 100.0).abs() < f64::EPSILON);
+        assert!((config.brooder_temp_min - 68.0).abs() < f64::EPSILON);
+        assert!((config.brooder_temp_max - 72.0).abs() < f64::EPSILON);
         assert!((config.humidity_min - 40.0).abs() < f64::EPSILON);
         assert!((config.humidity_max - 60.0).abs() < f64::EPSILON);
     }
@@ -710,8 +711,32 @@ mod tests {
         let config = AlertConfig::default();
         let json = serde_json::to_string(&config).unwrap();
         let back: AlertConfig = serde_json::from_str(&json).unwrap();
-        assert!((back.brooder_temp_min - 95.0).abs() < f64::EPSILON);
-        assert!((back.brooder_temp_max - 100.0).abs() < f64::EPSILON);
+        assert!((back.brooder_temp_min - 68.0).abs() < f64::EPSILON);
+        assert!((back.brooder_temp_max - 72.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn age_based_temp_week1() {
+        let (target, tolerance) = target_temp_for_age(3); // day 3 = week 1
+        assert!((target - 95.0).abs() < f64::EPSILON);
+        assert!((tolerance - 2.0).abs() < f64::EPSILON);
+        // Range: 93-97°F
+    }
+
+    #[test]
+    fn age_based_temp_week3() {
+        let (target, tolerance) = target_temp_for_age(18); // day 18 = week 3
+        assert!((target - 85.0).abs() < f64::EPSILON);
+        assert!((tolerance - 2.0).abs() < f64::EPSILON);
+        // Range: 83-87°F
+    }
+
+    #[test]
+    fn age_based_temp_week6_plus() {
+        let (target, tolerance) = target_temp_for_age(42); // day 42 = week 6+
+        assert!((target - 70.0).abs() < f64::EPSILON);
+        assert!((tolerance - 2.0).abs() < f64::EPSILON);
+        // Range: 68-72°F
     }
 
     // --- InbreedingCoefficient safe threshold ---
