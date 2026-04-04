@@ -109,19 +109,7 @@ pub fn check_brooder_alerts(conn: &Connection, reading: &BrooderReading, config:
         store_alert(conn, &severity, &msg);
     }
 
-    // Humidity alerts
-    if hum < 30.0 {
-        let msg = format!(
-            "Humidity CRITICAL on {}: {:.1}% (below 30%)",
-            age_label, hum,
-        );
-        log_alert(&Severity::Critical, &msg);
-        store_alert(conn, &Severity::Critical, &msg);
-    } else if hum < 40.0 {
-        let msg = format!("Humidity LOW on {}: {:.1}% (below 40%)", age_label, hum,);
-        log_alert(&Severity::Warning, &msg);
-        store_alert(conn, &Severity::Warning, &msg);
-    }
+    // Humidity alerts disabled — not critical for coturnix quail
 }
 
 fn log_alert(severity: &Severity, message: &str) {

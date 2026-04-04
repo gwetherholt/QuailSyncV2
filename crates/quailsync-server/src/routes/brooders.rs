@@ -266,9 +266,6 @@ pub(crate) async fn brooder_status(
                     "Temperature {:.1}\u{00b0}F out of range ({:.0}-{:.0})",
                     temp, temp_min, temp_max
                 ));
-            } else if hum < 40.0 {
-                alert = true;
-                msg = Some(format!("Humidity {:.1}% below 40%", hum));
             }
             (Some(temp), Some(hum), alert, msg)
         }

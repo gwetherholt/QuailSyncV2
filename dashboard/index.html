@@ -984,8 +984,7 @@
       // Client-side quick check — doesn't know chick age, so uses the full
       // possible range (week 6 low to week 1 high). Real alerts come from the server.
       if(temp < 63 || temp > 102) return 'Temperature '+temp.toFixed(1)+'\u00b0F outside safe range';
-      if(hum < 30) return 'Humidity CRITICAL: '+hum.toFixed(1)+'% (below 30%)';
-      if(hum < 40) return 'Humidity LOW: '+hum.toFixed(1)+'% (below 40%)';
+      // Humidity alerts disabled — not critical for coturnix quail
       return null;
     },
 
