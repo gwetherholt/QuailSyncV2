@@ -1,4 +1,5 @@
 use chrono::{NaiveDate, Utc};
+use metrics::counter;
 use quailsync_common::*;
 use rusqlite::{params, Connection};
 
@@ -108,6 +109,12 @@ pub fn check_brooder_alerts(conn: &Connection, reading: &BrooderReading, config:
 }
 
 fn log_alert(severity: &Severity, message: &str) {
+    let sev_str = match severity {
+        Severity::Info => "info",
+        Severity::Warning => "warning",
+        Severity::Critical => "critical",
+    };
+    counter!("quailsync_alerts_total", "severity" => sev_str).increment(1);
     match severity {
         Severity::Info => eprintln!("[INFO] {message}"),
         Severity::Warning => eprintln!("[WARN] {message}"),

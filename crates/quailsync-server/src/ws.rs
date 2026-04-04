@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::response::Response;
+use metrics::{counter, gauge};
 use quailsync_common::TelemetryPayload;
 use rusqlite::params;
 use tokio::sync::broadcast;
@@ -18,6 +19,7 @@ pub async fn ws_handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     println!("[ws] agent connected");
     state.agent_connected.store(true, Ordering::Relaxed);
+    gauge!("quailsync_websocket_connections", "type" => "agent").increment(1.0);
 
     while let Some(Ok(msg)) = socket.recv().await {
         match msg {
@@ -30,6 +32,11 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                         check_brooder_alerts(&conn, reading, &state.alert_config);
                         if let Some(bid) = reading.brooder_id {
                             touch_brooder(&state, bid);
+                            let bid_str = bid.to_string();
+                            gauge!("quailsync_temperature_fahrenheit", "brooder" => bid_str.clone())
+                                .set(reading.temperature_f);
+                            gauge!("quailsync_humidity_percent", "brooder" => bid_str)
+                                .set(reading.humidity_percent);
                         }
                     }
                     if let TelemetryPayload::QrDetected(ref qr) = payload {
@@ -52,6 +59,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     }
 
     state.agent_connected.store(false, Ordering::Relaxed);
+    gauge!("quailsync_websocket_connections", "type" => "agent").decrement(1.0);
 }
 
 pub async fn ws_live_handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
@@ -60,6 +68,7 @@ pub async fn ws_live_handler(State(state): State<AppState>, ws: WebSocketUpgrade
 
 async fn handle_live_socket(mut socket: WebSocket, state: AppState) {
     println!("[ws/live] dashboard client connected");
+    gauge!("quailsync_websocket_connections", "type" => "live").increment(1.0);
     let mut rx = state.live_tx.subscribe();
 
     loop {
@@ -87,6 +96,7 @@ async fn handle_live_socket(mut socket: WebSocket, state: AppState) {
     }
 
     println!("[ws/live] dashboard client disconnected");
+    gauge!("quailsync_websocket_connections", "type" => "live").decrement(1.0);
 }
 
 fn log_payload(payload: &TelemetryPayload) {

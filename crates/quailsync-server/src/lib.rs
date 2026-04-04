@@ -9,6 +9,7 @@ pub use db::init_db;
 pub use routes::backup::auto_backup_if_needed;
 pub use state::AppState;
 
+use axum::extract::State;
 use axum::http::{header, StatusCode, Uri};
 use axum::response::{Html, IntoResponse};
 use axum::routing::get;
@@ -40,11 +41,21 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
     }
 }
 
+async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let body = state.metrics_handle.render();
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        body,
+    )
+}
+
 pub fn build_app(state: AppState) -> Router {
     use routes::*;
 
     Router::new()
         .route("/health", get(telemetry::health))
+        .route("/metrics", get(metrics_handler))
         .route("/ws", get(ws::ws_handler))
         .route("/ws/live", get(ws::ws_live_handler))
         .route("/api/brooder/latest", get(telemetry::brooder_latest))

@@ -77,12 +77,19 @@ async fn main() {
 
     let (live_tx, _) = broadcast::channel::<String>(64);
 
+    // Install Prometheus metrics recorder
+    let prometheus_handle = metrics_exporter_prometheus::PrometheusBuilder::new()
+        .install_recorder()
+        .expect("failed to install Prometheus recorder");
+    println!("[metrics] Prometheus exporter installed (GET /metrics)");
+
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         agent_connected: Arc::new(AtomicBool::new(false)),
         alert_config,
         live_tx,
         last_seen: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+        metrics_handle: prometheus_handle,
     };
 
     let app = build_app(state);
