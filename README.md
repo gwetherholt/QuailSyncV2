@@ -182,7 +182,9 @@ The alert engine automatically adjusts thresholds based on the youngest chick gr
 | Pi Camera | Python 3, picamera2, pyzbar, OpenCV, ThreadingHTTPServer |
 | ESP32 Nodes | ESP32-C3 Super Mini, DHT22, Arduino framework, WebSocket client |
 | CI/CD | GitHub Actions — `cargo fmt`, `clippy`, `cargo test` |
-| Deployment | Docker Compose (server), systemd (cameras), Arduino IDE (ESP32) |
+| Observability | Prometheus (metrics scraping), Grafana (dashboards), `metrics` crate |
+| Remote Access | Tailscale (mesh VPN, no port forwarding) |
+| Deployment | Docker Compose (server + Prometheus + Grafana), systemd (cameras), Arduino IDE (ESP32) |
 
 ---
 
@@ -373,6 +375,45 @@ cd ~/quailsync && git reset --hard origin/main && docker compose up -d --build
 ```
 
 Camera service picks up changes with `sudo systemctl restart quailsync-camera`.
+
+---
+
+## Observability
+
+Prometheus and Grafana run alongside the QuailSync server via Docker Compose, providing real-time metrics and historical dashboards.
+
+The Rust server exposes a `GET /metrics` endpoint in Prometheus text format. Prometheus scrapes it every 15 seconds and collects:
+
+- **`quailsync_temperature_fahrenheit`** — current temperature per brooder (gauge, labeled by brooder ID)
+- **`quailsync_humidity_percent`** — current humidity per brooder (gauge)
+- **`quailsync_alerts_total`** — alert count by severity: info, warning, critical (counter)
+- **`quailsync_websocket_connections`** — active WebSocket connections by type: agent, live (gauge)
+- **`quailsync_http_requests_total`** — HTTP request count by endpoint path (counter)
+
+Grafana runs on port 3001 (default login: admin / quailsync) and connects to Prometheus as a data source. Use it to build dashboards for brooder temperature trends over time, alert frequency, and system health.
+
+```bash
+# Everything starts together
+docker compose up -d
+
+# Prometheus UI: http://<pi-ip>:9090
+# Grafana UI:    http://<pi-ip>:3001
+```
+
+---
+
+## Remote Access
+
+[Tailscale](https://tailscale.com) provides secure remote access to the entire QuailSync stack without port forwarding or firewall changes. Install Tailscale on the Pi and on any client device (phone, laptop), and everything is accessible over a private mesh VPN.
+
+With Tailscale running, the full stack works from anywhere — cellular, coffee shop WiFi, or another network entirely:
+
+- **Dashboard**: `http://<tailscale-ip>:3000`
+- **Grafana**: `http://<tailscale-ip>:3001`
+- **Camera stream**: `http://<tailscale-ip>:8080/stream`
+- **Android app**: Set the server URL in Settings to the Tailscale IP
+
+The Android app automatically rewrites camera stream URLs to use the configured server host, so camera feeds work seamlessly over Tailscale even though the Pi announces its LAN IP internally.
 
 ---
 
