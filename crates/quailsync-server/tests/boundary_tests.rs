@@ -1007,6 +1007,10 @@ async fn ws_malformed_telemetry_variants() {
 // 8. ALERT ENGINE TESTS
 // ===========================================================================
 
+// Alert tests use brooders with no chick group assigned, so they fall back
+// to the adult/unassigned range: 68-72°F (target 70°F ± 2°F).
+// Severity: >5°F outside → Critical, 2-5°F → Warning, 1-2°F → Info, <1°F → none.
+
 #[tokio::test]
 async fn alert_exactly_at_min_threshold() {
     let base = spawn_test_server().await;
@@ -1016,10 +1020,10 @@ async fn alert_exactly_at_min_threshold() {
     let ws_base = ws_url(&base);
     let (mut ws, _) = connect_async(format!("{ws_base}/ws")).await.unwrap();
 
-    // Exactly 95.0 (min threshold) — should NOT trigger alert
+    // Exactly 68.0°F (min of adult range) — should NOT trigger alert
     let payload = json!({
         "Brooder": {
-            "temperature_f": 95.0,
+            "temperature_f": 68.0,
             "humidity_percent": 50.0,
             "timestamp": "2026-03-01T12:00:00.000Z",
             "brooder_id": bid,
@@ -1052,10 +1056,10 @@ async fn alert_exactly_at_max_threshold() {
     let ws_base = ws_url(&base);
     let (mut ws, _) = connect_async(format!("{ws_base}/ws")).await.unwrap();
 
-    // Exactly 100.0 (max threshold) — should NOT trigger alert
+    // Exactly 72.0°F (max of adult range) — should NOT trigger alert
     let payload = json!({
         "Brooder": {
-            "temperature_f": 100.0,
+            "temperature_f": 72.0,
             "humidity_percent": 50.0,
             "timestamp": "2026-03-01T12:00:00.000Z",
             "brooder_id": bid,
@@ -1088,9 +1092,10 @@ async fn alert_one_degree_below_min() {
     let ws_base = ws_url(&base);
     let (mut ws, _) = connect_async(format!("{ws_base}/ws")).await.unwrap();
 
+    // 66.5°F = 1.5°F below min (68) → Info severity (1-2°F outside)
     let payload = json!({
         "Brooder": {
-            "temperature_f": 94.0,
+            "temperature_f": 66.5,
             "humidity_percent": 50.0,
             "timestamp": "2026-03-01T12:00:00.000Z",
             "brooder_id": bid,
@@ -1107,12 +1112,12 @@ async fn alert_one_degree_below_min() {
         .await
         .unwrap();
     let alerts: Vec<Value> = resp.json().await.unwrap();
-    assert_eq!(alerts.len(), 1, "Reading 1 below min should trigger alert");
+    assert_eq!(alerts.len(), 1, "1.5°F below min should trigger alert");
     assert!(
         alerts[0]["message"].as_str().unwrap().contains("LOW"),
         "Alert should say LOW"
     );
-    assert_eq!(alerts[0]["severity"].as_str().unwrap(), "Warning");
+    assert_eq!(alerts[0]["severity"].as_str().unwrap(), "Info");
 }
 
 #[tokio::test]
@@ -1124,9 +1129,10 @@ async fn alert_one_degree_above_max() {
     let ws_base = ws_url(&base);
     let (mut ws, _) = connect_async(format!("{ws_base}/ws")).await.unwrap();
 
+    // 75.0°F = 3°F above max (72) → Warning severity (2-5°F outside)
     let payload = json!({
         "Brooder": {
-            "temperature_f": 101.0,
+            "temperature_f": 75.0,
             "humidity_percent": 50.0,
             "timestamp": "2026-03-01T12:00:00.000Z",
             "brooder_id": bid,
@@ -1157,10 +1163,10 @@ async fn alert_critical_when_far_from_threshold() {
     let ws_base = ws_url(&base);
     let (mut ws, _) = connect_async(format!("{ws_base}/ws")).await.unwrap();
 
-    // >3 degrees below min → Critical
+    // 60.0°F = 8°F below min (68) → Critical severity (>5°F outside)
     let payload = json!({
         "Brooder": {
-            "temperature_f": 90.0,
+            "temperature_f": 60.0,
             "humidity_percent": 50.0,
             "timestamp": "2026-03-01T12:00:00.000Z",
             "brooder_id": bid,
@@ -1182,18 +1188,20 @@ async fn alert_critical_when_far_from_threshold() {
 }
 
 #[tokio::test]
-async fn alert_humidity_low() {
+async fn alert_humidity_disabled() {
+    // Humidity alerts are disabled for coturnix quail — verify no alert generated
     let base = spawn_test_server().await;
-    let brooder = seed_brooder(&base, "HumLow").await;
+    let brooder = seed_brooder(&base, "HumDisabled").await;
     let bid = brooder["id"].as_i64().unwrap();
 
     let ws_base = ws_url(&base);
     let (mut ws, _) = connect_async(format!("{ws_base}/ws")).await.unwrap();
 
+    // Temp in range (70°F), humidity extremely low (10%) — should NOT alert
     let payload = json!({
         "Brooder": {
-            "temperature_f": 97.0,
-            "humidity_percent": 30.0,
+            "temperature_f": 70.0,
+            "humidity_percent": 10.0,
             "timestamp": "2026-03-01T12:00:00.000Z",
             "brooder_id": bid,
         }
@@ -1209,46 +1217,11 @@ async fn alert_humidity_low() {
         .await
         .unwrap();
     let alerts: Vec<Value> = resp.json().await.unwrap();
-    assert_eq!(alerts.len(), 1);
-    assert!(alerts[0]["message"]
-        .as_str()
-        .unwrap()
-        .contains("Humidity LOW"));
-}
-
-#[tokio::test]
-async fn alert_humidity_high() {
-    let base = spawn_test_server().await;
-    let brooder = seed_brooder(&base, "HumHigh").await;
-    let bid = brooder["id"].as_i64().unwrap();
-
-    let ws_base = ws_url(&base);
-    let (mut ws, _) = connect_async(format!("{ws_base}/ws")).await.unwrap();
-
-    let payload = json!({
-        "Brooder": {
-            "temperature_f": 97.0,
-            "humidity_percent": 75.0,
-            "timestamp": "2026-03-01T12:00:00.000Z",
-            "brooder_id": bid,
-        }
-    });
-    ws.send(Message::Text(payload.to_string().into()))
-        .await
-        .unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    let resp = client()
-        .get(format!("{base}/api/alerts?minutes=10"))
-        .send()
-        .await
-        .unwrap();
-    let alerts: Vec<Value> = resp.json().await.unwrap();
-    assert_eq!(alerts.len(), 1);
-    assert!(alerts[0]["message"]
-        .as_str()
-        .unwrap()
-        .contains("Humidity HIGH"));
+    assert_eq!(
+        alerts.len(),
+        0,
+        "Humidity alerts are disabled — should not generate any alert"
+    );
 }
 
 #[tokio::test]
@@ -1260,9 +1233,10 @@ async fn alert_rapid_oscillation() {
     let ws_base = ws_url(&base);
     let (mut ws, _) = connect_async(format!("{ws_base}/ws")).await.unwrap();
 
-    // Alternate above and below threshold 50 times
+    // Alternate above and below the adult range (68-72°F) 50 times
+    // 65°F = 3°F below min → Warning; 75°F = 3°F above max → Warning
     for i in 0..50 {
-        let temp = if i % 2 == 0 { 94.0 } else { 101.0 };
+        let temp = if i % 2 == 0 { 65.0 } else { 75.0 };
         let payload = json!({
             "Brooder": {
                 "temperature_f": temp,
