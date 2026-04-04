@@ -371,7 +371,7 @@ fun SettingsScreen() {
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Background Monitoring", style = MaterialTheme.typography.bodyLarge)
-                        Text("Monitor brooder temps & humidity in background. Alerts on threshold violations.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Monitor brooder temps in background. Alerts when temperature is outside age-based range.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Switch(
                         checked = monitoringEnabled,
@@ -381,11 +381,11 @@ fun SettingsScreen() {
                 }
 
                 HorizontalDivider(Modifier.padding(vertical = 12.dp))
-                Text("Alert Thresholds", style = MaterialTheme.typography.bodyLarge)
+                Text("Alert Thresholds (age-based)", style = MaterialTheme.typography.bodyLarge)
                 Spacer(Modifier.height(4.dp))
-                Text("CRITICAL: Temp < 60°F or > 75°F", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("WARNING: Temp < 65°F or > 72°F", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("WARNING: Humidity < 40% or > 80%", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Temperature thresholds adjust by chick age:", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Week 1: 93-97°F, Week 2: 88-92°F, ..., Week 6+: 68-72°F", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("CRITICAL: >5°F outside range, WARNING: 2-5°F, INFO: 1-2°F", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("Sensor offline: No data for 2 min", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
                 HorizontalDivider(Modifier.padding(vertical = 12.dp))

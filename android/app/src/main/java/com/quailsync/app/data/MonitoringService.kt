@@ -28,9 +28,7 @@ class MonitoringService : Service() {
         private const val TEMP_WARNING_LOW = 63.0     // below week 6 range
         private const val TEMP_WARNING_HIGH = 100.0   // above week 1 range
 
-        // Humidity thresholds (%)
-        private const val HUMIDITY_WARNING_LOW = 40.0
-        private const val HUMIDITY_WARNING_HIGH = 80.0
+        // Humidity alerts disabled — not critical for coturnix quail
 
         // Timing
         private const val OFFLINE_TIMEOUT_MS = 2 * 60 * 1000L // 2 minutes
@@ -229,18 +227,7 @@ class MonitoringService : Service() {
             }
         }
 
-        if (humidity != null) {
-            when {
-                humidity < HUMIDITY_WARNING_LOW -> {
-                    if (severity != "CRITICAL") severity = "WARNING"
-                    messages.add("Humidity low: %.0f%% (below %.0f%%)".format(humidity, HUMIDITY_WARNING_LOW))
-                }
-                humidity > HUMIDITY_WARNING_HIGH -> {
-                    if (severity != "CRITICAL") severity = "WARNING"
-                    messages.add("Humidity high: %.0f%% (above %.0f%%)".format(humidity, HUMIDITY_WARNING_HIGH))
-                }
-            }
-        }
+        // Humidity alerts disabled — not critical for coturnix quail
 
         if (severity == "OK") {
             // Clear alert state if it was previously alerting

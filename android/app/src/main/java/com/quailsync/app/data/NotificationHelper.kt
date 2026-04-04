@@ -22,10 +22,10 @@ object NotificationHelper {
 
         val alertChannel = NotificationChannel(
             CHANNEL_ALERTS,
-            "Temperature & Humidity Alerts",
+            "Temperature Alerts",
             NotificationManager.IMPORTANCE_HIGH,
         ).apply {
-            description = "Critical alerts when brooder temperature or humidity is out of range"
+            description = "Alerts when brooder temperature is outside age-based thresholds"
             enableVibration(true)
         }
 

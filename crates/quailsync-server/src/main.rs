@@ -70,11 +70,9 @@ async fn main() {
 
     let alert_config = AlertConfig::default();
     println!(
-        "[alerts] thresholds: temp {:.0}-{:.0}\u{00b0}F, humidity {:.0}-{:.0}%",
+        "[alerts] default temp range: {:.0}-{:.0}\u{00b0}F (age-based when chicks assigned, humidity alerts disabled)",
         alert_config.brooder_temp_min,
         alert_config.brooder_temp_max,
-        alert_config.humidity_min,
-        alert_config.humidity_max,
     );
 
     let (live_tx, _) = broadcast::channel::<String>(64);
