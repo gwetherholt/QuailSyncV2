@@ -24,27 +24,22 @@ pub fn youngest_chick_age_in_brooder(conn: &Connection, brooder_id: i64) -> Opti
     .ok()
 }
 
-/// Check brooder readings against age-based temperature thresholds and humidity limits.
+/// Check brooder readings against age-based temperature thresholds.
 ///
-/// Temperature ranges by chick age (from target_temp_for_age):
-///   Week 1 (0-7d):  93-97°F
-///   Week 2 (8-14d): 88-92°F
-///   Week 3 (15-21d): 83-87°F
-///   Week 4 (22-28d): 78-82°F
-///   Week 5 (29-35d): 73-77°F
-///   Week 6+ (36+d): 68-72°F
+/// Temperature ranges by chick age (from `target_temp_for_age`):
+/// - Week 1 (0-7d): 93-97°F
+/// - Week 2 (8-14d): 88-92°F
+/// - Week 3 (15-21d): 83-87°F
+/// - Week 4 (22-28d): 78-82°F
+/// - Week 5 (29-35d): 73-77°F
+/// - Week 6+ (36+d): 68-72°F
 ///
 /// Alert severity by deviation:
-///   >5°F outside range → CRITICAL
-///   2-5°F outside range → WARNING
-///   1-2°F outside range → INFO
-///
-/// Humidity:
-///   <30% → CRITICAL
-///   <40% → WARNING
+/// - >5°F outside range → CRITICAL
+/// - 2-5°F outside range → WARNING
+/// - 1-2°F outside range → INFO
 pub fn check_brooder_alerts(conn: &Connection, reading: &BrooderReading, config: &AlertConfig) {
     let temp = reading.temperature_f;
-    let hum = reading.humidity_percent;
 
     // Determine temperature range based on chick age in this brooder
     let (temp_min, temp_max, age_label) = if let Some(bid) = reading.brooder_id {
