@@ -81,7 +81,8 @@ server_url = None
 default_brooder_id = 1
 stream_port = 8080
 picam2 = None  # initialized in main()
-jpeg_quality = 85
+jpeg_quality = 85       # quality for saved snapshots (YOLO training data)
+stream_quality = 70     # quality for MJPEG stream (lower = less bandwidth)
 _camera_ready_time = 0  # set after AWB settling in init_camera
 
 # White balance: RGB multipliers applied per-frame via numpy.
@@ -186,19 +187,22 @@ def _capture_loop():
             if frame_count % 30 == 0:
                 qr_rects = _scan_array_for_qr(array)
 
-            # Encode frame to JPEG via PIL (correct RGB handling).
-            # No overlay drawing — clean frames for YOLO training and streaming.
+            # Encode to PIL Image once, then save at two quality levels
             frame_img = Image.fromarray(array)
-            frame_buf = io.BytesIO()
-            frame_img.save(frame_buf, format="JPEG", quality=jpeg_quality)
-            frame = frame_buf.getvalue()
 
-            # Save snapshot for YOLO training
-            _maybe_save_snapshot(frame)
+            # High quality for YOLO training snapshots (full resolution, quality 85)
+            snapshot_buf = io.BytesIO()
+            frame_img.save(snapshot_buf, format="JPEG", quality=jpeg_quality)
+            _maybe_save_snapshot(snapshot_buf.getvalue())
 
-            # Publish to shared buffer
+            # Lower quality for MJPEG stream (reduces bandwidth for Tailscale/remote)
+            stream_buf = io.BytesIO()
+            frame_img.save(stream_buf, format="JPEG", quality=stream_quality)
+            stream_frame = stream_buf.getvalue()
+
+            # Publish stream frame to shared buffer
             with _frame_condition:
-                _latest_frame = frame
+                _latest_frame = stream_frame
                 _frame_counter += 1
                 _frame_condition.notify_all()
 
@@ -441,12 +445,12 @@ class StreamHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
         last_counter = 0
         try:
             while True:
                 with _frame_condition:
-                    # Wait until a new frame is available
                     while _frame_counter == last_counter:
                         _frame_condition.wait(timeout=2.0)
                     frame = _latest_frame
@@ -455,11 +459,18 @@ class StreamHandler(BaseHTTPRequestHandler):
                 if frame is None:
                     continue
 
-                self.wfile.write(b"--frame\r\n")
-                self.wfile.write(b"Content-Type: image/jpeg\r\n")
-                self.wfile.write(f"Content-Length: {len(frame)}\r\n\r\n".encode())
-                self.wfile.write(frame)
-                self.wfile.write(b"\r\n")
+                # Write complete MJPEG part with proper boundary + headers.
+                # Content-Length ensures clients don't render partial frames.
+                part = (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    + f"Content-Length: {len(frame)}\r\n".encode()
+                    + b"\r\n"
+                    + frame
+                    + b"\r\n"
+                )
+                self.wfile.write(part)
+                self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             pass
 
@@ -664,7 +675,7 @@ class StreamHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    global server_url, default_brooder_id, stream_port, jpeg_quality, active_brooder_id
+    global server_url, default_brooder_id, stream_port, jpeg_quality, stream_quality, active_brooder_id
     global collect_snapshots, snapshot_interval, snapshot_dir, max_snapshots
 
     parser = argparse.ArgumentParser(description="QuailSync Camera Stream")
@@ -680,7 +691,9 @@ def main():
     parser.add_argument("--height", type=int, default=1080,
                         help="Capture height in pixels (default: 1080)")
     parser.add_argument("--jpeg-quality", type=int, default=85,
-                        help="JPEG compression quality 1-100 (default: 85)")
+                        help="Snapshot JPEG quality 1-100 for YOLO training data (default: 85)")
+    parser.add_argument("--stream-quality", type=int, default=70,
+                        help="MJPEG stream JPEG quality 1-100, lower = less bandwidth (default: 70)")
     parser.add_argument("--collect-snapshots", action="store_true", default=False,
                         help="Save periodic snapshots for YOLO training to ./snapshots/")
     parser.add_argument("--snapshot-interval", type=int, default=600,
@@ -697,6 +710,7 @@ def main():
     default_brooder_id = args.brooder_id
     stream_port = args.port
     jpeg_quality = args.jpeg_quality
+    stream_quality = args.stream_quality
     collect_snapshots = args.collect_snapshots
     snapshot_interval = args.snapshot_interval
     snapshot_dir = args.snapshot_dir
@@ -727,7 +741,7 @@ def main():
     print(f"\n\033[1m[QuailSync Camera]\033[0m")
     print(f"  Camera:     index {args.camera_index}")
     print(f"  Resolution: {args.width}x{args.height}")
-    print(f"  JPEG:       quality {jpeg_quality}")
+    print(f"  JPEG:       snapshot q{jpeg_quality}, stream q{stream_quality}")
     print(f"  WB:         {wb_str}")
     print(f"  WB Tuning:  http://0.0.0.0:{args.port}/settings")
     print(f"  Stream:     http://0.0.0.0:{args.port}/stream")

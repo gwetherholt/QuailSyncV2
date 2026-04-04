@@ -122,6 +122,29 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val serverUrl = ServerConfig.getServerUrl(application)
     private val api = QuailSyncApi.create(serverUrl)
 
+    /** Rewrite a camera URL's host to match the configured server host.
+     *  This ensures camera streams work over Tailscale/VPN — the Pi announces
+     *  its LAN IP (192.168.x.x) but the user may be connecting via a different
+     *  IP (e.g. Tailscale 100.x.x.x). The camera port is preserved. */
+    private fun rewriteCameraUrl(cameraUrl: String): String {
+        try {
+            val serverUri = java.net.URI(serverUrl)
+            val camUri = java.net.URI(cameraUrl)
+            val serverHost = serverUri.host ?: return cameraUrl
+            val camHost = camUri.host ?: return cameraUrl
+            if (serverHost == camHost) return cameraUrl
+            // Replace host, keep camera's port and path
+            val rewritten = java.net.URI(
+                camUri.scheme, null, serverHost, camUri.port, camUri.path, camUri.query, null
+            ).toString()
+            Log.d("QuailSync", "Rewrote camera URL: $cameraUrl → $rewritten")
+            return rewritten
+        } catch (e: Exception) {
+            Log.w("QuailSync", "Failed to rewrite camera URL: $cameraUrl", e)
+            return cameraUrl
+        }
+    }
+
     private val _cameraItems = MutableStateFlow<List<CameraItem>>(emptyList())
     val cameraItems: StateFlow<List<CameraItem>> = _cameraItems.asStateFlow()
 
@@ -161,7 +184,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 items.add(CameraItem(
                     name = c.name,
                     subtitle = c.brooderName ?: c.location,
-                    streamUrl = c.feedUrl ?: c.url,
+                    streamUrl = (c.feedUrl ?: c.url)?.let { rewriteCameraUrl(it) },
                     source = CameraSource.Standalone(c),
                 ))
             }
@@ -180,13 +203,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val broodersWithCameras = brooders.filter { it.cameraUrl != null }
             Log.d("QuailSync", "Brooders with camera_url: ${broodersWithCameras.size}")
             broodersWithCameras.forEach { b ->
-                val alreadyListed = items.any { item -> item.streamUrl == b.cameraUrl }
+                val rewrittenUrl = b.cameraUrl?.let { rewriteCameraUrl(it) }
+                val alreadyListed = items.any { item -> item.streamUrl == rewrittenUrl || item.streamUrl == b.cameraUrl }
                 Log.d("QuailSync", "  Brooder ${b.id} '${b.name}' url=${b.cameraUrl} alreadyListed=$alreadyListed")
                 if (!alreadyListed) {
                     items.add(CameraItem(
                         name = "${b.name} Camera",
                         subtitle = b.name,
-                        streamUrl = b.cameraUrl,
+                        streamUrl = rewrittenUrl,
                         source = CameraSource.BrooderCamera(b),
                     ))
                 }
@@ -822,8 +846,8 @@ fun MjpegStreamView(url: String, modifier: Modifier = Modifier, refreshKey: Int 
             while (isActive) {
                 try {
                     val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-                    connection.connectTimeout = 5000
-                    connection.readTimeout = 10000
+                    connection.connectTimeout = 10000
+                    connection.readTimeout = 30000
                     connection.connect()
 
                     val stream = java.io.BufferedInputStream(connection.inputStream, 16384)
