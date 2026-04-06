@@ -11,6 +11,11 @@ Dependencies:
 Usage:
     python roboflow_prep.py ./snapshots ./roboflow-ready
     python roboflow_prep.py ./snapshots ./roboflow-ready --blur-threshold 80 --dry-run
+
+Automated daily runs:
+    Use tools/sync_snapshots.ps1 which wraps this script with incremental
+    processing (only new images) and a processed-file log. Install it as
+    a daily 9 AM scheduled task with tools/install_scheduler.ps1.
 """
 
 import argparse
