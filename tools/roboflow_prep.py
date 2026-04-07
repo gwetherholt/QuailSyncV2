@@ -72,12 +72,13 @@ def main():
         print(f"Error: input directory '{args.input_dir}' does not exist")
         sys.exit(1)
 
-    # Gather all image files
+    # Gather image files in the input directory (top-level only, skip subdirectories)
     extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
     files = sorted(
         f
         for f in os.listdir(args.input_dir)
-        if os.path.splitext(f)[1].lower() in extensions
+        if os.path.isfile(os.path.join(args.input_dir, f))
+        and os.path.splitext(f)[1].lower() in extensions
     )
 
     total = len(files)

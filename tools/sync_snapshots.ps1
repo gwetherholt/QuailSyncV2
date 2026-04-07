@@ -12,7 +12,8 @@ $ErrorActionPreference = "Stop"
 
 # --- Configuration ---
 $SnapshotDir   = "C:\QuailSyncSnapshots"
-$StagingDir    = "C:\roboflow-staging"
+$DateStamp     = Get-Date -Format "yyyy-MM-dd"
+$StagingDir    = Join-Path $SnapshotDir "${DateStamp}_roboflow-ready"
 $BlurThreshold = 50
 $ScriptDir     = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $RepoRoot      = Split-Path -Parent $ScriptDir
@@ -68,11 +69,26 @@ foreach ($img in $newImages) {
 
 Write-Host "[sync] Copied $newCount new images to temp dir for processing"
 
+# --- Resolve Python executable ---
+$PythonExe = (Get-Command python -ErrorAction SilentlyContinue).Source
+if (-not $PythonExe) {
+    $PythonExe = (Get-Command python3 -ErrorAction SilentlyContinue).Source
+}
+if (-not $PythonExe) {
+    $PythonExe = (Get-Command py -ErrorAction SilentlyContinue).Source
+}
+if (-not $PythonExe) {
+    Write-Host "[sync] ERROR: Could not find Python executable" -ForegroundColor Red
+    Remove-Item -Path $tempDir -Recurse -Force
+    exit 1
+}
+Write-Host "[sync] Using Python: $PythonExe"
+
 # --- Run roboflow_prep.py ---
 Write-Host "[sync] Running roboflow_prep.py with blur threshold $BlurThreshold..."
 Write-Host ""
 
-python $PrepScript $tempDir $StagingDir --blur-threshold $BlurThreshold
+& $PythonExe $PrepScript $tempDir $StagingDir --blur-threshold $BlurThreshold 2>&1 | ForEach-Object { Write-Host $_ }
 
 $exitCode = $LASTEXITCODE
 Write-Host ""
