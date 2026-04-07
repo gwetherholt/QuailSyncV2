@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::response::Response;
-use metrics::{counter, gauge};
+use metrics::gauge;
 use quailsync_common::TelemetryPayload;
 use rusqlite::params;
 use tokio::sync::broadcast;
