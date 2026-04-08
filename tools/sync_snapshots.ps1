@@ -69,16 +69,10 @@ foreach ($img in $newImages) {
 
 Write-Host "[sync] Copied $newCount new images to temp dir for processing"
 
-# --- Resolve Python executable ---
-$PythonExe = (Get-Command python -ErrorAction SilentlyContinue).Source
-if (-not $PythonExe) {
-    $PythonExe = (Get-Command python3 -ErrorAction SilentlyContinue).Source
-}
-if (-not $PythonExe) {
-    $PythonExe = (Get-Command py -ErrorAction SilentlyContinue).Source
-}
-if (-not $PythonExe) {
-    Write-Host "[sync] ERROR: Could not find Python executable" -ForegroundColor Red
+# --- Python executable (hardcoded to avoid Cygwin's python being picked up) ---
+$PythonExe = "C:\Users\Georgia\AppData\Local\Programs\Python\Python313\python.exe"
+if (-not (Test-Path $PythonExe)) {
+    Write-Host "[sync] ERROR: Python not found at $PythonExe" -ForegroundColor Red
     Remove-Item -Path $tempDir -Recurse -Force
     exit 1
 }

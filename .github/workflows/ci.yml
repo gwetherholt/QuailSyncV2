@@ -1,28 +1,22 @@
-name: CI
-
+name: CI/CD
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 env:
   CARGO_TERM_COLOR: always
-
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-
       - uses: actions/cache@v4
         with:
           path: |
@@ -32,7 +26,48 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             cargo-${{ runner.os }}-
-
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+
+  deploy:
+    needs: check
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Log in to ACR
+        run: |
+          echo ${{ secrets.ACR_PASSWORD }} | docker login quailsyncregistry.azurecr.io -u ${{ secrets.ACR_USERNAME }} --password-stdin
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t quailsyncregistry.azurecr.io/quailsync-server:latest -t quailsyncregistry.azurecr.io/quailsync-server:${{ github.sha }} .
+          docker push quailsyncregistry.azurecr.io/quailsync-server:latest
+          docker push quailsyncregistry.azurecr.io/quailsync-server:${{ github.sha }}
+
+      - name: Deploy to ACI
+        run: |
+          az container delete --resource-group rg-quailsync --name quailsync-server --yes || true
+          az container create \
+            --resource-group rg-quailsync \
+            --name quailsync-server \
+            --image quailsyncregistry.azurecr.io/quailsync-server:${{ github.sha }} \
+            --os-type Linux \
+            --cpu 1 \
+            --memory 0.5 \
+            --ports 3000 \
+            --ip-address Public \
+            --registry-login-server quailsyncregistry.azurecr.io \
+            --registry-username ${{ secrets.ACR_USERNAME }} \
+            --registry-password ${{ secrets.ACR_PASSWORD }} \
+            --azure-file-volume-account-name quailsyncstorage \
+            --azure-file-volume-account-key ${{ secrets.AZURE_STORAGE_KEY }} \
+            --azure-file-volume-share-name quailsync-data \
+            --azure-file-volume-mount-path /data
