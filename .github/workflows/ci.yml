@@ -58,6 +58,9 @@ jobs:
           resource-group: rg-quailsync
           cluster-name: aks-quailsync
 
+      - name: Apply Kubernetes manifests
+        run: kubectl apply -f deploy/k8s/
+
       - name: Deploy to AKS
         run: |
           kubectl set image deployment/quailsync-server quailsync-server=quailsyncregistry.azurecr.io/quailsync-server:${{ github.sha }}

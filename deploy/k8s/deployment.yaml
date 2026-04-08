@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quailsync-server
+  labels:
+    app: quailsync-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: quailsync-server
+  template:
+    metadata:
+      labels:
+        app: quailsync-server
+    spec:
+      containers:
+        - name: quailsync-server
+          image: quailsyncregistry.azurecr.io/quailsync-server:latest
+          ports:
+            - containerPort: 3000
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+        - name: caddy
+          image: caddy:2-alpine
+          ports:
+            - containerPort: 80
+            - containerPort: 443
+          volumeMounts:
+            - name: caddy-config
+              mountPath: /etc/caddy
+            - name: caddy-data
+              mountPath: /data
+              subPath: caddy
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: quailsync-data-disk
+        - name: caddy-config
+          configMap:
+            name: caddy-config
+        - name: caddy-data
+          persistentVolumeClaim:
+            claimName: caddy-data

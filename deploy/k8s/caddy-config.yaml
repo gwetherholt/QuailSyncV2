@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: caddy-config
+data:
+  Caddyfile: |
+    quailsync.westus2.cloudapp.azure.com {
+      reverse_proxy localhost:3000
+    }
