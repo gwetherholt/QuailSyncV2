@@ -80,6 +80,7 @@ last_qr_rects = []       # bounding boxes from last QR scan (for /qr-status)
 server_url = None
 default_brooder_id = 1
 stream_port = 8080
+advertise_ip = None  # if set, use this IP in stream announcements instead of auto-detect
 picam2 = None  # initialized in main()
 jpeg_quality = 85       # quality for saved snapshots (YOLO training data)
 stream_quality = 70     # quality for MJPEG stream (lower = less bandwidth)
@@ -361,9 +362,9 @@ def _announce_to_server(new_brooder_id, old_brooder_id=None):
     if not WS_AVAILABLE or not server_url:
         return
     try:
-        local_ip = _get_local_ip()
-        stream_url = f"http://{local_ip}:{stream_port}/stream"
-        snapshot_url = f"http://{local_ip}:{stream_port}/snapshot"
+        ip = advertise_ip if advertise_ip else _get_local_ip()
+        stream_url = f"http://{ip}:{stream_port}/stream"
+        snapshot_url = f"http://{ip}:{stream_port}/snapshot"
 
         # Clear old brooder's camera_url via REST
         if old_brooder_id is not None and old_brooder_id != new_brooder_id:
@@ -675,7 +676,7 @@ class StreamHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    global server_url, default_brooder_id, stream_port, jpeg_quality, stream_quality, active_brooder_id
+    global server_url, default_brooder_id, stream_port, jpeg_quality, stream_quality, active_brooder_id, advertise_ip
     global collect_snapshots, snapshot_interval, snapshot_dir, max_snapshots
 
     parser = argparse.ArgumentParser(description="QuailSync Camera Stream")
@@ -704,11 +705,14 @@ def main():
                         help="Max snapshots to keep; oldest deleted when exceeded (default: 1000)")
     parser.add_argument("--awb-gains", type=float, nargs="+", metavar="VAL", default=None,
                         help="White balance multipliers: R G B (3 values) or R B (2 values, G=1.0). e.g. --awb-gains 1.25 1.0 0.72. Overrides saved wb_settings.json.")
+    parser.add_argument("--advertise-ip", type=str, default=None,
+                        help="IP address to announce in stream URLs instead of auto-detected LAN IP (e.g. Tailscale IP: 100.109.222.48)")
     args = parser.parse_args()
 
     server_url = args.server
     default_brooder_id = args.brooder_id
     stream_port = args.port
+    advertise_ip = args.advertise_ip
     jpeg_quality = args.jpeg_quality
     stream_quality = args.stream_quality
     collect_snapshots = args.collect_snapshots
@@ -749,6 +753,7 @@ def main():
     print(f"  QR JSON:    http://0.0.0.0:{args.port}/qr-status")
     print(f"  QR Scan:    {'enabled' if QR_AVAILABLE else 'DISABLED'}")
     print(f"  Server:     {server_url or 'not configured'}")
+    print(f"  Advertise:  {advertise_ip or 'auto-detect'}")
     print(f"  Brooder:    {default_brooder_id}")
     if collect_snapshots:
         print(f"  Snapshots:  every {snapshot_interval}s -> {snapshot_dir}/ (max {max_snapshots})")
