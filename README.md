@@ -181,10 +181,11 @@ The alert engine automatically adjusts thresholds based on the youngest chick gr
 | Pi Sensor Agent | Python 3, Linux kernel IIO drivers (DHT22), websockets, psutil |
 | Pi Camera | Python 3, picamera2, pyzbar, OpenCV, ThreadingHTTPServer |
 | ESP32 Nodes | ESP32-C3 Super Mini, DHT22, Arduino framework, WebSocket client |
-| CI/CD | GitHub Actions — `cargo fmt`, `clippy`, `cargo test` |
+| Cloud | Azure Kubernetes Service (AKS), Azure Container Registry, Caddy (auto HTTPS via Let's Encrypt) |
+| CI/CD | GitHub Actions — fmt, clippy, test, Docker build, AKS rolling deploy |
 | Observability | Prometheus (metrics scraping), Grafana (dashboards), `metrics` crate |
-| Remote Access | Tailscale (mesh VPN, no port forwarding) |
-| Deployment | Docker Compose (server + Prometheus + Grafana), systemd (cameras), Arduino IDE (ESP32) |
+| Remote Access | Tailscale (mesh VPN connecting Pi edge device to cloud server) |
+| Deployment | AKS (server), Docker Compose (local/Pi), systemd (cameras), Arduino IDE (ESP32) |
 
 ---
 
@@ -414,6 +415,47 @@ With Tailscale running, the full stack works from anywhere — cellular, coffee 
 - **Android app**: Set the server URL in Settings to the Tailscale IP
 
 The Android app automatically rewrites camera stream URLs to use the configured server host, so camera feeds work seamlessly over Tailscale even though the Pi announces its LAN IP internally.
+
+---
+
+## Cloud Deployment (Azure)
+
+QuailSync runs as a cloud-edge hybrid: the Rust server runs on Azure Kubernetes Service (AKS) while the Raspberry Pi handles sensor hardware and camera streams locally.
+
+### Architecture
+
+- **Server**: AKS cluster (Standard_B2s_v2 node) running the Rust/Axum server with a Caddy sidecar for automatic HTTPS
+- **Registry**: Azure Container Registry (`quailsyncregistry.azurecr.io`)
+- **Storage**: Azure Managed Disk (1Gi, managed-csi) for SQLite persistence
+- **DNS**: `quailsync.westus2.cloudapp.azure.com`
+- **TLS**: Automatic Let's Encrypt via Caddy — zero-config HTTPS
+- **Remote Access**: Tailscale VPN mesh connects Pi camera streams to the cloud dashboard
+
+### CI/CD Pipeline
+
+GitHub Actions pipeline on every push to `main`:
+
+1. `cargo fmt` + `clippy` + `cargo test` (quality gate)
+2. Docker build and push to ACR (tagged with commit SHA + `latest`)
+3. `kubectl apply` manifests + rolling deployment to AKS
+4. `kubectl rollout status` waits for healthy deployment
+
+```bash
+# Manual deploy (if needed)
+kubectl apply -f deploy/k8s/
+kubectl set image deployment/quailsync-server \
+  quailsync-server=quailsyncregistry.azurecr.io/quailsync-server:<sha>
+```
+
+Kubernetes manifests are in `deploy/k8s/`.
+
+### Edge Device (Raspberry Pi 5)
+
+The Pi runs locally and connects to the cloud server:
+
+- **Sensor agent** streams telemetry via WebSocket to `ws://quailsync.westus2.cloudapp.azure.com:3000/ws`
+- **Camera** streams MJPEG over Tailscale — the `--advertise-ip` flag announces the Tailscale IP so remote clients can reach the stream
+- **ESP32-C3** wireless nodes send temperature/humidity readings directly to the Azure endpoint
 
 ---
 
