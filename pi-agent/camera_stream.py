@@ -434,6 +434,14 @@ class StreamHandler(BaseHTTPRequestHandler):
         else:
             self._handle_index()
 
+    def do_OPTIONS(self):
+        """Handle CORS preflight requests for Private Network Access."""
+        self.send_response(204)
+        self._send_cors_headers()
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.end_headers()
+
     def do_POST(self):
         if self.path == "/wb-settings":
             self._handle_wb_post()
@@ -441,11 +449,16 @@ class StreamHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
+    def _send_cors_headers(self):
+        """Add CORS + Private Network Access headers to the current response."""
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
+
     def _handle_stream(self):
         """MJPEG stream — reads from shared frame buffer so multiple clients work."""
         self.send_response(200)
         self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._send_cors_headers()
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
         last_counter = 0
@@ -488,7 +501,7 @@ class StreamHandler(BaseHTTPRequestHandler):
 
         self.send_response(200)
         self.send_header("Content-Type", "image/jpeg")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._send_cors_headers()
         self.end_headers()
         self.wfile.write(frame)
 
@@ -503,7 +516,7 @@ class StreamHandler(BaseHTTPRequestHandler):
         }
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._send_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(status).encode())
 
@@ -554,7 +567,7 @@ class StreamHandler(BaseHTTPRequestHandler):
             data = dict(_wb_gains)
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._send_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(data).encode())
 
@@ -575,7 +588,7 @@ class StreamHandler(BaseHTTPRequestHandler):
                 _save_wb_settings()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
+            self._send_cors_headers()
             self.end_headers()
             with _wb_lock:
                 self.wfile.write(json.dumps(_wb_gains).encode())
