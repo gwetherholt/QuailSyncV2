@@ -1098,7 +1098,6 @@
           humStr = status && status.latest_humidity!=null ? status.latest_humidity.toFixed(1)+'%' : '--';
         }
         var alertHtml = isOffline ? '<span style="color:#999">No signal</span>' : (status && status.has_alert) ? status.alert_message : '';
-        var camBase = b.camera_url || Page.Cameras._DEFAULT_CAM;
         // Seed sparkline cache from REST data
         var sparkTemps = [];
         if(readings && readings.length>0){
@@ -1115,7 +1114,7 @@
         html+='</div>';
         html+='<div style="display:flex;gap:.5rem;align-items:flex-start;margin-bottom:.2rem">';
         html+='<div style="flex:1"><div class="reading-row"><div><span class="reading-label">Temp</span><br><span class="reading-value" data-field="temp">'+tempStr+'</span></div><div style="text-align:right"><span class="reading-label">Hum</span><br><span class="reading-value" data-field="hum">'+humStr+'</span></div></div></div>';
-        html+='<a onclick="Router.navigate(\'#/cameras\')" title="View camera"><img class="camera-thumb" src="'+camBase+'/stream" width="100" height="75" onerror="this.style.display=\'none\'"></a>';
+        if(hasCam){ html+='<a onclick="Router.navigate(\'#/cameras\')" title="View camera"><img class="camera-thumb" src="'+escapeHtml(b.camera_url)+'" width="100" height="75" onerror="this.style.display=\'none\'"></a>'; }
         html+='</div>';
         html+='<div class="sparkline" data-field="spark">'+self._buildSparkBars(sparkTemps,20,28)+'</div>';
         html+='<div data-field="alert" style="font-size:.7rem;color:var(--danger);margin-top:.3rem">'+escapeHtml(alertHtml)+'</div>';
