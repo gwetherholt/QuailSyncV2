@@ -1,11 +1,11 @@
 package com.quailsync.app.ui.screens
 
 import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Log
 import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -68,8 +68,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -87,9 +85,10 @@ import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.ServerConfig
 import com.quailsync.app.data.UpdateBrooderRequest
 import com.quailsync.app.ui.theme.SageGreen
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -121,29 +120,6 @@ sealed class CameraSource {
 class CameraViewModel(application: Application) : AndroidViewModel(application) {
     private val serverUrl = ServerConfig.getServerUrl(application)
     private val api = QuailSyncApi.create(serverUrl)
-
-    /** Rewrite a camera URL's host to match the configured server host.
-     *  This ensures camera streams work over Tailscale/VPN — the Pi announces
-     *  its LAN IP (192.168.x.x) but the user may be connecting via a different
-     *  IP (e.g. Tailscale 100.x.x.x). The camera port is preserved. */
-    private fun rewriteCameraUrl(cameraUrl: String): String {
-        try {
-            val serverUri = java.net.URI(serverUrl)
-            val camUri = java.net.URI(cameraUrl)
-            val serverHost = serverUri.host ?: return cameraUrl
-            val camHost = camUri.host ?: return cameraUrl
-            if (serverHost == camHost) return cameraUrl
-            // Replace host, keep camera's port and path
-            val rewritten = java.net.URI(
-                camUri.scheme, null, serverHost, camUri.port, camUri.path, camUri.query, null
-            ).toString()
-            Log.d("QuailSync", "Rewrote camera URL: $cameraUrl → $rewritten")
-            return rewritten
-        } catch (e: Exception) {
-            Log.w("QuailSync", "Failed to rewrite camera URL: $cameraUrl", e)
-            return cameraUrl
-        }
-    }
 
     private val _cameraItems = MutableStateFlow<List<CameraItem>>(emptyList())
     val cameraItems: StateFlow<List<CameraItem>> = _cameraItems.asStateFlow()
@@ -184,7 +160,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 items.add(CameraItem(
                     name = c.name,
                     subtitle = c.brooderName ?: c.location,
-                    streamUrl = (c.feedUrl ?: c.url)?.let { rewriteCameraUrl(it) },
+                    streamUrl = c.feedUrl ?: c.url,
                     source = CameraSource.Standalone(c),
                 ))
             }
@@ -203,14 +179,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val broodersWithCameras = brooders.filter { it.cameraUrl != null }
             Log.d("QuailSync", "Brooders with camera_url: ${broodersWithCameras.size}")
             broodersWithCameras.forEach { b ->
-                val rewrittenUrl = b.cameraUrl?.let { rewriteCameraUrl(it) }
-                val alreadyListed = items.any { item -> item.streamUrl == rewrittenUrl || item.streamUrl == b.cameraUrl }
+                val alreadyListed = items.any { item -> item.streamUrl == b.cameraUrl }
                 Log.d("QuailSync", "  Brooder ${b.id} '${b.name}' url=${b.cameraUrl} alreadyListed=$alreadyListed")
                 if (!alreadyListed) {
                     items.add(CameraItem(
                         name = "${b.name} Camera",
                         subtitle = b.name,
-                        streamUrl = rewrittenUrl,
+                        streamUrl = b.cameraUrl,
                         source = CameraSource.BrooderCamera(b),
                     ))
                 }
@@ -833,17 +808,15 @@ fun AddCameraDialog(viewModel: CameraViewModel, onDismiss: () -> Unit) {
 
 @Composable
 fun MjpegStreamView(url: String, modifier: Modifier = Modifier, refreshKey: Int = 0) {
-    var currentFrame by remember { mutableStateOf<Bitmap?>(null) }
+    var currentFrame by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var hasError by remember { mutableStateOf(false) }
 
-    // Stream coroutine: runs while in composition, cancels when leaving.
-    // Uses multipart Content-Length for bulk reads instead of byte-scanning.
-    // refreshKey forces a restart when the screen resumes after navigation away.
     LaunchedEffect(url, refreshKey) {
         currentFrame = null
         hasError = false
-        withContext(Dispatchers.IO) {
-            while (isActive) {
+        val job = coroutineContext[Job]!!
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            while (job.isActive) {
                 try {
                     val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
                     connection.connectTimeout = 10000
@@ -851,29 +824,23 @@ fun MjpegStreamView(url: String, modifier: Modifier = Modifier, refreshKey: Int 
                     connection.connect()
 
                     val stream = java.io.BufferedInputStream(connection.inputStream, 16384)
-
-                    // Read frames using multipart headers (Content-Length)
-                    // Each part: boundary line, headers (including Content-Length), blank line, JPEG data
                     val reader = stream.bufferedReader(Charsets.ISO_8859_1)
 
-                    while (isActive) {
-                        // Skip to next part — read lines until we find Content-Length or JPEG data
+                    while (job.isActive) {
                         var contentLength = -1
                         var line: String? = null
 
                         // Read headers until blank line
                         while (true) {
                             line = reader.readLine() ?: break
-                            if (line.isBlank()) break // end of headers
-                            val lower = line.lowercase()
-                            if (lower.startsWith("content-length:")) {
+                            if (line.isBlank()) break
+                            if (line.lowercase().startsWith("content-length:")) {
                                 contentLength = line.substringAfter(":").trim().toIntOrNull() ?: -1
                             }
                         }
-                        if (line == null) break // stream ended
+                        if (line == null) break
 
                         if (contentLength > 0) {
-                            // Bulk read the exact JPEG frame
                             val frameData = CharArray(contentLength)
                             var read = 0
                             while (read < contentLength) {
@@ -882,22 +849,21 @@ fun MjpegStreamView(url: String, modifier: Modifier = Modifier, refreshKey: Int 
                                 read += n
                             }
                             if (read == contentLength) {
-                                // Convert chars back to bytes (ISO-8859-1 is 1:1)
                                 val bytes = ByteArray(contentLength) { frameData[it].code.toByte() }
-                                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                                 if (bitmap != null) {
-                                    withContext(Dispatchers.Main) {
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                                         currentFrame = bitmap
                                         hasError = false
                                     }
                                 }
                             }
                         } else {
-                            // Fallback: no Content-Length, scan for JPEG markers
+                            // Fallback: scan for JPEG markers
                             val buf = java.io.ByteArrayOutputStream(65536)
                             var prev = 0
                             var inFrame = false
-                            while (isActive) {
+                            while (job.isActive) {
                                 val b = stream.read()
                                 if (b == -1) break
                                 if (!inFrame) {
@@ -911,14 +877,14 @@ fun MjpegStreamView(url: String, modifier: Modifier = Modifier, refreshKey: Int 
                                     buf.write(b)
                                     if (prev == 0xFF && b == 0xD9) {
                                         val data = buf.toByteArray()
-                                        val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
+                                        val bitmap = android.graphics.BitmapFactory.decodeByteArray(data, 0, data.size)
                                         if (bitmap != null) {
-                                            withContext(Dispatchers.Main) {
+                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                                                 currentFrame = bitmap
                                                 hasError = false
                                             }
                                         }
-                                        break // go back to header reading loop
+                                        break
                                     }
                                 }
                                 prev = b
@@ -927,9 +893,9 @@ fun MjpegStreamView(url: String, modifier: Modifier = Modifier, refreshKey: Int 
                     }
                     connection.disconnect()
                 } catch (e: Exception) {
-                    if (isActive) {
+                    if (job.isActive) {
                         Log.e("QuailSync", "MJPEG stream error: ${e.message}")
-                        withContext(Dispatchers.Main) { hasError = true }
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { hasError = true }
                         delay(2000)
                     }
                 }
@@ -949,7 +915,6 @@ fun MjpegStreamView(url: String, modifier: Modifier = Modifier, refreshKey: Int 
         } else if (hasError) {
             CameraOfflinePlaceholder()
         } else {
-            // Loading — waiting for first frame
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = SageGreen, modifier = Modifier.size(32.dp), strokeWidth = 2.dp)
             }
