@@ -5,7 +5,7 @@ import android.content.Context
 object ServerConfig {
     private const val PREFS_NAME = "quailsync"
     private const val KEY_SERVER_URL = "server_url"
-    const val DEFAULT_URL = "http://192.168.0.114:3000"
+    const val DEFAULT_URL = "http://quailsync.westus2.azurecontainer.io:3000"
 
     fun getServerUrl(context: Context): String {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
