@@ -213,6 +213,18 @@ pub fn init_db(conn: &Connection) {
     )
     .expect("failed to create chick group tables");
 
+    // --- Headcount inference results ---
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS headcounts (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            brooder_id INTEGER NOT NULL REFERENCES brooders(id),
+            count      INTEGER NOT NULL,
+            timestamp  TEXT    NOT NULL DEFAULT (datetime('now')),
+            received_at TEXT   NOT NULL DEFAULT (datetime('now'))
+        );",
+    )
+    .expect("failed to create headcounts table");
+
     // --- Performance indexes ---
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_readings_brooder_received ON brooder_readings(brooder_id, received_at);
@@ -225,7 +237,8 @@ pub fn init_db(conn: &Connection) {
          CREATE INDEX IF NOT EXISTS idx_weights_bird_date ON weight_records(bird_id, date);
          CREATE INDEX IF NOT EXISTS idx_processing_status ON processing_records(status);
          CREATE INDEX IF NOT EXISTS idx_chick_groups_brooder ON chick_groups(brooder_id, status);
-         CREATE INDEX IF NOT EXISTS idx_alerts_timestamp ON alerts(timestamp);",
+         CREATE INDEX IF NOT EXISTS idx_alerts_timestamp ON alerts(timestamp);
+         CREATE INDEX IF NOT EXISTS idx_headcounts_brooder ON headcounts(brooder_id, received_at);",
     )
     .expect("failed to create indexes");
 }

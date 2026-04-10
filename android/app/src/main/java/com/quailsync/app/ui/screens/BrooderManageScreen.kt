@@ -19,7 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -74,6 +74,7 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
     val api = remember { QuailSyncApi.create(serverUrl) }
     val scope = rememberCoroutineScope()
     var targetTemp by remember { mutableStateOf<TargetTempResponse?>(null) }
+    var headcount by remember { mutableStateOf<com.quailsync.app.data.HeadcountResponse?>(null) }
     var allGroups by remember { mutableStateOf<List<ChickGroupDto>>(emptyList()) }
     var residentBirds by remember { mutableStateOf<List<Bird>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -94,6 +95,7 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
         Log.d("QuailSync", "BrooderManage: loading data for brooder $brooderId (refresh=$refreshKey)")
         try {
             targetTemp = try { api.getBrooderTargetTemp(brooderId) } catch (e: Exception) { Log.e("QuailSync", "targetTemp failed", e); null }
+            headcount = try { api.getHeadcountLatest(brooderId) } catch (_: Exception) { null }
 
             // Fetch chick groups — log raw JSON for debugging
             allGroups = try {
@@ -139,7 +141,7 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
         // Header
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
             Spacer(Modifier.width(8.dp))
             Text("Manage Brooder #$brooderId", style = MaterialTheme.typography.headlineMedium)
         }
@@ -199,6 +201,39 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
                             }
                         }
                     }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // =====================================================
+        // Chick Headcount (YOLO inference)
+        // =====================================================
+        Card(
+            Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(2.dp),
+        ) {
+            Column(Modifier.padding(16.dp)) {
+                Text("Chick Count", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(8.dp))
+                val hc = headcount
+                val hcAgo = remember(hc?.timestamp) { formatTimeAgo(hc?.timestamp) }
+                if (hc?.count != null) {
+                    Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                        Text(
+                            "\uD83D\uDC25 ${hc.count} chick${if (hc.count != 1) "s" else ""} detected",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = SageGreen,
+                        )
+                        if (hcAgo != null) {
+                            Text(hcAgo, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                } else {
+                    Text("No headcount data", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -402,4 +437,19 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
         }
     }
 
+}
+
+private fun formatTimeAgo(timestamp: String?): String? {
+    if (timestamp == null) return null
+    return try {
+        val instant = java.time.Instant.parse(timestamp)
+        val ago = java.time.Duration.between(instant, java.time.Instant.now()).toMinutes()
+        when {
+            ago < 1 -> "just now"
+            ago < 60 -> "${ago}m ago"
+            else -> "${ago / 60}h ago"
+        }
+    } catch (_: Exception) {
+        null
+    }
 }

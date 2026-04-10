@@ -179,6 +179,56 @@ pub(crate) async fn brooder_alerts(
     Json(vec![])
 }
 
+#[derive(serde::Deserialize)]
+pub(crate) struct HeadcountRequest {
+    pub count: i64,
+    pub timestamp: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct HeadcountResponse {
+    pub brooder_id: i64,
+    pub count: i64,
+    pub timestamp: String,
+}
+
+pub(crate) async fn post_headcount(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<HeadcountRequest>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+    let ts = body.timestamp.unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    match conn.execute(
+        "INSERT INTO headcounts (brooder_id, count, timestamp) VALUES (?1, ?2, ?3)",
+        params![id, body.count, ts],
+    ) {
+        Ok(_) => (StatusCode::CREATED, Json(HeadcountResponse {
+            brooder_id: id, count: body.count, timestamp: ts,
+        })).into_response(),
+        Err(e) => db_error(e),
+    }
+}
+
+pub(crate) async fn get_headcount_latest(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+    match conn.query_row(
+        "SELECT count, timestamp FROM headcounts WHERE brooder_id = ?1 ORDER BY received_at DESC LIMIT 1",
+        params![id],
+        |row| Ok(HeadcountResponse {
+            brooder_id: id,
+            count: row.get(0)?,
+            timestamp: row.get(1)?,
+        }),
+    ) {
+        Ok(r) => Json(serde_json::json!(r)).into_response(),
+        Err(_) => Json(serde_json::json!({"brooder_id": id, "count": null, "timestamp": null})).into_response(),
+    }
+}
+
 pub(crate) async fn list_brooders(State(state): State<AppState>) -> Json<Vec<Brooder>> {
     let conn = acquire_db(&state);
     let mut stmt = conn.prepare("SELECT id, name, bloodline_id, life_stage, qr_code, notes, camera_url FROM brooders ORDER BY id").expect("prepare failed");

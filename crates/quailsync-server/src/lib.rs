@@ -154,6 +154,14 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/brooders/{id}/status", get(brooders::brooder_status))
         .route("/api/brooders/{id}/alerts", get(brooders::brooder_alerts))
         .route(
+            "/api/brooders/{id}/headcount",
+            axum::routing::post(brooders::post_headcount),
+        )
+        .route(
+            "/api/brooders/{id}/headcount/latest",
+            get(brooders::get_headcount_latest),
+        )
+        .route(
             "/api/brooders/{id}/target-temp",
             get(brooders::brooder_target_temp),
         )

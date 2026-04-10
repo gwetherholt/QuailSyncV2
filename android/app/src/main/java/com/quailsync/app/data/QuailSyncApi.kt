@@ -208,6 +208,12 @@ data class TargetTempResponse(
     @SerializedName("status") val status: String,
 )
 
+data class HeadcountResponse(
+    @SerializedName("brooder_id") val brooderId: Int? = null,
+    @SerializedName("count") val count: Int? = null,
+    @SerializedName("timestamp") val timestamp: String? = null,
+)
+
 data class ChickGroupDto(
     @SerializedName("id") val id: Int,
     @SerializedName("clutch_id") val clutchId: Int? = null,
@@ -320,6 +326,7 @@ data class CullBatchResponse(
     @SerializedName("updated") val updated: Int,
 )
 
+@Suppress("unused")
 interface QuailSyncApi {
 
     @GET("api/brooders")
@@ -400,6 +407,9 @@ interface QuailSyncApi {
 
     @GET("api/brooders/{id}/target-temp")
     suspend fun getBrooderTargetTemp(@Path("id") id: Int): TargetTempResponse
+
+    @GET("api/brooders/{id}/headcount/latest")
+    suspend fun getHeadcountLatest(@Path("id") id: Int): HeadcountResponse
 
     @PUT("api/brooders/{id}/assign-group")
     suspend fun assignGroupToBrooder(@Path("id") id: Int, @Body request: AssignGroupRequest): ChickGroupDto

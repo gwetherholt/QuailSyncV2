@@ -66,6 +66,12 @@ try:
 except ImportError:
     REQUESTS_AVAILABLE = False
 
+# Try importing ultralytics for YOLO inference
+try:
+    from ultralytics import YOLO
+    YOLO_AVAILABLE = True
+except ImportError:
+    YOLO_AVAILABLE = False
 
 # === Global State ===
 current_brooder_id = None       # last QR-detected brooder ID (raw detection)
@@ -85,6 +91,8 @@ picam2 = None  # initialized in main()
 jpeg_quality = 85       # quality for saved snapshots (YOLO training data)
 stream_quality = 70     # quality for MJPEG stream (lower = less bandwidth)
 _camera_ready_time = 0  # set after AWB settling in init_camera
+_yolo_model = None      # loaded once at startup if available
+_yolo_model_path = None  # set from --yolo-model CLI arg
 
 # White balance: RGB multipliers applied per-frame via numpy.
 # Protected by a lock so the /wb-settings POST can update mid-stream.
@@ -330,6 +338,52 @@ def _save_snapshot(frame_bytes):
         if deleted:
             msg += f" (deleted {deleted} oldest)"
         print(msg)
+
+    # Run YOLO inference on the saved snapshot
+    if _yolo_model is not None:
+        threading.Thread(target=_run_headcount, args=(filepath,), daemon=True).start()
+
+
+def _run_headcount(image_path):
+    """Run YOLOv8 inference on a snapshot and POST the headcount to the server."""
+    from datetime import datetime, timezone
+    try:
+        results = _yolo_model(image_path, verbose=False)
+        # Count detections above 0.5 confidence
+        count = 0
+        for r in results:
+            for box in r.boxes:
+                if box.conf.item() >= 0.5:
+                    count += 1
+
+        bid = active_brooder_id if active_brooder_id is not None else default_brooder_id
+        print(f"\033[35m[yolo] Detected {count} chicks in brooder {bid}\033[0m")
+
+        # POST to server
+        if server_url:
+            try:
+                http_base = server_url.replace("ws://", "http://").replace("wss://", "https://")
+                http_base = re.sub(r"/ws$", "", http_base)
+                url = f"{http_base}/api/brooders/{bid}/headcount"
+                body = {
+                    "count": count,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                if REQUESTS_AVAILABLE:
+                    resp = http_requests.post(url, json=body, timeout=5)
+                    print(f"\033[35m[yolo] POST headcount -> {resp.status_code}\033[0m")
+                else:
+                    import urllib.request
+                    req = urllib.request.Request(
+                        url, data=json.dumps(body).encode(),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        print(f"\033[35m[yolo] POST headcount -> {resp.status}\033[0m")
+            except Exception as e:
+                print(f"\033[33m[yolo] POST headcount failed: {e}\033[0m")
+    except Exception as e:
+        print(f"\033[31m[yolo] Inference failed: {e}\033[0m")
 
 
 def _get_local_ip():
@@ -689,7 +743,7 @@ class StreamHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    global server_url, default_brooder_id, stream_port, jpeg_quality, stream_quality, active_brooder_id, advertise_ip
+    global server_url, default_brooder_id, stream_port, jpeg_quality, stream_quality, active_brooder_id, advertise_ip, _yolo_model
     global collect_snapshots, snapshot_interval, snapshot_dir, max_snapshots
 
     parser = argparse.ArgumentParser(description="QuailSync Camera Stream")
@@ -720,6 +774,8 @@ def main():
                         help="White balance multipliers: R G B (3 values) or R B (2 values, G=1.0). e.g. --awb-gains 1.25 1.0 0.72. Overrides saved wb_settings.json.")
     parser.add_argument("--advertise-ip", type=str, default=None,
                         help="IP address to announce in stream URLs instead of auto-detected LAN IP (e.g. Tailscale IP: 100.109.222.48)")
+    parser.add_argument("--yolo-model", type=str, default=None,
+                        help="Path to YOLOv8 .pt model for chick headcount inference (e.g. ~/quailsync-agent/best.pt)")
     args = parser.parse_args()
 
     server_url = args.server
@@ -750,6 +806,18 @@ def main():
                 _wb_gains["r"] = gains[0]
         print(f"\033[32m[wb] CLI override: R={_wb_gains['r']:.2f} G={_wb_gains['g']:.2f} B={_wb_gains['b']:.2f}\033[0m")
 
+    # Load YOLO model if specified
+    if args.yolo_model and YOLO_AVAILABLE:
+        import os
+        model_path = os.path.expanduser(args.yolo_model)
+        if os.path.exists(model_path):
+            _yolo_model = YOLO(model_path)
+            print(f"\033[32m[yolo] Model loaded: {model_path}\033[0m")
+        else:
+            print(f"\033[33m[yolo] Model not found: {model_path}\033[0m")
+    elif args.yolo_model and not YOLO_AVAILABLE:
+        print(f"\033[33m[yolo] ultralytics not installed — headcount disabled\033[0m")
+
     # Initialize the selected camera
     init_camera(args.camera_index, args.width, args.height)
 
@@ -767,6 +835,7 @@ def main():
     print(f"  QR Scan:    {'enabled' if QR_AVAILABLE else 'DISABLED'}")
     print(f"  Server:     {server_url or 'not configured'}")
     print(f"  Advertise:  {advertise_ip or 'auto-detect'}")
+    print(f"  YOLO:       {'loaded' if _yolo_model else 'disabled'}")
     print(f"  Brooder:    {default_brooder_id}")
     if collect_snapshots:
         print(f"  Snapshots:  every {snapshot_interval}s -> {snapshot_dir}/ (max {max_snapshots})")
