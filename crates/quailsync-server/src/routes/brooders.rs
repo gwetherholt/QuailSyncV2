@@ -198,14 +198,22 @@ pub(crate) async fn post_headcount(
     Json(body): Json<HeadcountRequest>,
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
-    let ts = body.timestamp.unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    let ts = body
+        .timestamp
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
     match conn.execute(
         "INSERT INTO headcounts (brooder_id, count, timestamp) VALUES (?1, ?2, ?3)",
         params![id, body.count, ts],
     ) {
-        Ok(_) => (StatusCode::CREATED, Json(HeadcountResponse {
-            brooder_id: id, count: body.count, timestamp: ts,
-        })).into_response(),
+        Ok(_) => (
+            StatusCode::CREATED,
+            Json(HeadcountResponse {
+                brooder_id: id,
+                count: body.count,
+                timestamp: ts,
+            }),
+        )
+            .into_response(),
         Err(e) => db_error(e),
     }
 }
