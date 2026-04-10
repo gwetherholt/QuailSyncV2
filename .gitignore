@@ -3,3 +3,7 @@
 *.db
 certs/
 __pycache__/
+
+# Training data and outputs
+training/
+*.pt
