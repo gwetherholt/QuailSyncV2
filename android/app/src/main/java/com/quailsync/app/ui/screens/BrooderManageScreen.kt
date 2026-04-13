@@ -20,7 +20,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -52,6 +51,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.quailsync.app.data.Bird
 import com.quailsync.app.data.ChickGroupDto
 import com.quailsync.app.data.QuailSyncApi
@@ -421,7 +421,7 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
                 residentBirds.forEach { b ->
                     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(32.dp).clip(CircleShape).background(parseBandColor(b.bandColor)), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.Pets, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                            Text("\uD83D\uDC25", fontSize = 14.sp)
                         }
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {

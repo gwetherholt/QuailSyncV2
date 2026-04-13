@@ -21,12 +21,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Egg
-import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Sensors
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -71,7 +68,6 @@ import com.quailsync.app.ui.theme.AlertRed
 import com.quailsync.app.ui.theme.AlertYellow
 import com.quailsync.app.ui.theme.DustyRose
 import com.quailsync.app.ui.theme.SageGreen
-import com.quailsync.app.ui.theme.SageGreenLight
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow

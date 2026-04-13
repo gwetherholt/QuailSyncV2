@@ -19,14 +19,20 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Egg
 import androidx.compose.material.icons.filled.Nfc
-import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -77,12 +83,12 @@ import com.quailsync.app.ui.theme.SageGreenLight
 sealed class Screen(val route: String, val label: String, val icon: ImageVector, val iconRes: Int? = null) {
     data object Dashboard : Screen("dashboard", "Dashboard", Icons.Default.Dashboard)
     data object Cameras : Screen("cameras", "Cameras", Icons.Default.Videocam)
-    data object Flock : Screen("flock", "Flock", Icons.Default.Pets, iconRes = R.drawable.ic_bird)
+    data object Flock : Screen("flock", "Flock", Icons.Default.Egg, iconRes = R.drawable.ic_bird)
     data object Nfc : Screen("nfc", "NFC", Icons.Default.Nfc)
     data object Clutches : Screen("clutches", "Hatchery", Icons.Default.Egg)
     data object Settings : Screen("settings", "Settings", Icons.Default.Settings)
     data object Telemetry : Screen("telemetry", "Telemetry", Icons.Default.Settings)
-    data object Breeding : Screen("breeding", "Breeding", Icons.Default.Pets)
+    data object Breeding : Screen("breeding", "Breeding", Icons.Default.Egg)
 }
 
 val bottomNavItems = listOf(
@@ -224,7 +230,7 @@ fun QuailSyncApp(
         modifier = Modifier.fillMaxSize(),
         floatingActionButton = {
             if (currentDestination?.route == Screen.Dashboard.route) {
-                androidx.compose.material3.FloatingActionButton(
+                FloatingActionButton(
                     onClick = {
                         navController.navigate(Screen.Settings.route) {
                             launchSingleTop = true
@@ -317,11 +323,11 @@ fun SettingsScreen() {
         Spacer(Modifier.height(16.dp))
 
         // Server Connection card
-        androidx.compose.material3.Card(
+        Card(
             Modifier.fillMaxWidth(),
-            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-            colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = androidx.compose.material3.CardDefaults.cardElevation(2.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(2.dp),
         ) {
             Column(Modifier.padding(16.dp)) {
                 Text("Server Connection", style = MaterialTheme.typography.titleMedium)
@@ -332,7 +338,7 @@ fun SettingsScreen() {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(8.dp))
-                androidx.compose.material3.OutlinedTextField(
+                OutlinedTextField(
                     value = serverUrl,
                     onValueChange = { serverUrl = it; serverUrlSaved = false },
                     label = { Text("Server URL") },
@@ -341,14 +347,14 @@ fun SettingsScreen() {
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(8.dp))
-                androidx.compose.material3.Button(
+                Button(
                     onClick = {
                         ServerConfig.setServerUrl(context, serverUrl)
                         serverUrlSaved = true
-                        android.widget.Toast.makeText(context, "Server URL saved — restart app to apply", android.widget.Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Server URL saved — restart app to apply", Toast.LENGTH_SHORT).show()
                     },
                     enabled = !serverUrlSaved,
-                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = SageGreen),
+                    colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
                 ) {
                     Text(if (serverUrlSaved) "Saved" else "Save")
                 }
@@ -358,11 +364,11 @@ fun SettingsScreen() {
         Spacer(Modifier.height(16.dp))
 
         // Notifications card
-        androidx.compose.material3.Card(
+        Card(
             Modifier.fillMaxWidth(),
-            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-            colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = androidx.compose.material3.CardDefaults.cardElevation(2.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(2.dp),
         ) {
             Column(Modifier.padding(16.dp)) {
                 Text("Notifications", style = MaterialTheme.typography.titleMedium)

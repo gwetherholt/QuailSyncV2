@@ -1,3 +1,5 @@
+@file:Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE", "UNUSED_VALUE")
+
 package com.quailsync.app.ui.screens
 
 import android.content.Context
@@ -41,7 +43,6 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Nfc
-import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -189,7 +190,7 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
     val bloodlines: StateFlow<List<Bloodline>> = _bloodlines.asStateFlow()
 
     private val _clutches = MutableStateFlow<List<Clutch>>(emptyList())
-    val clutches: StateFlow<List<Clutch>> = _clutches.asStateFlow()
+    @Suppress("unused") val clutches: StateFlow<List<Clutch>> = _clutches.asStateFlow()
 
     private val _batchState = MutableStateFlow<BatchState>(BatchState.Idle)
     val batchState: StateFlow<BatchState> = _batchState.asStateFlow()
@@ -198,7 +199,6 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
     val conflictBird: StateFlow<Bird?> = _conflictBird.asStateFlow()
 
     private val _batchPausedForConflict = MutableStateFlow(false)
-    val batchPausedForConflict: StateFlow<Boolean> = _batchPausedForConflict.asStateFlow()
 
     init { loadData() }
 
@@ -218,7 +218,7 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
             try {
                 val bird = api.getBirdByNfcTag(lookupId)
                 nfcService.updateScanWithBird(tagId, bird)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 if (payload?.startsWith("BIRD-") == true) {
                     val birdId = payload.removePrefix("BIRD-").toIntOrNull()
                     val bird = birdId?.let { id -> _birds.value.find { it.id == id } }
@@ -241,7 +241,7 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
                 val bird = api.getBirds().find { it.id == conflict.existingBirdId }
                 _conflictBird.value = bird
                 if (bird == null) { confirmOverwrite() }
-            } catch (e: Exception) { confirmOverwrite() }
+            } catch (_: Exception) { confirmOverwrite() }
         }
     }
 
@@ -465,7 +465,7 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
 
     // --- Photo upload ---
 
-    fun uploadPhoto(birdId: Int, uri: Uri, context: Context) {
+    @Suppress("unused") fun uploadPhoto(birdId: Int, uri: Uri, context: Context) {
         viewModelScope.launch {
             try {
                 val bytes = context.contentResolver.openInputStream(uri)?.readBytes() ?: return@launch
@@ -1135,7 +1135,7 @@ fun NfcBirdInfo(bird: Bird) {
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp), colors = CardDefaults.cardColors(containerColor = AlertGreen.copy(alpha = 0.1f))) {
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(36.dp).clip(CircleShape).background(parseBandColor(bird.bandColor)), contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.Pets, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                Text("\uD83D\uDC25", fontSize = 16.sp)
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
@@ -1198,6 +1198,7 @@ fun NfcHistoryItem(scan: NfcScanResult) {
 }
 
 @Composable
+@Suppress("UNUSED_PARAMETER")
 fun TagConflictDialog(conflict: TagConflict, existingBird: Bird, onConfirm: () -> Unit, onCancel: () -> Unit) {
     val isActive = existingBird.status?.lowercase() in listOf("active", "alive")
     Dialog(onDismissRequest = onCancel) {
@@ -1212,7 +1213,7 @@ fun TagConflictDialog(conflict: TagConflict, existingBird: Bird, onConfirm: () -
                 Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp), colors = CardDefaults.cardColors(containerColor = if (isActive) AlertRed.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant)) {
                     Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(36.dp).clip(CircleShape).background(parseBandColor(existingBird.bandColor)), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.Pets, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                            Text("\uD83D\uDC25", fontSize = 16.sp)
                         }
                         Spacer(Modifier.width(12.dp))
                         Column {

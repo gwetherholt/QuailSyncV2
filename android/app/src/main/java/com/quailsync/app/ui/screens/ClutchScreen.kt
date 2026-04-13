@@ -1,3 +1,10 @@
+@file:Suppress(
+    "ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE",
+    "UNUSED_VALUE",
+    "CanBeVal",
+    "UnusedVariable"
+)
+
 package com.quailsync.app.ui.screens
 
 import android.util.Log
@@ -26,7 +33,6 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Egg
 import androidx.compose.material.icons.filled.Nfc
-import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -73,7 +79,9 @@ import com.quailsync.app.data.Brooder
 import com.quailsync.app.data.ChickGroupDto
 import com.quailsync.app.data.Clutch
 import com.quailsync.app.data.CreateChickGroupRequest
+import com.quailsync.app.data.CreateBloodlineRequest
 import com.quailsync.app.data.CreateClutchRequest
+import com.quailsync.app.data.MortalityRequest
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.ServerConfig
 import com.quailsync.app.data.UpdateClutchRequest
@@ -86,7 +94,13 @@ import com.quailsync.app.ui.theme.SageGreenLight
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
@@ -150,7 +164,7 @@ class ClutchViewModel(application: Application) : AndroidViewModel(application) 
 
     suspend fun logMortality(groupId: Int, count: Int, reason: String): Boolean {
         return try {
-            api.logMortality(groupId, com.quailsync.app.data.MortalityRequest(count, reason))
+            api.logMortality(groupId, MortalityRequest(count, reason))
             loadDataSuspend()
             true
         } catch (e: Exception) { Log.e("QuailSync", "Log mortality failed", e); false }
@@ -163,7 +177,7 @@ class ClutchViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    suspend fun createBloodline(request: com.quailsync.app.data.CreateBloodlineRequest): Bloodline? {
+    suspend fun createBloodline(request: CreateBloodlineRequest): Bloodline? {
         return try {
             val bl = api.createBloodline(request)
             // Refresh bloodlines list so dropdown updates
@@ -206,6 +220,8 @@ fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
     var editGroup by remember { mutableStateOf<ChickGroupDto?>(null) }
     var deleteGroup by remember { mutableStateOf<ChickGroupDto?>(null) }
     var mortalityGroup by remember { mutableStateOf<ChickGroupDto?>(null) }
+    var showAddChooser by remember { mutableStateOf(false) }
+    var showAddChickGroup by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -219,7 +235,7 @@ fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
                 } else {
                     IconButton(onClick = { viewModel.refresh() }) { Icon(Icons.Default.Refresh, "Refresh") }
                 }
-                IconButton(onClick = { showAddClutch = true }) { Icon(Icons.Default.Add, "Add Clutch", tint = SageGreen) }
+                IconButton(onClick = { showAddChooser = true }) { Icon(Icons.Default.Add, "Add", tint = SageGreen) }
             }
         }
 
@@ -274,8 +290,51 @@ fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
 
     // --- Dialogs ---
 
+    if (showAddChooser) {
+        AlertDialog(
+            onDismissRequest = { showAddChooser = false },
+            title = { Text("What would you like to add?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { showAddChooser = false; showAddClutch = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
+                    ) {
+                        Icon(Icons.Default.Egg, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Add Clutch")
+                    }
+                    OutlinedButton(
+                        onClick = { showAddChooser = false; showAddChickGroup = true },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("\uD83D\uDC25", fontSize = 16.sp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Add Chick Group")
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { showAddChooser = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (showAddChickGroup) {
+        AddStandaloneChickGroupDialog(
+            brooders = broodersList,
+            viewModel = viewModel,
+            onDismiss = { showAddChickGroup = false },
+            onSuccess = {
+                showAddChickGroup = false
+                Toast.makeText(context, "Chick group created!", Toast.LENGTH_SHORT).show()
+                viewModel.refresh()
+            },
+        )
+    }
+
     if (showAddClutch) {
-        AddClutchDialog(bloodlines, viewModel, onDismiss = { showAddClutch = false }, onSuccess = {
+        AddClutchDialog(viewModel, onDismiss = { showAddClutch = false }, onSuccess = {
             showAddClutch = false
             Toast.makeText(context, "Clutch created!", Toast.LENGTH_SHORT).show()
             viewModel.refresh()
@@ -312,7 +371,7 @@ fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
     }
 
     if (editClutch != null) {
-        EditClutchDialog(editClutch!!, liveBloodlines = bloodlines, viewModel = viewModel,
+        EditClutchDialog(editClutch!!, viewModel = viewModel,
             onDismiss = { editClutch = null },
             onSuccess = { editClutch = null; Toast.makeText(context, "Clutch updated", Toast.LENGTH_SHORT).show(); viewModel.refresh() })
     }
@@ -337,7 +396,7 @@ fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
     }
 
     if (editGroup != null) {
-        EditChickGroupDialog(editGroup!!, brooders = broodersList, viewModel = viewModel,
+        EditChickGroupDialog(editGroup!!, brooders = broodersList,
             onDismiss = { editGroup = null },
             onSuccess = { editGroup = null; Toast.makeText(context, "Group updated", Toast.LENGTH_SHORT).show(); viewModel.refresh() })
     }
@@ -412,7 +471,7 @@ fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AddClutchDialog(bloodlines: List<Bloodline>, viewModel: ClutchViewModel, onDismiss: () -> Unit, onSuccess: () -> Unit) {
+fun AddClutchDialog(viewModel: ClutchViewModel, onDismiss: () -> Unit, onSuccess: () -> Unit) {
     // Use live bloodlines from the ViewModel so new ones appear immediately
     val liveBloodlines by viewModel.bloodlines.collectAsState()
 
@@ -429,7 +488,7 @@ fun AddClutchDialog(bloodlines: List<Bloodline>, viewModel: ClutchViewModel, onD
     var newBlNotes by remember { mutableStateOf("") }
     var creatingBl by remember { mutableStateOf(false) }
 
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
     AlertDialog(
@@ -492,7 +551,7 @@ fun AddClutchDialog(bloodlines: List<Bloodline>, viewModel: ClutchViewModel, onD
                                     onClick = {
                                         creatingBl = true
                                         scope.launch {
-                                            val bl = viewModel.createBloodline(com.quailsync.app.data.CreateBloodlineRequest(
+                                            val bl = viewModel.createBloodline(CreateBloodlineRequest(
                                                 name = newBlName.trim(),
                                                 source = newBlSource.trim().ifBlank { "" },
                                                 notes = newBlNotes.trim().ifBlank { null },
@@ -564,7 +623,7 @@ fun CandlingDialog(clutch: Clutch, viewModel: ClutchViewModel, onDismiss: () -> 
     var fertile by remember { mutableStateOf(clutch.totalEggs?.toString() ?: "") }
     var notes by remember { mutableStateOf("") }
     var saving by remember { mutableStateOf(false) }
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val scope = rememberCoroutineScope()
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -610,7 +669,7 @@ fun RecordHatchDialog(clutch: Clutch, viewModel: ClutchViewModel, onDismiss: () 
     var damaged by remember { mutableStateOf("0") }
     var hatchNotes by remember { mutableStateOf("") }
     var saving by remember { mutableStateOf(false) }
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val scope = rememberCoroutineScope()
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -671,7 +730,7 @@ fun CreateChickGroupDialog(
     var selectedBrooderId by remember { mutableStateOf<Int?>(null) }
     var brooderExpanded by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val scope = rememberCoroutineScope()
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -883,7 +942,7 @@ fun ChickGroupCard(group: ChickGroupDto, bloodlineName: String?, brooderName: St
             if (brooderName != null) { Spacer(Modifier.height(8.dp)); Text("Brooder: $brooderName", style = MaterialTheme.typography.bodyMedium, color = SageGreen) }
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onLogMortality, Modifier.weight(1f)) { Icon(Icons.Default.Pets, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Log Mortality") }
+                OutlinedButton(onClick = onLogMortality, Modifier.weight(1f)) { Text("\uD83D\uDC25", fontSize = 14.sp); Spacer(Modifier.width(4.dp)); Text("Log Mortality") }
                 if (canBand) {
                     Button(onClick = {}, Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = SageGreen)) { Icon(Icons.Default.Nfc, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Band Group") }
                 } else {
@@ -918,7 +977,7 @@ fun GraduatedGroupCard(group: ChickGroupDto, bloodlineName: String?) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EditClutchDialog(clutch: Clutch, liveBloodlines: List<Bloodline>, viewModel: ClutchViewModel, onDismiss: () -> Unit, onSuccess: () -> Unit) {
+fun EditClutchDialog(clutch: Clutch, viewModel: ClutchViewModel, onDismiss: () -> Unit, onSuccess: () -> Unit) {
     var setDate by remember { mutableStateOf(clutch.setDate ?: "") }
     var eggsFertile by remember { mutableStateOf(clutch.totalFertile?.toString() ?: "") }
     var eggsHatched by remember { mutableStateOf(clutch.totalHatched?.toString() ?: "") }
@@ -926,7 +985,7 @@ fun EditClutchDialog(clutch: Clutch, liveBloodlines: List<Bloodline>, viewModel:
     var notes by remember { mutableStateOf(clutch.notes ?: "") }
     var statusExpanded by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val scope = rememberCoroutineScope()
 
     // Calculate expected hatch date from set date
     val expectedHatch = remember(setDate) {
@@ -995,13 +1054,13 @@ fun EditClutchDialog(clutch: Clutch, liveBloodlines: List<Bloodline>, viewModel:
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EditChickGroupDialog(group: ChickGroupDto, brooders: List<Brooder>, viewModel: ClutchViewModel, onDismiss: () -> Unit, onSuccess: () -> Unit) {
+fun EditChickGroupDialog(group: ChickGroupDto, brooders: List<Brooder>, onDismiss: () -> Unit, onSuccess: () -> Unit) {
     var currentCount by remember { mutableStateOf(group.currentCount.toString()) }
     var selectedBrooderId by remember { mutableStateOf(group.brooderId) }
     var notes by remember { mutableStateOf(group.notes ?: "") }
     var brooderExpanded by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val baseUrl = ServerConfig.getServerUrl(context).trimEnd('/')
 
@@ -1038,11 +1097,11 @@ fun EditChickGroupDialog(group: ChickGroupDto, brooders: List<Brooder>, viewMode
                             append("\"notes\":${if (notes.isBlank()) "null" else "\"${notes.replace("\"", "\\\"")}\"" }")
                             append("}")
                         }
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            val body = json.toByteArray().let { okhttp3.RequestBody.create(null, it) }
-                            val req = okhttp3.Request.Builder().url("$baseUrl/api/chick-groups/${group.id}").put(body)
+                        withContext(Dispatchers.IO) {
+                            val body = json.toRequestBody("application/json".toMediaType())
+                            val req = Request.Builder().url("$baseUrl/api/chick-groups/${group.id}").put(body)
                                 .addHeader("Content-Type", "application/json").build()
-                            okhttp3.OkHttpClient().newCall(req).execute()
+                            OkHttpClient().newCall(req).execute()
                         }
                         onSuccess()
                     } catch (e: Exception) {
@@ -1102,4 +1161,163 @@ private fun parseDate(dateStr: String?): LocalDate? {
     if (dateStr == null) return null
     return try { LocalDate.parse(dateStr, DateTimeFormatter.ISO_LOCAL_DATE) }
     catch (_: Exception) { try { LocalDate.parse(dateStr.take(10), DateTimeFormatter.ISO_LOCAL_DATE) } catch (_: Exception) { null } }
+}
+
+// =====================================================================
+// Add Standalone Chick Group Dialog
+// =====================================================================
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AddStandaloneChickGroupDialog(
+    brooders: List<Brooder>,
+    viewModel: ClutchViewModel,
+    onDismiss: () -> Unit,
+    onSuccess: () -> Unit,
+) {
+    var count by remember { mutableStateOf("") }
+    var source by remember { mutableStateOf("") }
+    var hatchDate by remember { mutableStateOf(LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)) }
+    var notes by remember { mutableStateOf("") }
+    var selectedBrooderId by remember { mutableStateOf<Int?>(null) }
+    var selectedBloodlineId by remember { mutableStateOf<Int?>(null) }
+    var brooderExpanded by remember { mutableStateOf(false) }
+    var bloodlineExpanded by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+    var showNewBloodline by remember { mutableStateOf(false) }
+    var newBlName by remember { mutableStateOf("") }
+    var newBlSource by remember { mutableStateOf("") }
+    val liveBloodlines by viewModel.bloodlines.collectAsState()
+    val scope = rememberCoroutineScope()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("\uD83D\uDC25 Add Chick Group") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = count, onValueChange = { count = it.filter { c -> c.isDigit() } },
+                    label = { Text("Number of chicks") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(), singleLine = true,
+                )
+                OutlinedTextField(
+                    value = source, onValueChange = { source = it },
+                    label = { Text("Source / Origin") },
+                    placeholder = { Text("e.g. Farmer pickup, Hatched in-house") },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true,
+                )
+                OutlinedTextField(
+                    value = hatchDate, onValueChange = { hatchDate = it },
+                    label = { Text("Hatch date (YYYY-MM-DD)") },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true,
+                )
+
+                // Brooder dropdown
+                ExposedDropdownMenuBox(brooderExpanded, { brooderExpanded = it }) {
+                    OutlinedTextField(
+                        value = selectedBrooderId?.let { id -> brooders.find { it.id == id }?.name ?: "" } ?: "",
+                        onValueChange = {}, readOnly = true,
+                        label = { Text("Assign to brooder") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(brooderExpanded) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                    )
+                    ExposedDropdownMenu(brooderExpanded, { brooderExpanded = false }) {
+                        brooders.forEach { b ->
+                            DropdownMenuItem(
+                                text = { Text(b.name) },
+                                onClick = { selectedBrooderId = b.id; brooderExpanded = false },
+                            )
+                        }
+                    }
+                }
+
+                // Bloodline dropdown with inline create
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    ExposedDropdownMenuBox(bloodlineExpanded, { bloodlineExpanded = it }, modifier = Modifier.weight(1f)) {
+                        OutlinedTextField(
+                            value = selectedBloodlineId?.let { id -> liveBloodlines.find { it.id == id }?.name ?: "" } ?: "",
+                            onValueChange = {}, readOnly = true,
+                            label = { Text("Bloodline (optional)") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(bloodlineExpanded) },
+                            modifier = Modifier.menuAnchor().fillMaxWidth(),
+                        )
+                        ExposedDropdownMenu(bloodlineExpanded, { bloodlineExpanded = false }) {
+                            DropdownMenuItem(text = { Text("None") }, onClick = { selectedBloodlineId = null; bloodlineExpanded = false })
+                            liveBloodlines.forEach { bl ->
+                                DropdownMenuItem(
+                                    text = { Text(bl.name) },
+                                    onClick = { selectedBloodlineId = bl.id; bloodlineExpanded = false },
+                                )
+                            }
+                        }
+                    }
+                    IconButton(onClick = { showNewBloodline = true }) {
+                        Icon(Icons.Default.Add, "New bloodline", tint = SageGreen)
+                    }
+                }
+
+                // Inline new bloodline fields
+                if (showNewBloodline) {
+                    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("New Bloodline", style = MaterialTheme.typography.labelMedium)
+                            OutlinedTextField(value = newBlName, onValueChange = { newBlName = it }, label = { Text("Name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                            OutlinedTextField(value = newBlSource, onValueChange = { newBlSource = it }, label = { Text("Source") }, placeholder = { Text("e.g. Breeder name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                            Row(Modifier.fillMaxWidth(), Arrangement.End, Alignment.CenterVertically) {
+                                TextButton(onClick = { showNewBloodline = false; newBlName = ""; newBlSource = "" }) { Text("Cancel") }
+                                Button(
+                                    onClick = {
+                                        scope.launch {
+                                            val bl = viewModel.createBloodline(CreateBloodlineRequest(name = newBlName, source = newBlSource))
+                                            if (bl != null) { selectedBloodlineId = bl.id; showNewBloodline = false; newBlName = ""; newBlSource = "" }
+                                        }
+                                    },
+                                    enabled = newBlName.isNotBlank(),
+                                    colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
+                                ) { Text("Create") }
+                            }
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = notes, onValueChange = { notes = it },
+                    label = { Text("Notes (optional)") },
+                    placeholder = { Text("e.g. Source: $source") },
+                    modifier = Modifier.fillMaxWidth(), maxLines = 2,
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val n = count.toIntOrNull() ?: 0
+                    if (n > 0) {
+                        saving = true
+                        scope.launch {
+                            val fullNotes = buildString {
+                                if (source.isNotBlank()) append("Source: $source")
+                                if (notes.isNotBlank()) { if (isNotEmpty()) append(". "); append(notes) }
+                            }.ifBlank { null }
+                            val ok = viewModel.createChickGroup(
+                                CreateChickGroupRequest(
+                                    clutchId = null,
+                                    bloodlineId = selectedBloodlineId ?: 1,
+                                    brooderId = selectedBrooderId,
+                                    initialCount = n,
+                                    hatchDate = hatchDate,
+                                    notes = fullNotes,
+                                )
+                            )
+                            if (ok) onSuccess() else saving = false
+                        }
+                    }
+                },
+                enabled = (count.toIntOrNull() ?: 0) > 0 && !saving,
+                colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
+            ) { Text(if (saving) "Creating..." else "Create Group") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }

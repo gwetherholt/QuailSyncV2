@@ -1,3 +1,10 @@
+@file:Suppress(
+    "ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE",
+    "UNUSED_VALUE",
+    "CanBeVal",
+    "UnusedVariable"
+)
+
 package com.quailsync.app.ui.screens
 
 import android.graphics.Bitmap
@@ -35,7 +42,6 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -70,15 +76,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.core.graphics.toColorInt
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
-import com.quailsync.app.ui.theme.AlertRed
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import android.app.Application
@@ -149,7 +156,7 @@ class FlockViewModel(application: Application) : AndroidViewModel(application) {
         return try { api.getBirdWeights(birdId) } catch (e: Exception) { Log.e("QuailSync", "Failed to load weights for bird $birdId", e); emptyList() }
     }
 
-    fun uploadBirdPhoto(birdId: Int, uri: Uri, context: android.content.Context) {
+    @Suppress("unused") fun uploadBirdPhoto(birdId: Int, uri: Uri, context: android.content.Context) {
         viewModelScope.launch {
             // Always save to the standard local path first
             try {
@@ -272,7 +279,7 @@ internal fun parseBandColor(color: String?): Color {
     if (color == null) return Color(0xFF9E9E9E)
     return try {
         val hex = color.removePrefix("#")
-        Color(android.graphics.Color.parseColor("#$hex"))
+        Color("#$hex".toColorInt())
     } catch (_: Exception) {
         when (color.lowercase()) {
             "red" -> Color(0xFFCC4444)
@@ -359,7 +366,7 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
             birds.isEmpty() -> {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.Pets, null, Modifier.size(64.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("\uD83D\uDC25", fontSize = 48.sp)
                         Spacer(Modifier.height(16.dp))
                         Text("No birds registered yet.\nAdd birds from the web dashboard or CLI.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
                     }
@@ -413,7 +420,7 @@ fun FlockFilterChips(bloodlines: List<Bloodline>, selectedFilter: FlockFilter, o
         FilterChip(selectedFilter is FlockFilter.Females, { onFilterSelected(FlockFilter.Females) }, { Text("Females") }, colors = chipColors)
         bloodlines.forEach { bl ->
             FilterChip(
-                selectedFilter is FlockFilter.ByBloodline && (selectedFilter as FlockFilter.ByBloodline).bloodlineId == bl.id,
+                selectedFilter is FlockFilter.ByBloodline && selectedFilter.bloodlineId == bl.id,
                 { onFilterSelected(FlockFilter.ByBloodline(bl.id, bl.name)) },
                 { Text(bl.name) }, colors = chipColors,
             )
@@ -552,7 +559,7 @@ fun BirdDetailDialog(
                                     Modifier.fillMaxSize().background(parseBandColor(bird.bandColor)),
                                     contentAlignment = Alignment.Center,
                                 ) {
-                                    Icon(Icons.Default.Pets, null, Modifier.size(48.dp), tint = Color.White)
+                                    Text("\uD83D\uDC25", fontSize = 32.sp)
                                 }
                             }
                         }
@@ -804,7 +811,7 @@ fun BirdDetailDialog(
 
     // Edit Bird dialog
     if (showEditBird) {
-        EditBirdDialog(bird, bloodlineName, viewModel, onDismiss = { showEditBird = false }, onSuccess = {
+        EditBirdDialog(bird, viewModel, onDismiss = { showEditBird = false }, onSuccess = {
             showEditBird = false
             Toast.makeText(context, "Bird updated", Toast.LENGTH_SHORT).show()
             onStatusChanged() // triggers refresh
@@ -814,12 +821,10 @@ fun BirdDetailDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EditBirdDialog(bird: Bird, bloodlineName: String?, viewModel: FlockViewModel, onDismiss: () -> Unit, onSuccess: () -> Unit) {
-    val bloodlines by viewModel.bloodlines.collectAsState()
+fun EditBirdDialog(bird: Bird, viewModel: FlockViewModel, onDismiss: () -> Unit, onSuccess: () -> Unit) {
     var sex by remember { mutableStateOf(bird.sex?.replaceFirstChar { it.uppercase() } ?: "Unknown") }
     var bandColor by remember { mutableStateOf(bird.bandColor ?: "") }
     var hatchDate by remember { mutableStateOf(bird.hatchDate ?: "") }
-    var nfcTag by remember { mutableStateOf(bird.bandId ?: "") }
     var notes by remember { mutableStateOf(bird.notes ?: "") }
     var status by remember { mutableStateOf(bird.status?.replaceFirstChar { it.uppercase() } ?: "Active") }
     var sexExpanded by remember { mutableStateOf(false) }
