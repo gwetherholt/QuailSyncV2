@@ -2323,6 +2323,9 @@
       addInterval(this._load.bind(this), 60000);
       setTimeout(function(){ self._pollQrStatus(); }, 2000);
       addInterval(function(){ self._pollQrStatus(); }, 5000);
+      // Headcount tiles on camera cards — reuse the Dashboard poll function
+      setTimeout(function(){ Page.Dashboard._pollHeadcount(); }, 3000);
+      addInterval(function(){ Page.Dashboard._pollHeadcount(); }, 30000);
     },
     stop: function(){},
 
@@ -2356,6 +2359,7 @@
         html+='<div class="camera-feed" id="cam-feed-'+b.id+'"><img src="'+escapeHtml(streamUrl)+'" alt="'+escapeHtml(b.name)+' feed" style="width:100%;max-height:400px;object-fit:contain;min-height:200px"></div>';
         html+='<div class="camera-actions"><button onclick="window.open(\''+escapeHtml(snapUrl)+'\',\'_blank\')">&#x1F4F8; Snapshot</button><button onclick="Page.Cameras.fullscreen(\'cam-feed-'+b.id+'\')">&#x26F6; Full Screen</button></div>';
         html+='<div id="qr-badge-'+b.id+'" style="margin-top:.3rem"><span class="qr-status-badge none">No QR</span></div>';
+        html+='<div data-field="headcount" data-brooder-hc="'+b.id+'" style="display:flex;align-items:center;gap:.4rem;font-size:.78rem;margin-top:.3rem;padding:4px 8px;background:var(--beige);border-radius:6px"><span style="font-size:1rem">&#x1F425;</span><span class="reading-value" style="font-weight:600;color:#7d8b6a">--</span><span style="color:#999"> chicks</span></div>';
         html+='<div class="camera-meta"><span>'+escapeHtml(streamUrl)+'</span></div>';
         html+='</div>';
       });

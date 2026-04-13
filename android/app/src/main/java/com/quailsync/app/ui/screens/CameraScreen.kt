@@ -1,7 +1,9 @@
+@file:Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE", "UNUSED_VALUE")
+
 package com.quailsync.app.ui.screens
 
 import android.content.Intent
-import android.net.Uri
+import androidx.core.net.toUri
 import android.util.Log
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
@@ -70,6 +72,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -85,7 +88,6 @@ import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.ServerConfig
 import com.quailsync.app.data.UpdateBrooderRequest
 import com.quailsync.app.ui.theme.SageGreen
-import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -353,7 +355,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun clearSaveError() { _saveError.value = null }
+    @Suppress("unused") fun clearSaveError() { _saveError.value = null }
 }
 
 // =====================================================================
@@ -580,7 +582,7 @@ fun CameraCard(
                 Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         onClick = {
-                            if (snapshotUrl != null) context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(snapshotUrl)))
+                            if (snapshotUrl != null) context.startActivity(Intent(Intent.ACTION_VIEW, snapshotUrl.toUri()))
                         },
                         Modifier.weight(1f),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = SageGreen),
@@ -602,6 +604,11 @@ fun CameraCard(
             } else {
                 CameraOfflinePlaceholder()
             }
+
+            // Headcount display
+            if (currentBrooderId != null) {
+                HeadcountTile(brooderId = currentBrooderId)
+            }
         }
     }
 
@@ -618,7 +625,6 @@ fun CameraCard(
 @Composable
 fun AddCameraDialog(viewModel: CameraViewModel, onDismiss: () -> Unit) {
     val brooders by viewModel.brooders.collectAsState()
-    val cameraItems by viewModel.cameraItems.collectAsState()
     val saveError by viewModel.saveError.collectAsState()
     var tabIndex by remember { mutableIntStateOf(0) }
 
@@ -815,7 +821,7 @@ fun MjpegStreamView(url: String, modifier: Modifier = Modifier, refreshKey: Int 
         currentFrame = null
         hasError = false
         val job = coroutineContext[Job]!!
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        withContext(Dispatchers.IO) {
             while (job.isActive) {
                 try {
                     val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
@@ -852,7 +858,7 @@ fun MjpegStreamView(url: String, modifier: Modifier = Modifier, refreshKey: Int 
                                 val bytes = ByteArray(contentLength) { frameData[it].code.toByte() }
                                 val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                                 if (bitmap != null) {
-                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                    withContext(Dispatchers.Main) {
                                         currentFrame = bitmap
                                         hasError = false
                                     }
@@ -879,7 +885,7 @@ fun MjpegStreamView(url: String, modifier: Modifier = Modifier, refreshKey: Int 
                                         val data = buf.toByteArray()
                                         val bitmap = android.graphics.BitmapFactory.decodeByteArray(data, 0, data.size)
                                         if (bitmap != null) {
-                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                            withContext(Dispatchers.Main) {
                                                 currentFrame = bitmap
                                                 hasError = false
                                             }
@@ -895,7 +901,7 @@ fun MjpegStreamView(url: String, modifier: Modifier = Modifier, refreshKey: Int 
                 } catch (e: Exception) {
                     if (job.isActive) {
                         Log.e("QuailSync", "MJPEG stream error: ${e.message}")
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { hasError = true }
+                        withContext(Dispatchers.Main) { hasError = true }
                         delay(2000)
                     }
                 }
@@ -937,7 +943,7 @@ fun QrStatusIndicator(streamUrl: String) {
     LaunchedEffect(qrUrl) {
         while (true) {
             try {
-                val text = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val text = withContext(Dispatchers.IO) {
                     val conn = java.net.URL(qrUrl).openConnection() as java.net.HttpURLConnection
                     conn.connectTimeout = 3000
                     conn.readTimeout = 3000
@@ -957,7 +963,7 @@ fun QrStatusIndicator(streamUrl: String) {
             } catch (_: Exception) {
                 qrText = null
             }
-            kotlinx.coroutines.delay(5000)
+            delay(5000)
         }
     }
 
@@ -968,6 +974,64 @@ fun QrStatusIndicator(streamUrl: String) {
         color = if (detected) SageGreen else MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(top = 4.dp),
     )
+}
+
+/**
+ * Polls headcount for a brooder every 30 seconds and displays the result.
+ * Shows "🐥 N chicks detected · Xm ago" or "🐥 -- chicks" as placeholder.
+ */
+@Composable
+fun HeadcountTile(brooderId: Int) {
+    val context = LocalContext.current
+    val api = remember { QuailSyncApi.create(ServerConfig.getServerUrl(context)) }
+    var count by remember { mutableStateOf<Int?>(null) }
+    var agoStr by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(brooderId) {
+        while (true) {
+            try {
+                val hc = withContext(Dispatchers.IO) { api.getHeadcountLatest(brooderId) }
+                count = hc.count
+                agoStr = hc.timestamp?.let { ts ->
+                    try {
+                        val instant = java.time.Instant.parse(ts)
+                        val ago = java.time.Duration.between(instant, java.time.Instant.now()).toMinutes()
+                        when {
+                            ago < 1L -> "just now"
+                            ago < 60L -> "${ago}m ago"
+                            else -> "${ago / 60}h ago"
+                        }
+                    } catch (_: Exception) { null }
+                }
+            } catch (_: Exception) {
+                count = null
+                agoStr = null
+            }
+            delay(30_000)
+        }
+    }
+
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        Arrangement.SpaceBetween,
+        Alignment.CenterVertically,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("\uD83D\uDC25", fontSize = 16.sp)
+            if (count != null) {
+                Text("$count chick${if (count != 1) "s" else ""} detected", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = SageGreen)
+            } else {
+                Text("-- chicks", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (agoStr != null) {
+            Text(agoStr!!, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
 }
 
 @Composable
