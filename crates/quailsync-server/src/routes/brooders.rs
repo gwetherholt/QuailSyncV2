@@ -232,8 +232,16 @@ pub(crate) async fn get_headcount_latest(
             timestamp: row.get(1)?,
         }),
     ) {
-        Ok(r) => Json(serde_json::json!(r)).into_response(),
-        Err(_) => Json(serde_json::json!({"brooder_id": id, "count": null, "timestamp": null})).into_response(),
+        Ok(r) => (StatusCode::OK, Json(r)).into_response(),
+        Err(_) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "brooder_id": id,
+                "count": serde_json::Value::Null,
+                "timestamp": serde_json::Value::Null
+            })),
+        )
+            .into_response(),
     }
 }
 

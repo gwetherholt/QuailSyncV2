@@ -95,7 +95,14 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
         Log.d("QuailSync", "BrooderManage: loading data for brooder $brooderId (refresh=$refreshKey)")
         try {
             targetTemp = try { api.getBrooderTargetTemp(brooderId) } catch (e: Exception) { Log.e("QuailSync", "targetTemp failed", e); null }
-            headcount = try { api.getHeadcountLatest(brooderId) } catch (_: Exception) { null }
+            headcount = try {
+                val hc = api.getHeadcountLatest(brooderId)
+                Log.d("QuailSync", "Headcount for brooder $brooderId: count=${hc.count} ts=${hc.timestamp}")
+                hc
+            } catch (e: Exception) {
+                Log.e("QuailSync", "Headcount fetch failed for brooder $brooderId", e)
+                null
+            }
 
             // Fetch chick groups — log raw JSON for debugging
             allGroups = try {

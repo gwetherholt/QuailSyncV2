@@ -959,7 +959,10 @@
     start: function(){
       addInterval(this._pollBrooder, 30000);
       addInterval(this._pollAlerts, 30000);
-      addInterval(this._pollHeadcount, 30000);
+      // Delay headcount poll so brooder cards are rendered first
+      var self = this;
+      setTimeout(function(){ self._pollHeadcount(); }, 3000);
+      addInterval(function(){ self._pollHeadcount(); }, 30000);
       addInterval(this._pollStats, 60000);
       addInterval(this._pollFlock, 60000);
     },
@@ -1127,7 +1130,7 @@
     },
 
     _pollHeadcount: async function(){
-      // Fetch latest headcount for each brooder and update cards
+      console.log('[headcount] polling...');
       var brooders = await API.get('/api/brooders');
       if(!brooders) return;
       for(var i=0;i<brooders.length;i++){
