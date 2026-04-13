@@ -1121,7 +1121,7 @@
         if(hasCam){ html+='<a onclick="Router.navigate(\'#/cameras\')" title="View camera"><img class="camera-thumb" src="'+escapeHtml(b.camera_url)+'" width="100" height="75" onerror="this.style.display=\'none\'"></a>'; }
         html+='</div>';
         html+='<div class="sparkline" data-field="spark">'+self._buildSparkBars(sparkTemps,20,28)+'</div>';
-        html+='<div data-field="headcount" style="font-size:.7rem;color:var(--sage);margin-top:.2rem"></div>';
+        html+='<div data-field="headcount" data-brooder-hc="'+b.id+'" style="font-size:.7rem;color:#7d8b6a;margin-top:.2rem"></div>';
         html+='<div data-field="alert" style="font-size:.7rem;color:var(--danger);margin-top:.3rem">'+escapeHtml(alertHtml)+'</div>';
         html+='</div>';
       }
@@ -1131,23 +1131,22 @@
 
     _pollHeadcount: async function(){
       console.log('[headcount] polling...');
-      var brooders = await API.get('/api/brooders');
-      if(!brooders) return;
-      for(var i=0;i<brooders.length;i++){
-        var b=brooders[i];
-        var card=document.querySelector('[data-brooder-id="'+b.id+'"]');
-        if(!card) continue;
-        var hcEl=card.querySelector('[data-field="headcount"]');
-        if(!hcEl) continue;
+      // Find all headcount elements by their unique data-brooder-hc attribute
+      var els = document.querySelectorAll('[data-brooder-hc]');
+      if(!els.length){ console.log('[headcount] no headcount elements found'); return; }
+      for(var i=0;i<els.length;i++){
+        var hcEl=els[i];
+        var bid=hcEl.getAttribute('data-brooder-hc');
         try{
-          var hc=await API.get('/api/brooders/'+b.id+'/headcount/latest');
+          var hc=await API.get('/api/brooders/'+bid+'/headcount/latest');
+          console.log('[headcount] brooder '+bid+': count='+( hc ? hc.count : 'null'));
           if(hc && hc.count!=null){
             var ts=new Date(hc.timestamp);
             var ago=Math.round((Date.now()-ts.getTime())/60000);
             var agoStr=ago<1?'just now':ago<60?ago+'m ago':Math.round(ago/60)+'h ago';
             hcEl.innerHTML='&#x1F425; '+hc.count+' chick'+(hc.count!==1?'s':'')+' &middot; '+agoStr;
           } else { hcEl.innerHTML=''; }
-        }catch(e){ hcEl.innerHTML=''; }
+        }catch(e){ console.log('[headcount] error for brooder '+bid+': '+e); hcEl.innerHTML=''; }
       }
     },
 
