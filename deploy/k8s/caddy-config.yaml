@@ -4,6 +4,6 @@ metadata:
   name: caddy-config
 data:
   Caddyfile: |
-    quailsync.westus2.cloudapp.azure.com {
+    quailsync.tail01d133.ts.net {
       reverse_proxy localhost:3000
     }
