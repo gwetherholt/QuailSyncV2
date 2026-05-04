@@ -735,7 +735,7 @@ fun AddCameraDialog(viewModel: CameraViewModel, onDismiss: () -> Unit) {
                         value = brooderCameraUrl,
                         onValueChange = { brooderCameraUrl = it },
                         label = { Text("Stream URL") },
-                        placeholder = { Text("http://quailsync.westus2.azurecontainer.io:8080/stream") },
+                        placeholder = { Text("http://192.168.0.114:8080/stream") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
@@ -771,7 +771,7 @@ fun AddCameraDialog(viewModel: CameraViewModel, onDismiss: () -> Unit) {
                         value = cameraUrl,
                         onValueChange = { cameraUrl = it },
                         label = { Text("Stream URL") },
-                        placeholder = { Text("http://quailsync.westus2.azurecontainer.io:8080/stream") },
+                        placeholder = { Text("http://192.168.0.114:8080/stream") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )

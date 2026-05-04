@@ -14,7 +14,7 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        buildConfigField("String", "BASE_URL", "\"http://quailsync.westus2.azurecontainer.io:3000\"")
+        buildConfigField("String", "BASE_URL", "\"https://quailsync.tail01d133.ts.net\"")
     }
 
     buildTypes {

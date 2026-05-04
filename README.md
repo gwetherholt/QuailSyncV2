@@ -427,7 +427,7 @@ QuailSync runs as a cloud-edge hybrid: the Rust server runs on Azure Kubernetes 
 - **Server**: AKS cluster (Standard_B2s_v2 node) running the Rust/Axum server with a Caddy sidecar for automatic HTTPS
 - **Registry**: Azure Container Registry (`quailsyncregistry.azurecr.io`)
 - **Storage**: Azure Managed Disk (1Gi, managed-csi) for SQLite persistence
-- **DNS**: `quailsync.westus2.cloudapp.azure.com`
+- **DNS**: `quailsync.tail01d133.ts.net` (Tailscale Funnel)
 - **TLS**: Automatic Let's Encrypt via Caddy — zero-config HTTPS
 - **Remote Access**: Tailscale VPN mesh connects Pi camera streams to the cloud dashboard
 
@@ -453,7 +453,7 @@ Kubernetes manifests are in `deploy/k8s/`.
 
 The Pi runs locally and connects to the cloud server:
 
-- **Sensor agent** streams telemetry via WebSocket to `ws://quailsync.westus2.cloudapp.azure.com:3000/ws`
+- **Sensor agent** streams telemetry via WebSocket to `wss://quailsync.tail01d133.ts.net/ws`
 - **Camera** streams MJPEG over Tailscale — the `--advertise-ip` flag announces the Tailscale IP so remote clients can reach the stream
 - **ESP32-C3** wireless nodes send temperature/humidity readings directly to the Azure endpoint
 
