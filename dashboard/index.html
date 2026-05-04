@@ -396,6 +396,11 @@
   .status-badge.culled{background:#fce4e4;color:#b71c1c}
   .status-badge.deceased{background:#e0e0e0;color:#555}
   .status-badge.sold{background:#e3f2fd;color:#0d47a1}
+  .ready-badge{
+    display:inline-block;padding:2px 10px;border-radius:12px;
+    font-size:.72rem;font-weight:700;letter-spacing:.03em;
+    background:var(--sage-dark);color:#fff;margin-left:.4rem;
+  }
 
   .bird-detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.25rem}
   .bird-detail-grid .panel{min-height:0}
@@ -2516,7 +2521,8 @@
 
         html += '<div class="clutch-card'+(g.status !== 'Active' ? ' muted' : '')+'">';
         html += '<div class="clutch-card-body">';
-        html += '<h4>Group #'+g.id+(blName ? ' &mdash; '+blName : '')+' <span class="status-badge '+statusCls+'">'+g.status+'</span></h4>';
+        var readyBadge = g.is_ready_to_transition ? '<span class="ready-badge" title="Fully feathered — ready to band">&check; Ready to band</span>' : '';
+        html += '<h4>Group #'+g.id+(blName ? ' &mdash; '+blName : '')+' <span class="status-badge '+statusCls+'">'+g.status+'</span>'+readyBadge+'</h4>';
 
         html += '<div class="clutch-egg-counts">';
         html += '<span><span class="egg-num">'+g.current_count+'/'+g.initial_count+'</span><span class="egg-lbl">Chicks</span></span>';

@@ -179,7 +179,7 @@ pub fn row_to_clutch(row: &rusqlite::Row) -> rusqlite::Result<Clutch> {
 pub fn row_to_chick_group(row: &rusqlite::Row) -> rusqlite::Result<ChickGroup> {
     let hatch_str: String = row.get(6)?;
     let status_str: String = row.get(7)?;
-    Ok(ChickGroup {
+    let mut group = ChickGroup {
         id: row.get(0)?,
         clutch_id: row.get(1)?,
         bloodline_id: row.get(2)?,
@@ -189,7 +189,10 @@ pub fn row_to_chick_group(row: &rusqlite::Row) -> rusqlite::Result<ChickGroup> {
         hatch_date: NaiveDate::parse_from_str(&hatch_str, "%Y-%m-%d").unwrap_or_default(),
         status: str_to_chick_group_status(&status_str),
         notes: row.get(8)?,
-    })
+        is_ready_to_transition: false,
+    };
+    group.is_ready_to_transition = group.compute_is_ready_to_transition();
+    Ok(group)
 }
 
 pub fn row_to_brooder(row: &rusqlite::Row) -> rusqlite::Result<Brooder> {

@@ -21,21 +21,20 @@ pub(crate) async fn create_chick_group(
         return db_error(e);
     }
     let id = conn.last_insert_rowid();
-    (
-        StatusCode::CREATED,
-        Json(ChickGroup {
-            id,
-            clutch_id: body.clutch_id,
-            bloodline_id: body.bloodline_id,
-            brooder_id: body.brooder_id,
-            initial_count: body.initial_count,
-            current_count: body.initial_count,
-            hatch_date: body.hatch_date,
-            status: ChickGroupStatus::Active,
-            notes: body.notes,
-        }),
-    )
-        .into_response()
+    let mut group = ChickGroup {
+        id,
+        clutch_id: body.clutch_id,
+        bloodline_id: body.bloodline_id,
+        brooder_id: body.brooder_id,
+        initial_count: body.initial_count,
+        current_count: body.initial_count,
+        hatch_date: body.hatch_date,
+        status: ChickGroupStatus::Active,
+        notes: body.notes,
+        is_ready_to_transition: false,
+    };
+    group.is_ready_to_transition = group.compute_is_ready_to_transition();
+    (StatusCode::CREATED, Json(group)).into_response()
 }
 
 const GROUP_SELECT: &str = "SELECT id, clutch_id, bloodline_id, brooder_id, initial_count, current_count, hatch_date, status, notes FROM chick_groups";
@@ -272,4 +271,49 @@ pub(crate) async fn graduate_chick_group(
     .ok();
 
     Json(birds_created).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    fn group_with(hatch: NaiveDate, status: ChickGroupStatus) -> ChickGroup {
+        ChickGroup {
+            id: 1,
+            clutch_id: None,
+            bloodline_id: 1,
+            brooder_id: None,
+            initial_count: 12,
+            current_count: 12,
+            hatch_date: hatch,
+            status,
+            notes: None,
+            is_ready_to_transition: false,
+        }
+    }
+
+    #[test]
+    fn not_ready_at_five_weeks() {
+        let today = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
+        let hatch = today - chrono::Duration::weeks(5);
+        let g = group_with(hatch, ChickGroupStatus::Active);
+        assert!(!g.compute_is_ready_to_transition_at(today));
+    }
+
+    #[test]
+    fn ready_at_six_weeks() {
+        let today = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
+        let hatch = today - chrono::Duration::weeks(6);
+        let g = group_with(hatch, ChickGroupStatus::Active);
+        assert!(g.compute_is_ready_to_transition_at(today));
+    }
+
+    #[test]
+    fn not_ready_when_graduated() {
+        let today = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
+        let hatch = today - chrono::Duration::weeks(8);
+        let g = group_with(hatch, ChickGroupStatus::Graduated);
+        assert!(!g.compute_is_ready_to_transition_at(today));
+    }
 }

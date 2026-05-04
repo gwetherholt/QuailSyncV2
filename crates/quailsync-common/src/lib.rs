@@ -492,6 +492,30 @@ pub struct ChickGroup {
     pub hatch_date: NaiveDate,
     pub status: ChickGroupStatus,
     pub notes: Option<String>,
+    #[serde(default)]
+    pub is_ready_to_transition: bool,
+}
+
+/// Coturnix maturity threshold — fully feathered, sexable, ready to band.
+pub const READY_TO_TRANSITION_AGE_WEEKS: i64 = 6;
+
+impl ChickGroup {
+    pub fn age_weeks_at(&self, today: NaiveDate) -> i64 {
+        (today - self.hatch_date).num_days() / 7
+    }
+
+    pub fn age_weeks(&self) -> i64 {
+        self.age_weeks_at(chrono::Local::now().date_naive())
+    }
+
+    pub fn compute_is_ready_to_transition_at(&self, today: NaiveDate) -> bool {
+        self.age_weeks_at(today) >= READY_TO_TRANSITION_AGE_WEEKS
+            && self.status == ChickGroupStatus::Active
+    }
+
+    pub fn compute_is_ready_to_transition(&self) -> bool {
+        self.compute_is_ready_to_transition_at(chrono::Local::now().date_naive())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

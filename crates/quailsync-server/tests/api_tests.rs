@@ -1,7 +1,8 @@
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use quailsync_common::{
-    Bird, BirdStatus, Bloodline, CreateBird, CreateBloodline, InbreedingCoefficient, Sex,
+    Bird, BirdStatus, Bloodline, ChickGroup, CreateBird, CreateBloodline, CreateChickGroup,
+    InbreedingCoefficient, Sex,
 };
 use quailsync_server::{build_app, init_db, AppState};
 use rusqlite::Connection;
@@ -420,4 +421,73 @@ async fn breeding_suggest_full_siblings() {
         .expect("should have son×daughter pair");
     assert!((sibling_pair.coefficient - 0.5).abs() < f64::EPSILON);
     assert!(!sibling_pair.safe);
+}
+
+// ---------------------------------------------------------------------------
+// Chick groups: GET /api/chick-groups returns is_ready_to_transition correctly
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn chick_groups_expose_is_ready_to_transition() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    client
+        .post(format!("{base}/api/bloodlines"))
+        .json(&CreateBloodline {
+            name: "Coturnix".into(),
+            source: "Local".into(),
+            notes: None,
+        })
+        .send()
+        .await
+        .unwrap();
+
+    let today = chrono::Local::now().date_naive();
+    let young_hatch = today - chrono::Duration::weeks(3);
+    let mature_hatch = today - chrono::Duration::weeks(7);
+
+    for hatch in [young_hatch, mature_hatch] {
+        client
+            .post(format!("{base}/api/chick-groups"))
+            .json(&CreateChickGroup {
+                clutch_id: None,
+                bloodline_id: 1,
+                brooder_id: None,
+                initial_count: 10,
+                hatch_date: hatch,
+                notes: None,
+            })
+            .send()
+            .await
+            .unwrap();
+    }
+
+    let resp = reqwest::get(format!("{base}/api/chick-groups"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Assert the field is serialized in the raw JSON.
+    let raw: serde_json::Value = resp.json().await.unwrap();
+    let arr = raw.as_array().expect("expected array");
+    assert_eq!(arr.len(), 2);
+    for g in arr {
+        assert!(
+            g.get("is_ready_to_transition").is_some(),
+            "missing is_ready_to_transition field: {g}"
+        );
+    }
+
+    let groups: Vec<ChickGroup> = serde_json::from_value(raw).unwrap();
+    let young = groups
+        .iter()
+        .find(|g| g.hatch_date == young_hatch)
+        .expect("young group");
+    let mature = groups
+        .iter()
+        .find(|g| g.hatch_date == mature_hatch)
+        .expect("mature group");
+    assert!(!young.is_ready_to_transition, "3-week group should not be ready");
+    assert!(mature.is_ready_to_transition, "7-week group should be ready");
 }

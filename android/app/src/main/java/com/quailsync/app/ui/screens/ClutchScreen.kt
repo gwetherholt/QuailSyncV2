@@ -65,6 +65,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -106,7 +107,6 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 
 private const val INCUBATION_DAYS = 17L
-private const val BANDING_AGE_DAYS = 28
 
 // =====================================================================
 // ViewModel
@@ -916,7 +916,7 @@ fun ChickGroupCard(group: ChickGroupDto, bloodlineName: String?, brooderName: St
     val hatchDate = remember(group.hatchDate) { parseDate(group.hatchDate) }
     val ageDays = remember(hatchDate, today) { hatchDate?.let { ChronoUnit.DAYS.between(it, today).toInt() } ?: 0 }
     val mortalityPct = if (group.initialCount > 0) ((group.initialCount - group.currentCount).toFloat() / group.initialCount * 100) else 0f
-    val canBand = ageDays >= BANDING_AGE_DAYS
+    val readyToTransition = group.isReadyToTransition
 
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(2.dp)) {
         Column(Modifier.padding(16.dp)) {
@@ -926,6 +926,19 @@ fun ChickGroupCard(group: ChickGroupDto, bloodlineName: String?, brooderName: St
                     Text("Group #${group.id}", style = MaterialTheme.typography.bodyMedium)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (readyToTransition) {
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(AlertGreen)
+                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                                .testTag("ready-to-band-badge"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("\u2713 Ready to band", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = Color.White)
+                        }
+                        Spacer(Modifier.width(6.dp))
+                    }
                     Box(Modifier.clip(RoundedCornerShape(8.dp)).background(SageGreenLight.copy(alpha = 0.3f)).padding(horizontal = 10.dp, vertical = 4.dp), contentAlignment = Alignment.Center) {
                         Text("Day $ageDays", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = SageGreen)
                     }
@@ -939,14 +952,26 @@ fun ChickGroupCard(group: ChickGroupDto, bloodlineName: String?, brooderName: St
                 Column(horizontalAlignment = Alignment.CenterHorizontally) { Text("%.0f%%".format(mortalityPct), fontSize = 22.sp, fontWeight = FontWeight.Bold, color = if (mortalityPct > 20) AlertRed else if (mortalityPct > 10) AlertYellow else AlertGreen); Text("Mortality", style = MaterialTheme.typography.bodyMedium) }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) { Text("${ageDays / 7 + 1}", fontSize = 22.sp, fontWeight = FontWeight.Bold); Text("Week", style = MaterialTheme.typography.bodyMedium) }
             }
-            if (brooderName != null) { Spacer(Modifier.height(8.dp)); Text("Brooder: $brooderName", style = MaterialTheme.typography.bodyMedium, color = SageGreen) }
+            if (brooderName != null) {
+                Spacer(Modifier.height(8.dp))
+                Text("Brooder: $brooderName", style = MaterialTheme.typography.bodyMedium, color = SageGreen)
+                if (readyToTransition) {
+                    Text("Fully feathered \u2014 ready to move to flock", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else if (readyToTransition) {
+                Spacer(Modifier.height(8.dp))
+                Text("Fully feathered \u2014 ready to move to flock", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onLogMortality, Modifier.weight(1f)) { Text("\uD83D\uDC25", fontSize = 14.sp); Spacer(Modifier.width(4.dp)); Text("Log Mortality") }
-                if (canBand) {
-                    Button(onClick = {}, Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = SageGreen)) { Icon(Icons.Default.Nfc, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Band Group") }
-                } else {
-                    OutlinedButton(onClick = {}, Modifier.weight(1f), enabled = false) { Icon(Icons.Default.Nfc, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Band ($ageDays/${BANDING_AGE_DAYS}d)") }
+                Button(
+                    onClick = {},
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = if (readyToTransition) 6.dp else 2.dp)
+                ) {
+                    Icon(Icons.Default.Nfc, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Band Group")
                 }
             }
         }

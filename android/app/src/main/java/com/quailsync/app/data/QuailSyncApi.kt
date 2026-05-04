@@ -224,6 +224,7 @@ data class ChickGroupDto(
     @SerializedName("hatch_date") val hatchDate: String,
     @SerializedName("status") val status: String,
     @SerializedName("notes") val notes: String? = null,
+    @SerializedName("is_ready_to_transition") val isReadyToTransition: Boolean = false,
 )
 
 data class AssignGroupRequest(
