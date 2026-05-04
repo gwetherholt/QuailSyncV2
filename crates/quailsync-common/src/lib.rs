@@ -153,6 +153,8 @@ pub struct Bird {
     pub nfc_tag_id: Option<String>,
     #[serde(default)]
     pub current_brooder_id: Option<i64>,
+    #[serde(default)]
+    pub photo_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -560,6 +562,10 @@ pub struct GraduateBird {
     pub band_color: Option<String>,
     pub nfc_tag_id: Option<String>,
     pub notes: Option<String>,
+    #[serde(default)]
+    pub weight_grams: Option<f64>,
+    #[serde(default)]
+    pub photo_path: Option<String>,
 }
 
 // =========================================================================

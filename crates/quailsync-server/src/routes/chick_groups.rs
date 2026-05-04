@@ -240,14 +240,25 @@ pub(crate) async fn graduate_chick_group(
     let mut birds_created = Vec::new();
     for gb in &body.birds {
         if let Err(e) = conn.execute(
-            "INSERT INTO birds (band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'Active', ?8, ?9, ?10)",
+            "INSERT INTO birds (band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'Active', ?8, ?9, ?10, ?11)",
             params![gb.band_color, sex_to_str(&gb.sex), group.bloodline_id, group.hatch_date.to_string(),
-                mother_id, father_id, generation, gb.notes, gb.nfc_tag_id, group.brooder_id],
+                mother_id, father_id, generation, gb.notes, gb.nfc_tag_id, group.brooder_id, gb.photo_path],
         ) {
             return db_error(e);
         }
         let bird_id = conn.last_insert_rowid();
+
+        // Persist initial weight to weight_records so it shows in growth history.
+        if let Some(grams) = gb.weight_grams {
+            if let Err(e) = conn.execute(
+                "INSERT INTO weight_records (bird_id, weight_grams, date, notes) VALUES (?1, ?2, ?3, ?4)",
+                params![bird_id, grams, group.hatch_date.to_string(), Option::<&str>::None],
+            ) {
+                return db_error(e);
+            }
+        }
+
         birds_created.push(Bird {
             id: bird_id,
             band_color: gb.band_color.clone(),
@@ -261,6 +272,7 @@ pub(crate) async fn graduate_chick_group(
             notes: gb.notes.clone(),
             nfc_tag_id: gb.nfc_tag_id.clone(),
             current_brooder_id: group.brooder_id,
+            photo_path: gb.photo_path.clone(),
         });
     }
 
@@ -331,5 +343,26 @@ mod tests {
         let hatch = today - chrono::Duration::days(35);
         let g = group_with(hatch, ChickGroupStatus::Active);
         assert!(g.compute_is_ready_to_transition_at(today));
+    }
+
+    /// Regression: GraduateBird payload must round-trip through serde even when
+    /// the new optional intake fields (weight_grams, photo_path) are omitted —
+    /// CLI/API callers from before the per-bird intake feature must keep working.
+    #[test]
+    fn graduate_bird_deserializes_without_optional_fields() {
+        let json = r#"{"sex":"Male","band_color":null,"nfc_tag_id":null,"notes":null}"#;
+        let gb: GraduateBird = serde_json::from_str(json).unwrap();
+        assert_eq!(gb.sex, Sex::Male);
+        assert!(gb.weight_grams.is_none());
+        assert!(gb.photo_path.is_none());
+    }
+
+    /// Regression: GraduateBird carries the new optional fields when present.
+    #[test]
+    fn graduate_bird_deserializes_with_optional_fields() {
+        let json = r#"{"sex":"Female","band_color":"red","nfc_tag_id":"T1","notes":null,"weight_grams":140.5,"photo_path":"x.jpg"}"#;
+        let gb: GraduateBird = serde_json::from_str(json).unwrap();
+        assert_eq!(gb.weight_grams, Some(140.5));
+        assert_eq!(gb.photo_path.as_deref(), Some("x.jpg"));
     }
 }

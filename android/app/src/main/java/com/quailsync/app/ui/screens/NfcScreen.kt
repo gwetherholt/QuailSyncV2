@@ -14,6 +14,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -73,6 +74,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -297,7 +299,14 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
     }
 
     /** Called when user fills per-bird details and taps "Create & Tag". */
-    fun createAndTagBird(sex: String, bandColor: String, notes: String) {
+    fun createAndTagBird(
+        sex: String,
+        bandColor: String,
+        notes: String,
+        weightGrams: Double? = null,
+        photoBitmap: Bitmap? = null,
+        context: Context? = null,
+    ) {
         val state = _batchState.value as? BatchState.PerBirdEntry ?: return
 
         _batchState.value = BatchState.CreatingBird(
@@ -331,6 +340,26 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
                 Log.d("QuailSync", "Batch: creating bird: sex=$sexValue, bloodline=${state.bloodlineId}, band=$bandColor")
                 val bird = api.createBird(request)
                 Log.d("QuailSync", "Batch: created bird ${bird.id}, entering write mode")
+
+                // Persist optional intake fields one-at-a-time as soon as the bird id is known,
+                // so partial data isn't lost if the user closes the app mid-batch.
+                if (weightGrams != null && weightGrams > 0) {
+                    try {
+                        api.createBirdWeight(
+                            bird.id,
+                            CreateWeightRequest(
+                                weightGrams = weightGrams,
+                                date = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE),
+                                notes = null,
+                            ),
+                        )
+                    } catch (e: Exception) {
+                        Log.e("QuailSync", "Batch: weight log failed for bird ${bird.id}", e)
+                    }
+                }
+                if (photoBitmap != null && context != null) {
+                    saveBirdPhotoLocally(bird.id, photoBitmap, context)
+                }
 
                 nfcService.enterWriteMode("BIRD-${bird.id}")
 
@@ -635,12 +664,19 @@ fun BatchSetupScreen(viewModel: NfcViewModel) {
 
 @Composable
 fun PerBirdEntryScreen(state: BatchState.PerBirdEntry, viewModel: NfcViewModel) {
+    val context = LocalContext.current
     var sex by remember(state.currentIndex) { mutableStateOf("Unknown") }
     var bandColor by remember(state.currentIndex) {
         // Auto-fill from last bird of the same sex
         mutableStateOf("")
     }
     var notes by remember(state.currentIndex) { mutableStateOf("") }
+    var weightText by remember(state.currentIndex) { mutableStateOf("") }
+    var photoBitmap by remember(state.currentIndex) { mutableStateOf<Bitmap?>(null) }
+
+    val photoLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview(),
+    ) { bitmap -> if (bitmap != null) photoBitmap = bitmap }
 
     val writeResult by viewModel.nfcService.writeResult.collectAsState()
 
@@ -712,6 +748,54 @@ fun PerBirdEntryScreen(state: BatchState.PerBirdEntry, viewModel: NfcViewModel) 
 
         Spacer(Modifier.height(8.dp))
 
+        // Weight (optional)
+        OutlinedTextField(
+            value = weightText,
+            onValueChange = { weightText = it.filter { ch -> ch.isDigit() || ch == '.' } },
+            label = { Text("Weight (g) — optional") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            supportingText = {
+                val grams = weightText.toDoubleOrNull()
+                if (grams != null && (grams < 50 || grams > 500)) {
+                    Text("Outside typical 50–500g range", color = AlertYellow)
+                }
+            },
+        )
+
+        Spacer(Modifier.height(8.dp))
+
+        // Photo (optional) — TakePicturePreview returns a Bitmap; FileProvider is
+        // configured but the existing FlockScreen capture pattern uses preview, so
+        // we follow that for consistency.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (photoBitmap != null) {
+                Image(
+                    bitmap = photoBitmap!!.asImageBitmap(),
+                    contentDescription = "Bird photo preview",
+                    modifier = Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)),
+                )
+                Spacer(Modifier.width(12.dp))
+                OutlinedButton(onClick = { photoLauncher.launch(null) }) {
+                    Icon(Icons.Default.CameraAlt, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Retake")
+                }
+            } else {
+                OutlinedButton(
+                    onClick = { photoLauncher.launch(null) },
+                    Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.CameraAlt, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Take Photo (optional)")
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
         // Notes
         OutlinedTextField(
             value = notes,
@@ -723,9 +807,18 @@ fun PerBirdEntryScreen(state: BatchState.PerBirdEntry, viewModel: NfcViewModel) 
 
         Spacer(Modifier.height(16.dp))
 
-        // Create & Tag button
+        // Create & Tag button — always enabled, optional fields can be skipped.
         Button(
-            onClick = { viewModel.createAndTagBird(sex, bandColor, notes) },
+            onClick = {
+                viewModel.createAndTagBird(
+                    sex = sex,
+                    bandColor = bandColor,
+                    notes = notes,
+                    weightGrams = weightText.toDoubleOrNull(),
+                    photoBitmap = photoBitmap,
+                    context = context,
+                )
+            },
             modifier = Modifier.fillMaxWidth().height(52.dp),
             colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
         ) {
@@ -1031,7 +1124,7 @@ fun BatchCompleteScreen(state: BatchState.Complete, viewModel: NfcViewModel) {
         Spacer(Modifier.height(16.dp))
 
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            items(state.graduated) { g ->
+            items(state.graduated, key = { "${it.bird.id}-${it.tagId}" }) { g ->
                 Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                     Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(28.dp).clip(CircleShape).background(SageGreen), contentAlignment = Alignment.Center) {

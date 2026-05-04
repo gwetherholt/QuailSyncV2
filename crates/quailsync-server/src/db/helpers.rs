@@ -150,6 +150,7 @@ pub fn row_to_bird(row: &rusqlite::Row) -> rusqlite::Result<Bird> {
         notes: row.get(9)?,
         nfc_tag_id: row.get(10)?,
         current_brooder_id: row.get(11)?,
+        photo_path: row.get(12)?,
     })
 }
 

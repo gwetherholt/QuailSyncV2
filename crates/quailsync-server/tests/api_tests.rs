@@ -2,7 +2,7 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use quailsync_common::{
     Bird, BirdStatus, Bloodline, ChickGroup, CreateBird, CreateBloodline, CreateChickGroup,
-    InbreedingCoefficient, Sex,
+    GraduateBird, GraduateRequest, InbreedingCoefficient, Sex,
 };
 use quailsync_server::{build_app, init_db, AppState};
 use rusqlite::Connection;
@@ -496,4 +496,160 @@ async fn chick_groups_expose_is_ready_to_transition() {
         mature.is_ready_to_transition,
         "day-35 group should be ready"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Chick groups: PUT /api/chick-groups/{id}/graduate creates birds with unique
+// IDs and persists optional weight + photo intake fields.
+// Regression test for the "all birds share the same ID" summary-screen bug
+// (the summary had a state-management/key bug; the data layer must produce
+// unique ids regardless).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn graduate_creates_birds_with_unique_ids_and_intake_fields() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    client
+        .post(format!("{base}/api/bloodlines"))
+        .json(&CreateBloodline {
+            name: "Coturnix".into(),
+            source: "Local".into(),
+            notes: None,
+        })
+        .send()
+        .await
+        .unwrap();
+
+    let today = chrono::Local::now().date_naive();
+    let group: ChickGroup = client
+        .post(format!("{base}/api/chick-groups"))
+        .json(&CreateChickGroup {
+            clutch_id: None,
+            bloodline_id: 1,
+            brooder_id: None,
+            initial_count: 3,
+            hatch_date: today - chrono::Duration::days(40),
+            notes: None,
+        })
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    // Mixed payload: bird 0 has weight + photo, bird 1 has nothing extra,
+    // bird 2 has only weight. Tests that backwards-compatible defaults work.
+    let req = GraduateRequest {
+        birds: vec![
+            GraduateBird {
+                sex: Sex::Male,
+                band_color: Some("blue".into()),
+                nfc_tag_id: Some("TAG-A".into()),
+                notes: None,
+                weight_grams: Some(142.5),
+                photo_path: Some("bird_photos/grad_a.jpg".into()),
+            },
+            GraduateBird {
+                sex: Sex::Female,
+                band_color: Some("red".into()),
+                nfc_tag_id: Some("TAG-B".into()),
+                notes: None,
+                weight_grams: None,
+                photo_path: None,
+            },
+            GraduateBird {
+                sex: Sex::Unknown,
+                band_color: None,
+                nfc_tag_id: Some("TAG-C".into()),
+                notes: Some("note".into()),
+                weight_grams: Some(160.0),
+                photo_path: None,
+            },
+        ],
+    };
+
+    let resp = client
+        .post(format!("{base}/api/chick-groups/{}/graduate", group.id))
+        .json(&req)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let birds: Vec<Bird> = resp.json().await.unwrap();
+    assert_eq!(birds.len(), 3);
+
+    // Each bird must have a unique DB id and unique NFC tag.
+    let ids: std::collections::HashSet<i64> = birds.iter().map(|b| b.id).collect();
+    assert_eq!(ids.len(), 3, "graduated birds must have unique ids");
+    let tags: std::collections::HashSet<&Option<String>> =
+        birds.iter().map(|b| &b.nfc_tag_id).collect();
+    assert_eq!(tags.len(), 3, "graduated birds must have unique tags");
+
+    // Optional fields are reflected on the response.
+    let bird_a = birds.iter().find(|b| b.nfc_tag_id.as_deref() == Some("TAG-A")).unwrap();
+    assert_eq!(bird_a.photo_path.as_deref(), Some("bird_photos/grad_a.jpg"));
+    assert_eq!(bird_a.sex, Sex::Male);
+    let bird_b = birds.iter().find(|b| b.nfc_tag_id.as_deref() == Some("TAG-B")).unwrap();
+    assert!(bird_b.photo_path.is_none());
+
+    // Weight history: bird A and bird C should each have one weight_record;
+    // bird B should have none.
+    let weights_a: Vec<serde_json::Value> = client
+        .get(format!("{base}/api/birds/{}/weights", bird_a.id))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(weights_a.len(), 1, "bird A should have its initial weight logged");
+    assert!((weights_a[0]["weight_grams"].as_f64().unwrap() - 142.5).abs() < f64::EPSILON);
+
+    let weights_b: Vec<serde_json::Value> = client
+        .get(format!("{base}/api/birds/{}/weights", bird_b.id))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(weights_b.is_empty(), "bird B had no weight_grams in payload");
+
+    // Status should be Active and group should be flipped to Graduated.
+    assert!(birds.iter().all(|b| b.status == BirdStatus::Active));
+    let groups: Vec<ChickGroup> = client
+        .get(format!("{base}/api/chick-groups"))
+        .send().await.unwrap().json().await.unwrap();
+    let g = groups.iter().find(|g| g.id == group.id).unwrap();
+    assert_eq!(format!("{:?}", g.status), "Graduated");
+}
+
+// Backwards-compat: a payload that omits the new optional fields still works
+// (existing CLI/API clients).
+#[tokio::test]
+async fn graduate_accepts_payload_without_new_fields() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    client.post(format!("{base}/api/bloodlines"))
+        .json(&CreateBloodline { name: "X".into(), source: "L".into(), notes: None })
+        .send().await.unwrap();
+
+    let today = chrono::Local::now().date_naive();
+    let group: ChickGroup = client.post(format!("{base}/api/chick-groups"))
+        .json(&CreateChickGroup {
+            clutch_id: None, bloodline_id: 1, brooder_id: None,
+            initial_count: 2, hatch_date: today - chrono::Duration::days(40), notes: None,
+        })
+        .send().await.unwrap().json().await.unwrap();
+
+    // Send a raw JSON payload with only the legacy fields (no weight_grams / photo_path).
+    let raw_payload = serde_json::json!({
+        "birds": [
+            { "sex": "Male",   "band_color": null, "nfc_tag_id": null, "notes": null },
+            { "sex": "Female", "band_color": null, "nfc_tag_id": null, "notes": null },
+        ],
+    });
+    let resp = client
+        .post(format!("{base}/api/chick-groups/{}/graduate", group.id))
+        .json(&raw_payload)
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200, "legacy payload must still graduate");
+    let birds: Vec<Bird> = resp.json().await.unwrap();
+    assert_eq!(birds.len(), 2);
+    assert!(birds.iter().all(|b| b.photo_path.is_none()));
 }
