@@ -444,8 +444,8 @@ async fn chick_groups_expose_is_ready_to_transition() {
         .unwrap();
 
     let today = chrono::Local::now().date_naive();
-    let young_hatch = today - chrono::Duration::weeks(3);
-    let mature_hatch = today - chrono::Duration::weeks(7);
+    let young_hatch = today - chrono::Duration::days(34);
+    let mature_hatch = today - chrono::Duration::days(35);
 
     for hatch in [young_hatch, mature_hatch] {
         client
@@ -490,10 +490,10 @@ async fn chick_groups_expose_is_ready_to_transition() {
         .expect("mature group");
     assert!(
         !young.is_ready_to_transition,
-        "3-week group should not be ready"
+        "day-34 group should not be ready"
     );
     assert!(
         mature.is_ready_to_transition,
-        "7-week group should be ready"
+        "day-35 group should be ready"
     );
 }

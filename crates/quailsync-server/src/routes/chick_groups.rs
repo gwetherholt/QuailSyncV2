@@ -294,17 +294,17 @@ mod tests {
     }
 
     #[test]
-    fn not_ready_at_five_weeks() {
+    fn not_ready_at_four_weeks() {
         let today = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
-        let hatch = today - chrono::Duration::weeks(5);
+        let hatch = today - chrono::Duration::days(28);
         let g = group_with(hatch, ChickGroupStatus::Active);
         assert!(!g.compute_is_ready_to_transition_at(today));
     }
 
     #[test]
-    fn ready_at_six_weeks() {
+    fn ready_at_five_weeks_exactly() {
         let today = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
-        let hatch = today - chrono::Duration::weeks(6);
+        let hatch = today - chrono::Duration::days(35);
         let g = group_with(hatch, ChickGroupStatus::Active);
         assert!(g.compute_is_ready_to_transition_at(today));
     }
@@ -315,5 +315,21 @@ mod tests {
         let hatch = today - chrono::Duration::weeks(8);
         let g = group_with(hatch, ChickGroupStatus::Graduated);
         assert!(!g.compute_is_ready_to_transition_at(today));
+    }
+
+    #[test]
+    fn not_ready_at_day_34() {
+        let today = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
+        let hatch = today - chrono::Duration::days(34);
+        let g = group_with(hatch, ChickGroupStatus::Active);
+        assert!(!g.compute_is_ready_to_transition_at(today));
+    }
+
+    #[test]
+    fn ready_at_day_35() {
+        let today = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
+        let hatch = today - chrono::Duration::days(35);
+        let g = group_with(hatch, ChickGroupStatus::Active);
+        assert!(g.compute_is_ready_to_transition_at(today));
     }
 }

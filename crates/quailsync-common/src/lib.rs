@@ -497,11 +497,17 @@ pub struct ChickGroup {
 }
 
 /// Coturnix maturity threshold — fully feathered, sexable, ready to band.
-pub const READY_TO_TRANSITION_AGE_WEEKS: i64 = 6;
+/// 35 days = start of the 6th week under the 1-indexed "we are IN week N"
+/// convention used by the UI (week = floor(age_days / 7) + 1).
+pub const READY_TO_TRANSITION_AGE_DAYS: i64 = 35;
 
 impl ChickGroup {
+    pub fn age_days_at(&self, today: NaiveDate) -> i64 {
+        (today - self.hatch_date).num_days()
+    }
+
     pub fn age_weeks_at(&self, today: NaiveDate) -> i64 {
-        (today - self.hatch_date).num_days() / 7
+        self.age_days_at(today) / 7
     }
 
     pub fn age_weeks(&self) -> i64 {
@@ -509,7 +515,7 @@ impl ChickGroup {
     }
 
     pub fn compute_is_ready_to_transition_at(&self, today: NaiveDate) -> bool {
-        self.age_weeks_at(today) >= READY_TO_TRANSITION_AGE_WEEKS
+        self.age_days_at(today) >= READY_TO_TRANSITION_AGE_DAYS
             && self.status == ChickGroupStatus::Active
     }
 
