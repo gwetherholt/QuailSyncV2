@@ -453,7 +453,7 @@ pub(crate) async fn brooder_residents(
         .collect();
 
     let mut stmt = conn.prepare(
-        "SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id
+        "SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path
          FROM birds WHERE current_brooder_id = ?1 AND status = 'Active'"
     ).expect("prepare failed");
     let birds: Vec<Bird> = stmt

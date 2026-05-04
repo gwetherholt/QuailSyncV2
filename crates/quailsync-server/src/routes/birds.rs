@@ -41,12 +41,13 @@ pub(crate) async fn create_bird(
             notes: body.notes,
             nfc_tag_id: body.nfc_tag_id,
             current_brooder_id: None,
+            photo_path: None,
         }),
     )
         .into_response()
 }
 
-const BIRD_SELECT: &str = "SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id FROM birds";
+const BIRD_SELECT: &str = "SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path FROM birds";
 
 pub(crate) async fn list_birds(State(state): State<AppState>) -> Json<Vec<Bird>> {
     let conn = acquire_db(&state);

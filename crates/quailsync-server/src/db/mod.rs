@@ -188,6 +188,8 @@ pub fn init_db(conn: &Connection) {
         [],
     )
     .ok();
+    conn.execute("ALTER TABLE birds ADD COLUMN photo_path TEXT", [])
+        .ok();
 
     // Chick groups (nursery)
     conn.execute_batch(
