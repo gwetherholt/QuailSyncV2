@@ -488,6 +488,12 @@ async fn chick_groups_expose_is_ready_to_transition() {
         .iter()
         .find(|g| g.hatch_date == mature_hatch)
         .expect("mature group");
-    assert!(!young.is_ready_to_transition, "3-week group should not be ready");
-    assert!(mature.is_ready_to_transition, "7-week group should be ready");
+    assert!(
+        !young.is_ready_to_transition,
+        "3-week group should not be ready"
+    );
+    assert!(
+        mature.is_ready_to_transition,
+        "7-week group should be ready"
+    );
 }
