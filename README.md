@@ -403,6 +403,46 @@ docker compose up -d
 
 ---
 
+## Pi Backups & Maintenance
+
+Three shell scripts in `scripts/` keep the Pi's data safe and the disk healthy. They're meant to run from cron under the `gwetherholt` user; `scripts/install-cron.sh` wires everything up idempotently.
+
+| Script | Cron | What it does |
+| --- | --- | --- |
+| `nightly-backup.sh` | `0 2 * * *` | Hot SQLite `.backup` of `quailsync.db` → gzipped to `/mnt/pc-snapshots/quailsync-nightly/quailsync-YYYY-MM-DD.db.gz`. Verifies size + `gunzip -t`. Prunes files older than 7 days. |
+| `morning-backup-verify.sh` | `0 8 * * *` | Deadman switch — alerts if today's backup file is missing or older than 12 hours. |
+| `weekly-cleanup.sh` | `0 3 * * 0` | Truncates Docker JSON logs >100 MB, deletes app-generated backups in `~/QuailSyncV2/backups/` older than 7 days, runs `docker image prune`, `journalctl --vacuum-time=14d`, and `apt clean`. |
+
+**Notifications** go to [ntfy.sh](https://ntfy.sh). Each script has an `NTFY_TOPIC` constant near the top — set it to your topic in all three scripts before installing cron. Backup scripts notify on failure *and* on stale-file deadman trips; cleanup notifies on failure only (so it stays quiet on the happy path).
+
+**Logs** (grep-friendly: `ISO-8601-UTC <STATUS> <reason>` per line):
+
+- `/var/log/quailsync-backup.log` — nightly + morning verify
+- `/var/log/quailsync-cleanup.log` — weekly cleanup
+
+```bash
+# Install cron + sudoers fragment + log files (run on the Pi as gwetherholt):
+bash scripts/install-cron.sh
+
+# Manually trigger / test:
+bash scripts/nightly-backup.sh --dry-run   # walks every step, writes nothing
+bash scripts/nightly-backup.sh             # real run
+bash scripts/morning-backup-verify.sh
+bash scripts/weekly-cleanup.sh
+
+# Quick "did last night go ok?" check:
+tail -n 1 /var/log/quailsync-backup.log
+grep -E ' FAIL ' /var/log/quailsync-backup.log | tail
+```
+
+**Changing the ntfy topic** — edit the `NTFY_TOPIC=` line at the top of each of the three scripts (one per script; keep them in sync). No reinstall of cron required.
+
+**Why `sqlite3 .backup` instead of `cp`** — copying a live SQLite file is unsafe; a write in flight produces a corrupt copy. The `.backup` command takes a consistent snapshot while the server keeps writing.
+
+**Retention summary** — 7 days of nightly snapshots on SMB, 7 days of app-generated backups locally (pruned weekly), 14 days of systemd journal, dangling Docker images cleared weekly.
+
+---
+
 ## Remote Access
 
 [Tailscale](https://tailscale.com) provides secure remote access to the entire QuailSync stack without port forwarding or firewall changes. Install Tailscale on the Pi and on any client device (phone, laptop), and everything is accessible over a private mesh VPN.
