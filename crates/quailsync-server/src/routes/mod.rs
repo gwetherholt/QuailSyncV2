@@ -1,3 +1,4 @@
+pub mod alerts;
 pub mod backup;
 pub mod birds;
 pub mod breeding;

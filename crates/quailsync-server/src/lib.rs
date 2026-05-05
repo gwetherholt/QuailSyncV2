@@ -70,7 +70,20 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/brooder/history", get(telemetry::brooder_history))
         .route("/api/system/latest", get(telemetry::system_latest))
         .route("/api/status", get(telemetry::status))
-        .route("/api/alerts", get(telemetry::alerts))
+        .route(
+            "/api/alerts",
+            get(telemetry::alerts).post(alerts::create_alert),
+        )
+        .route("/api/alerts/active", get(alerts::list_active))
+        .route("/api/alerts/recent", get(alerts::list_recent))
+        .route(
+            "/api/alerts/resolve",
+            axum::routing::post(alerts::resolve_alerts),
+        )
+        .route(
+            "/api/alerts/{id}/dismiss",
+            axum::routing::post(alerts::dismiss_alert),
+        )
         .route(
             "/api/readings",
             axum::routing::delete(telemetry::clear_readings),
