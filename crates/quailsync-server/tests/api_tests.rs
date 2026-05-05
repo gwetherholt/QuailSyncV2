@@ -653,3 +653,150 @@ async fn graduate_accepts_payload_without_new_fields() {
     assert_eq!(birds.len(), 2);
     assert!(birds.iter().all(|b| b.photo_path.is_none()));
 }
+
+// ---------------------------------------------------------------------------
+// System alerts (POST /api/alerts collapse, resolve, dismiss, listings)
+// ---------------------------------------------------------------------------
+
+mod system_alerts_tests {
+    use super::*;
+    use quailsync_common::{
+        CreateSystemAlert, ResolveSystemAlertRequest, ResolveSystemAlertResponse, SystemAlert,
+    };
+
+    fn sample(key: &str, msg: &str) -> CreateSystemAlert {
+        CreateSystemAlert {
+            alert_key: key.into(),
+            severity: "critical".into(),
+            title: "Backup failed".into(),
+            message: msg.into(),
+            source: "nightly-backup".into(),
+            metadata_json: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_alert_key_collapses_to_one_row() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+
+        // First post — fresh row, expect 201.
+        let resp1 = client
+            .post(format!("{base}/api/alerts"))
+            .json(&sample("backup_failed", "first failure"))
+            .send().await.unwrap();
+        assert_eq!(resp1.status(), 201);
+        let first: SystemAlert = resp1.json().await.unwrap();
+        assert!(first.is_active);
+
+        // Second post with same key — should update in place, return 200.
+        let resp2 = client
+            .post(format!("{base}/api/alerts"))
+            .json(&sample("backup_failed", "second failure"))
+            .send().await.unwrap();
+        assert_eq!(resp2.status(), 200);
+        let second: SystemAlert = resp2.json().await.unwrap();
+        assert_eq!(second.id, first.id, "should reuse the existing row");
+        assert_eq!(second.message, "second failure");
+        assert!(second.is_active);
+
+        // metadata_json should now contain occurrences=2.
+        let meta: serde_json::Value = serde_json::from_str(
+            second.metadata_json.as_deref().expect("metadata populated on collapse"),
+        ).unwrap();
+        assert_eq!(meta.get("occurrences").and_then(|v| v.as_i64()), Some(2));
+
+        // Active list should have exactly one row.
+        let active: Vec<SystemAlert> = reqwest::get(format!("{base}/api/alerts/active"))
+            .await.unwrap().json().await.unwrap();
+        assert_eq!(active.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn resolve_clears_active_state() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+
+        client.post(format!("{base}/api/alerts"))
+            .json(&sample("backup_failed", "boom")).send().await.unwrap();
+
+        let resp = client.post(format!("{base}/api/alerts/resolve"))
+            .json(&ResolveSystemAlertRequest { alert_key: "backup_failed".into() })
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: ResolveSystemAlertResponse = resp.json().await.unwrap();
+        assert_eq!(body.resolved, 1);
+
+        let active: Vec<SystemAlert> = reqwest::get(format!("{base}/api/alerts/active"))
+            .await.unwrap().json().await.unwrap();
+        assert!(active.is_empty(), "resolved alert should not appear in active list");
+
+        // The row is still in the recent list, just with resolved_at set.
+        let recent: Vec<SystemAlert> = reqwest::get(format!("{base}/api/alerts/recent"))
+            .await.unwrap().json().await.unwrap();
+        assert_eq!(recent.len(), 1);
+        assert!(recent[0].resolved_at.is_some());
+        assert!(!recent[0].is_active);
+    }
+
+    #[tokio::test]
+    async fn dismiss_clears_active_independently_of_resolve() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+
+        let created: SystemAlert = client.post(format!("{base}/api/alerts"))
+            .json(&sample("cleanup_failed", "disk full"))
+            .send().await.unwrap()
+            .json().await.unwrap();
+
+        let resp = client.post(format!("{base}/api/alerts/{}/dismiss", created.id))
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 200);
+        let dismissed: SystemAlert = resp.json().await.unwrap();
+        assert!(dismissed.dismissed_at.is_some());
+        assert!(dismissed.resolved_at.is_none(), "dismiss is independent of resolve");
+        assert!(!dismissed.is_active);
+
+        let active: Vec<SystemAlert> = reqwest::get(format!("{base}/api/alerts/active"))
+            .await.unwrap().json().await.unwrap();
+        assert!(active.is_empty());
+    }
+
+    #[tokio::test]
+    async fn active_list_excludes_dismissed_and_resolved_but_includes_independent_ones() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+
+        // Three independent alert keys.
+        let a: SystemAlert = client.post(format!("{base}/api/alerts"))
+            .json(&sample("backup_failed", "a")).send().await.unwrap().json().await.unwrap();
+        let _b: SystemAlert = client.post(format!("{base}/api/alerts"))
+            .json(&sample("deadman_no_recent_backup", "b")).send().await.unwrap().json().await.unwrap();
+        let c: SystemAlert = client.post(format!("{base}/api/alerts"))
+            .json(&sample("cleanup_failed", "c")).send().await.unwrap().json().await.unwrap();
+
+        // Resolve "a", dismiss "c". "b" remains active.
+        client.post(format!("{base}/api/alerts/resolve"))
+            .json(&ResolveSystemAlertRequest { alert_key: a.alert_key.clone() })
+            .send().await.unwrap();
+        client.post(format!("{base}/api/alerts/{}/dismiss", c.id)).send().await.unwrap();
+
+        let active: Vec<SystemAlert> = reqwest::get(format!("{base}/api/alerts/active"))
+            .await.unwrap().json().await.unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].alert_key, "deadman_no_recent_backup");
+
+        // Recent should still surface all three.
+        let recent: Vec<SystemAlert> = reqwest::get(format!("{base}/api/alerts/recent?limit=10"))
+            .await.unwrap().json().await.unwrap();
+        assert_eq!(recent.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn dismiss_unknown_id_returns_404() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let resp = client.post(format!("{base}/api/alerts/9999/dismiss")).send().await.unwrap();
+        assert_eq!(resp.status(), 404);
+    }
+}

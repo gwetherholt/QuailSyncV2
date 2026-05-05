@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Sensors
@@ -34,8 +35,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -175,6 +180,7 @@ fun DashboardScreen(
     onBrooderClick: (Int) -> Unit = {},
     onTelemetryClick: () -> Unit = {},
     onBreedingClick: () -> Unit = {},
+    onAlertsClick: () -> Unit = {},
 ) {
     val brooders by viewModel.brooders.collectAsState()
     val birds by viewModel.birds.collectAsState()
@@ -217,6 +223,23 @@ fun DashboardScreen(
         bs.alerts.filter { it.acknowledged != true }.map { alert -> alert to bs.brooder.name }
     }.sortedByDescending { it.first.createdAt }.take(10)
 
+    // Active system-alert count (polls every 30s while in composition).
+    var alertCount by remember { mutableIntStateOf(0) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(Unit) {
+        val api = com.quailsync.app.data.QuailSyncApi.create(
+            com.quailsync.app.data.ServerConfig.getServerUrl(context),
+        )
+        while (true) {
+            try {
+                alertCount = api.getActiveAlerts().size
+            } catch (e: Exception) {
+                Log.d("QuailSync", "alert poll failed: ${e.message}")
+            }
+            kotlinx.coroutines.delay(30_000L)
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         // Header
         Row(
@@ -224,11 +247,14 @@ fun DashboardScreen(
             Arrangement.SpaceBetween, Alignment.CenterVertically,
         ) {
             Text("Dashboard", style = MaterialTheme.typography.headlineMedium)
-            if (isRefreshing) {
-                CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp, color = SageGreen)
-            } else {
-                IconButton(onClick = { viewModel.refresh() }) {
-                    Icon(Icons.Default.Refresh, "Refresh")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AlertsBellIconButton(count = alertCount, onClick = onAlertsClick)
+                if (isRefreshing) {
+                    CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp, color = SageGreen)
+                } else {
+                    IconButton(onClick = { viewModel.refresh() }) {
+                        Icon(Icons.Default.Refresh, "Refresh")
+                    }
                 }
             }
         }
@@ -666,5 +692,32 @@ private fun formatRelativeTime(timestamp: String): String {
         }
     } catch (_: Exception) {
         timestamp.take(16)
+    }
+}
+
+@Composable
+private fun AlertsBellIconButton(count: Int, onClick: () -> Unit) {
+    Box {
+        IconButton(onClick = onClick) {
+            Icon(Icons.Default.Notifications, contentDescription = "System alerts")
+        }
+        if (count > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 4.dp, end = 4.dp)
+                    .size(18.dp)
+                    .clip(CircleShape)
+                    .background(AlertRed),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (count > 99) "99+" else count.toString(),
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
     }
 }

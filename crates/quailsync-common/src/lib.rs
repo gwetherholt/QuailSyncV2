@@ -102,6 +102,51 @@ pub struct Alert {
 }
 
 // =========================================================================
+// System alerts (backup / maintenance / pi-script failures)
+//
+// Distinct from the brooder `Alert` above — these flow from cron/maintenance
+// scripts on the Pi into the QuailSync server and surface in the Android app.
+// `severity` is a raw lowercase string ("critical"|"warning"|"info") rather
+// than the `Severity` enum because the script-side payload uses that form.
+// =========================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemAlert {
+    pub id: i64,
+    pub alert_key: String,
+    pub severity: String,
+    pub title: String,
+    pub message: String,
+    pub source: String,
+    pub created_at: String,
+    pub resolved_at: Option<String>,
+    pub dismissed_at: Option<String>,
+    pub metadata_json: Option<String>,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateSystemAlert {
+    pub alert_key: String,
+    pub severity: String,
+    pub title: String,
+    pub message: String,
+    pub source: String,
+    #[serde(default)]
+    pub metadata_json: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveSystemAlertRequest {
+    pub alert_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveSystemAlertResponse {
+    pub resolved: i64,
+}
+
+// =========================================================================
 // Flock & Lineage types
 // =========================================================================
 

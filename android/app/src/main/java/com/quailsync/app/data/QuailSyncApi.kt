@@ -327,6 +327,25 @@ data class CullBatchResponse(
     @SerializedName("updated") val updated: Int,
 )
 
+// =====================================================================
+// System alerts (backup/maintenance script failures, surfaced via the
+// Dashboard bell icon). Distinct from BrooderAlert above.
+// =====================================================================
+
+data class SystemAlertDto(
+    @SerializedName("id") val id: Long,
+    @SerializedName("alert_key") val alertKey: String,
+    @SerializedName("severity") val severity: String,
+    @SerializedName("title") val title: String,
+    @SerializedName("message") val message: String,
+    @SerializedName("source") val source: String,
+    @SerializedName("created_at") val createdAt: String,
+    @SerializedName("resolved_at") val resolvedAt: String? = null,
+    @SerializedName("dismissed_at") val dismissedAt: String? = null,
+    @SerializedName("metadata_json") val metadataJson: String? = null,
+    @SerializedName("is_active") val isActive: Boolean = true,
+)
+
 @Suppress("unused")
 interface QuailSyncApi {
 
@@ -452,6 +471,16 @@ interface QuailSyncApi {
     // Batch cull
     @POST("api/cull-batch")
     suspend fun cullBatch(@Body request: CullBatchRequest): CullBatchResponse
+
+    // System alerts (Pi maintenance scripts)
+    @GET("api/alerts/active")
+    suspend fun getActiveAlerts(): List<SystemAlertDto>
+
+    @GET("api/alerts/recent")
+    suspend fun getRecentAlerts(@retrofit2.http.Query("limit") limit: Int = 50): List<SystemAlertDto>
+
+    @POST("api/alerts/{id}/dismiss")
+    suspend fun dismissAlert(@Path("id") id: Long): SystemAlertDto
 
     companion object {
         fun create(baseUrl: String): QuailSyncApi {

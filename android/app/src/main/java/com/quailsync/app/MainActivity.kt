@@ -66,6 +66,7 @@ import com.quailsync.app.data.MonitoringService
 import com.quailsync.app.data.NfcService
 import com.quailsync.app.data.NotificationHelper
 import com.quailsync.app.data.ServerConfig
+import com.quailsync.app.ui.screens.AlertsScreen
 import com.quailsync.app.ui.screens.BatchState
 import com.quailsync.app.ui.screens.BrooderManageScreen
 import com.quailsync.app.ui.screens.CameraScreen
@@ -89,6 +90,7 @@ sealed class Screen(val route: String, val label: String, val icon: ImageVector,
     data object Settings : Screen("settings", "Settings", Icons.Default.Settings)
     data object Telemetry : Screen("telemetry", "Telemetry", Icons.Default.Settings)
     data object Breeding : Screen("breeding", "Breeding", Icons.Default.Egg)
+    data object Alerts : Screen("alerts", "Alerts", Icons.Default.Settings)
 }
 
 val bottomNavItems = listOf(
@@ -283,7 +285,11 @@ fun QuailSyncApp(
                     onBrooderClick = { id -> navController.navigate("brooder/$id") },
                     onTelemetryClick = { navController.navigate(Screen.Telemetry.route) { launchSingleTop = true } },
                     onBreedingClick = { navController.navigate(Screen.Breeding.route) { launchSingleTop = true } },
+                    onAlertsClick = { navController.navigate(Screen.Alerts.route) { launchSingleTop = true } },
                 )
+            }
+            composable(Screen.Alerts.route) {
+                AlertsScreen(onBack = { navController.popBackStack() })
             }
             composable(Screen.Telemetry.route) {
                 TelemetryScreen(

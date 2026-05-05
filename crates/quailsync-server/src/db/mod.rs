@@ -191,6 +191,28 @@ pub fn init_db(conn: &Connection) {
     conn.execute("ALTER TABLE birds ADD COLUMN photo_path TEXT", [])
         .ok();
 
+    // System alerts (backup/maintenance scripts -> dashboard bell icon)
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS system_alerts (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            alert_key     TEXT    NOT NULL,
+            severity      TEXT    NOT NULL,
+            title         TEXT    NOT NULL,
+            message       TEXT    NOT NULL,
+            source        TEXT    NOT NULL,
+            created_at    TEXT    NOT NULL,
+            resolved_at   TEXT,
+            dismissed_at  TEXT,
+            metadata_json TEXT
+        );
+         CREATE INDEX IF NOT EXISTS idx_system_alerts_active
+             ON system_alerts(resolved_at, dismissed_at)
+             WHERE resolved_at IS NULL AND dismissed_at IS NULL;
+         CREATE INDEX IF NOT EXISTS idx_system_alerts_key
+             ON system_alerts(alert_key);",
+    )
+    .expect("failed to create system_alerts table");
+
     // Chick groups (nursery)
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS chick_groups (
