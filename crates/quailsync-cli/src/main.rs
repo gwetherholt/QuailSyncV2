@@ -3,8 +3,8 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 use qrcode::QrCode;
 use quailsync_common::{
-    Alert, Bird, BirdStatus, Bloodline, BreedingGroup, Brooder, BrooderReading, CameraFeed,
-    CameraStatus, ChickGroup, ChickMortalityLog, Clutch, ClutchStatus, CreateBird, CreateBloodline,
+    Alert, Bird, BirdStatus, Lineage, BreedingGroup, Brooder, BrooderReading, CameraFeed,
+    CameraStatus, ChickGroup, ChickMortalityLog, Clutch, ClutchStatus, CreateBird, CreateLineage,
     CreateBreedingGroup, CreateBrooder, CreateCameraFeed, CreateChickGroup, CreateClutch,
     CreateProcessingRecord, CreateWeightRecord, CullReason, CullRecommendation, FrameCapture,
     InbreedingCoefficient, LifeStage, MortalityRequest, ProcessingReason, ProcessingRecord,
@@ -42,10 +42,10 @@ enum Commands {
         #[arg(long, default_value = "60")]
         minutes: u64,
     },
-    /// Manage bloodlines
-    Bloodline {
+    /// Manage lineages
+    Lineage {
         #[command(subcommand)]
-        action: BloodlineAction,
+        action: LineageAction,
     },
     /// Manage birds
     Bird {
@@ -183,7 +183,7 @@ enum BrooderAction {
         #[arg(long)]
         name: String,
         #[arg(long)]
-        bloodline: Option<i64>,
+        lineage: Option<i64>,
         /// Life stage: chick, adolescent, adult
         #[arg(long, default_value = "chick")]
         stage: String,
@@ -206,7 +206,7 @@ enum ChickGroupAction {
     /// Create a new chick group
     Create {
         #[arg(long)]
-        bloodline: i64,
+        lineage: i64,
         #[arg(long)]
         count: u32,
         #[arg(long)]
@@ -250,8 +250,8 @@ enum BackupAction {
 }
 
 #[derive(Subcommand)]
-enum BloodlineAction {
-    /// Add a new bloodline
+enum LineageAction {
+    /// Add a new lineage
     Add {
         #[arg(long)]
         name: String,
@@ -260,7 +260,7 @@ enum BloodlineAction {
         #[arg(long)]
         notes: Option<String>,
     },
-    /// List all bloodlines
+    /// List all lineages
     List,
 }
 
@@ -273,7 +273,7 @@ enum BirdAction {
         #[arg(long)]
         sex: String,
         #[arg(long)]
-        bloodline: i64,
+        lineage: i64,
         #[arg(long)]
         hatch_date: Option<String>,
         #[arg(long)]
@@ -318,7 +318,7 @@ enum ClutchAction {
     /// Add a new clutch
     Add {
         #[arg(long)]
-        bloodline: Option<i64>,
+        lineage: Option<i64>,
         #[arg(long)]
         eggs: u32,
         #[arg(long)]
@@ -579,25 +579,25 @@ async fn cmd_alerts(base: &str, minutes: u64) -> anyhow::Result<()> {
 // Flock & Lineage commands
 // ---------------------------------------------------------------------------
 
-async fn cmd_bloodline_add(
+async fn cmd_lineage_add(
     base: &str,
     name: String,
     source: String,
     notes: Option<String>,
 ) -> anyhow::Result<()> {
-    let body = CreateBloodline {
+    let body = CreateLineage {
         name,
         source,
         notes,
     };
     let resp = reqwest::Client::new()
-        .post(format!("{base}/api/bloodlines"))
+        .post(format!("{base}/api/lineages"))
         .json(&body)
         .send()
         .await?;
-    let bl: Bloodline = resp.json().await?;
+    let bl: Lineage = resp.json().await?;
     println!(
-        "{} bloodline #{} \"{}\"",
+        "{} lineage #{} \"{}\"",
         "Created".green().bold(),
         bl.id,
         bl.name
@@ -605,14 +605,14 @@ async fn cmd_bloodline_add(
     Ok(())
 }
 
-async fn cmd_bloodline_list(base: &str) -> anyhow::Result<()> {
-    let resp = reqwest::get(format!("{base}/api/bloodlines")).await?;
-    let list: Vec<Bloodline> = resp.json().await?;
+async fn cmd_lineage_list(base: &str) -> anyhow::Result<()> {
+    let resp = reqwest::get(format!("{base}/api/lineages")).await?;
+    let list: Vec<Lineage> = resp.json().await?;
     if list.is_empty() {
-        println!("{}", "No bloodlines yet.".dimmed());
+        println!("{}", "No lineages yet.".dimmed());
         return Ok(());
     }
-    println!("{}", "Bloodlines".bold().underline());
+    println!("{}", "Lineages".bold().underline());
     println!();
     println!(
         "  {:<5} {:<20} {:<20} {}",
@@ -647,7 +647,7 @@ async fn cmd_bird_add(
     base: &str,
     band: Option<String>,
     sex: String,
-    bloodline: i64,
+    lineage: i64,
     hatch_date: Option<String>,
     mother: Option<i64>,
     father: Option<i64>,
@@ -662,7 +662,7 @@ async fn cmd_bird_add(
     let body = CreateBird {
         band_color: band,
         sex: parse_sex(&sex),
-        bloodline_id: bloodline,
+        lineage_ids: vec![lineage],
         hatch_date: hatch,
         mother_id: mother,
         father_id: father,
@@ -678,11 +678,11 @@ async fn cmd_bird_add(
         .await?;
     let bird: quailsync_common::Bird = resp.json().await?;
     println!(
-        "{} bird #{} ({:?}, bloodline #{})",
+        "{} bird #{} ({:?}, lineages: {})",
         "Created".green().bold(),
         bird.id,
         bird.sex,
-        bird.bloodline_id,
+        bird.lineages.iter().map(|l| l.name.as_str()).collect::<Vec<_>>().join(", "),
     );
     Ok(())
 }
@@ -701,19 +701,25 @@ async fn cmd_bird_list(base: &str) -> anyhow::Result<()> {
         "ID".bold(),
         "Band".bold(),
         "Sex".bold(),
-        "Bloodline".bold(),
+        "Lineage".bold(),
         "Hatch Date".bold(),
         "Gen".bold(),
         "Status".bold(),
     );
     println!("  {}", "-".repeat(70));
     for b in &list {
+        let lineages_str = b
+            .lineages
+            .iter()
+            .map(|l| l.name.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
         println!(
             "  {:<5} {:<10} {:<8} {:<10} {:<12} {:<8} {:?}",
             b.id,
             b.band_color.as_deref().unwrap_or("-"),
             format!("{:?}", b.sex),
-            b.bloodline_id,
+            lineages_str,
             b.hatch_date,
             b.generation,
             b.status,
@@ -728,11 +734,11 @@ struct FlockSummaryResp {
     active_birds: i64,
     males: i64,
     females: i64,
-    bloodlines: Vec<BloodlineCountResp>,
+    lineages: Vec<LineageCountResp>,
 }
 
 #[derive(Deserialize)]
-struct BloodlineCountResp {
+struct LineageCountResp {
     name: String,
     count: i64,
 }
@@ -748,10 +754,10 @@ async fn cmd_flock_summary(base: &str) -> anyhow::Result<()> {
     println!("  Males:         {}", s.males);
     println!("  Females:       {}", s.females);
 
-    if !s.bloodlines.is_empty() {
+    if !s.lineages.is_empty() {
         println!();
-        println!("  {}", "By Bloodline".bold());
-        for bl in &s.bloodlines {
+        println!("  {}", "By Lineage".bold());
+        for bl in &s.lineages {
             println!("    {:<20} {}", bl.name, bl.count);
         }
     }
@@ -765,7 +771,7 @@ async fn cmd_flock_summary(base: &str) -> anyhow::Result<()> {
 
 async fn cmd_clutch_add(
     base: &str,
-    bloodline: Option<i64>,
+    lineage: Option<i64>,
     eggs: u32,
     set_date: Option<String>,
     pair: Option<i64>,
@@ -777,7 +783,7 @@ async fn cmd_clutch_add(
     };
     let body = CreateClutch {
         breeding_pair_id: pair,
-        bloodline_id: bloodline,
+        lineage_id: lineage,
         eggs_set: eggs,
         eggs_fertile: None,
         eggs_hatched: None,
@@ -812,8 +818,8 @@ async fn cmd_clutch_list(base: &str) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Fetch bloodlines for name lookup
-    let bloodlines: Vec<Bloodline> = reqwest::get(format!("{base}/api/bloodlines"))
+    // Fetch lineages for name lookup
+    let lineages: Vec<Lineage> = reqwest::get(format!("{base}/api/lineages"))
         .await?
         .json()
         .await?;
@@ -825,7 +831,7 @@ async fn cmd_clutch_list(base: &str) -> anyhow::Result<()> {
     println!(
         "  {:<4} {:<16} {:<6} {:<8} {:<8} {:<12} {:<12} {:<12} {}",
         "ID".bold(),
-        "Bloodline".bold(),
+        "Lineage".bold(),
         "Eggs".bold(),
         "Fertile".bold(),
         "Hatched".bold(),
@@ -837,9 +843,9 @@ async fn cmd_clutch_list(base: &str) -> anyhow::Result<()> {
     println!("  {}", "-".repeat(95));
 
     for c in &clutches {
-        let bl_name = bloodlines
+        let bl_name = lineages
             .iter()
-            .find(|b| Some(b.id) == c.bloodline_id)
+            .find(|b| Some(b.id) == c.lineage_id)
             .map(|b| b.name.as_str())
             .unwrap_or("-");
 
@@ -1048,12 +1054,12 @@ async fn cmd_breeding_suggest(base: &str) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Fetch birds + bloodlines for display info
+    // Fetch birds + lineages for display info
     let birds: Vec<Bird> = reqwest::get(format!("{base}/api/birds"))
         .await?
         .json()
         .await?;
-    let bloodlines: Vec<Bloodline> = reqwest::get(format!("{base}/api/bloodlines"))
+    let lineages: Vec<Lineage> = reqwest::get(format!("{base}/api/lineages"))
         .await?
         .json()
         .await?;
@@ -1069,11 +1075,11 @@ async fn cmd_breeding_suggest(base: &str) -> anyhow::Result<()> {
             .unwrap_or_else(|| format!("#{id}"))
     };
 
-    let bird_bloodline_name = |id: i64| -> String {
+    let bird_lineage_name = |id: i64| -> String {
         birds
             .iter()
             .find(|b| b.id == id)
-            .and_then(|b| bloodlines.iter().find(|bl| bl.id == b.bloodline_id))
+            .and_then(|b| b.lineages.first())
             .map(|bl| bl.name.clone())
             .unwrap_or_else(|| "?".into())
     };
@@ -1083,9 +1089,9 @@ async fn cmd_breeding_suggest(base: &str) -> anyhow::Result<()> {
     println!(
         "  {:<14} {:<16} {:<14} {:<16} {:<8} {}",
         "Male".bold(),
-        "Bloodline".bold(),
+        "Lineage".bold(),
         "Female".bold(),
-        "Bloodline".bold(),
+        "Lineage".bold(),
         "Coeff".bold(),
         "Safe".bold(),
     );
@@ -1093,9 +1099,9 @@ async fn cmd_breeding_suggest(base: &str) -> anyhow::Result<()> {
 
     for p in &pairs {
         let male_lbl = bird_label(p.male_id);
-        let male_bl = bird_bloodline_name(p.male_id);
+        let male_bl = bird_lineage_name(p.male_id);
         let female_lbl = bird_label(p.female_id);
-        let female_bl = bird_bloodline_name(p.female_id);
+        let female_bl = bird_lineage_name(p.female_id);
         let coeff_str = format!("{:.3}", p.coefficient);
 
         let line = format!(
@@ -1524,12 +1530,12 @@ async fn cmd_flock_cull_review(base: &str) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Fetch birds and bloodlines for display
+    // Fetch birds and lineages for display
     let birds: Vec<Bird> = reqwest::get(format!("{base}/api/birds"))
         .await?
         .json()
         .await?;
-    let bloodlines: Vec<Bloodline> = reqwest::get(format!("{base}/api/bloodlines"))
+    let lineages: Vec<Lineage> = reqwest::get(format!("{base}/api/lineages"))
         .await?
         .json()
         .await?;
@@ -1540,9 +1546,9 @@ async fn cmd_flock_cull_review(base: &str) -> anyhow::Result<()> {
             .find(|b| b.id == id)
             .map(|b| {
                 let band = b.band_color.as_deref().unwrap_or("-");
-                let bl_name = bloodlines
-                    .iter()
-                    .find(|bl| bl.id == b.bloodline_id)
+                let bl_name = b
+                    .lineages
+                    .first()
                     .map(|bl| bl.name.as_str())
                     .unwrap_or("?");
                 format!("#{} ({}, {})", b.id, band, bl_name)
@@ -1738,14 +1744,14 @@ fn parse_life_stage(s: &str) -> LifeStage {
 async fn cmd_brooder_add(
     base: &str,
     name: String,
-    bloodline: Option<i64>,
+    lineage: Option<i64>,
     stage: String,
     qr: Option<String>,
     notes: Option<String>,
 ) -> anyhow::Result<()> {
     let body = CreateBrooder {
         name,
-        bloodline_id: bloodline,
+        lineage_id: lineage,
         life_stage: parse_life_stage(&stage),
         qr_code: qr.unwrap_or_default(),
         notes,
@@ -1787,7 +1793,7 @@ async fn cmd_brooder_list(base: &str) -> anyhow::Result<()> {
         "ID".bold(),
         "Name".bold(),
         "Stage".bold(),
-        "Bloodline".bold(),
+        "Lineage".bold(),
         "QR Code".bold(),
     );
     println!("  {}", "-".repeat(65));
@@ -1795,7 +1801,7 @@ async fn cmd_brooder_list(base: &str) -> anyhow::Result<()> {
     for b in &brooders {
         let stage_str = format!("{:?}", b.life_stage);
         let bl = b
-            .bloodline_id
+            .lineage_id
             .map(|id| format!("#{id}"))
             .unwrap_or_else(|| "-".to_string());
         let qr = if b.qr_code.is_empty() {
@@ -1849,7 +1855,7 @@ async fn cmd_brooder_qr(base: &str, id: i64) -> anyhow::Result<()> {
 
 async fn cmd_chick_group_create(
     base: &str,
-    bloodline: i64,
+    lineage: i64,
     count: u32,
     hatch_date: Option<String>,
     clutch: Option<i64>,
@@ -1862,7 +1868,7 @@ async fn cmd_chick_group_create(
     };
     let body = CreateChickGroup {
         clutch_id: clutch,
-        bloodline_id: bloodline,
+        lineage_ids: vec![lineage],
         brooder_id: brooder,
         initial_count: count,
         hatch_date: hatch,
@@ -1875,11 +1881,11 @@ async fn cmd_chick_group_create(
         .await?;
     let group: ChickGroup = resp.json().await?;
     println!(
-        "{} chick group #{} — {} chicks, bloodline #{}, hatched {}",
+        "{} chick group #{} — {} chicks, lineages: {}, hatched {}",
         "Created".green().bold(),
         group.id,
         group.initial_count,
-        group.bloodline_id,
+        group.lineages.iter().map(|l| l.name.as_str()).collect::<Vec<_>>().join(", "),
         group.hatch_date,
     );
     Ok(())
@@ -1921,10 +1927,11 @@ async fn cmd_chick_group_list(base: &str) -> anyhow::Result<()> {
         } else {
             0.0
         };
+        let lineage_str = g.lineages.iter().map(|l| l.name.as_str()).collect::<Vec<_>>().join(",");
         println!(
             "  {:<5} {:<10} {:<10} {:<10} {:<12} {:<12} {:.0}%",
             g.id,
-            format!("#{}", g.bloodline_id),
+            lineage_str,
             count_str,
             brooder_str,
             g.hatch_date,
@@ -2084,19 +2091,19 @@ async fn main() {
         } => cmd_brood_history(base, mins).await,
         Commands::System => cmd_system(base).await,
         Commands::Alerts { minutes } => cmd_alerts(base, minutes).await,
-        Commands::Bloodline { action } => match action {
-            BloodlineAction::Add {
+        Commands::Lineage { action } => match action {
+            LineageAction::Add {
                 name,
                 source,
                 notes,
-            } => cmd_bloodline_add(base, name, source, notes).await,
-            BloodlineAction::List => cmd_bloodline_list(base).await,
+            } => cmd_lineage_add(base, name, source, notes).await,
+            LineageAction::List => cmd_lineage_list(base).await,
         },
         Commands::Bird { action } => match action {
             BirdAction::Add {
                 band,
                 sex,
-                bloodline,
+                lineage,
                 hatch_date,
                 mother,
                 father,
@@ -2105,7 +2112,7 @@ async fn main() {
                 nfc,
             } => {
                 cmd_bird_add(
-                    base, band, sex, bloodline, hatch_date, mother, father, generation, notes, nfc,
+                    base, band, sex, lineage, hatch_date, mother, father, generation, notes, nfc,
                 )
                 .await
             }
@@ -2119,12 +2126,12 @@ async fn main() {
         },
         Commands::Clutch { action } => match action {
             ClutchAction::Add {
-                bloodline,
+                lineage,
                 eggs,
                 set_date,
                 pair,
                 notes,
-            } => cmd_clutch_add(base, bloodline, eggs, set_date, pair, notes).await,
+            } => cmd_clutch_add(base, lineage, eggs, set_date, pair, notes).await,
             ClutchAction::List => cmd_clutch_list(base).await,
             ClutchAction::Update {
                 id,
@@ -2193,24 +2200,24 @@ async fn main() {
         Commands::Brooder { action } => match action {
             BrooderAction::Add {
                 name,
-                bloodline,
+                lineage,
                 stage,
                 qr,
                 notes,
-            } => cmd_brooder_add(base, name, bloodline, stage, qr, notes).await,
+            } => cmd_brooder_add(base, name, lineage, stage, qr, notes).await,
             BrooderAction::List => cmd_brooder_list(base).await,
             BrooderAction::Qr { id } => cmd_brooder_qr(base, id).await,
         },
         Commands::ChickGroup { action } => match action {
             ChickGroupAction::Create {
-                bloodline,
+                lineage,
                 count,
                 hatch_date,
                 clutch,
                 brooder,
                 notes,
             } => {
-                cmd_chick_group_create(base, bloodline, count, hatch_date, clutch, brooder, notes)
+                cmd_chick_group_create(base, lineage, count, hatch_date, clutch, brooder, notes)
                     .await
             }
             ChickGroupAction::List => cmd_chick_group_list(base).await,

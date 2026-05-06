@@ -59,10 +59,10 @@ fn client() -> reqwest::Client {
     reqwest::Client::new()
 }
 
-async fn seed_bloodline(base: &str) -> Bloodline {
+async fn seed_lineage(base: &str) -> Lineage {
     let resp = client()
-        .post(format!("{base}/api/bloodlines"))
-        .json(&CreateBloodline {
+        .post(format!("{base}/api/lineages"))
+        .json(&CreateLineage {
             name: "TestLine".into(),
             source: "Lab".into(),
             notes: None,
@@ -73,13 +73,13 @@ async fn seed_bloodline(base: &str) -> Bloodline {
     resp.json().await.unwrap()
 }
 
-async fn seed_bird(base: &str, bloodline_id: i64, sex: Sex) -> Bird {
+async fn seed_bird(base: &str, lineage_id: i64, sex: Sex) -> Bird {
     let resp = client()
         .post(format!("{base}/api/birds"))
         .json(&CreateBird {
             band_color: None,
             sex,
-            bloodline_id,
+            lineage_ids: vec![lineage_id],
             hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             mother_id: None,
             father_id: None,
@@ -226,13 +226,13 @@ async fn brooder_null_bytes_in_name() {
 }
 
 #[tokio::test]
-async fn brooder_nonexistent_bloodline() {
+async fn brooder_nonexistent_lineage() {
     let base = spawn_test_server().await;
     let resp = client()
         .post(format!("{base}/api/brooders"))
         .json(&json!({
             "name": "Test",
-            "bloodline_id": 99999,
+            "lineage_id": 99999,
             "life_stage": "Chick",
             "qr_code": "",
         }))
@@ -249,12 +249,12 @@ async fn brooder_nonexistent_bloodline() {
 #[tokio::test]
 async fn bird_all_optional_fields_null() {
     let base = spawn_test_server().await;
-    let bl = seed_bloodline(&base).await;
+    let bl = seed_lineage(&base).await;
     let resp = client()
         .post(format!("{base}/api/birds"))
         .json(&json!({
             "sex": "Unknown",
-            "bloodline_id": bl.id,
+            "lineage_ids": [bl.id],
             "hatch_date": "2026-01-01",
             "generation": 1,
             "status": "Active",
@@ -273,14 +273,14 @@ async fn bird_all_optional_fields_null() {
 #[tokio::test]
 async fn bird_max_length_optional_fields() {
     let base = spawn_test_server().await;
-    let bl = seed_bloodline(&base).await;
+    let bl = seed_lineage(&base).await;
     let long = "Z".repeat(50_000);
     let resp = client()
         .post(format!("{base}/api/birds"))
         .json(&json!({
             "band_color": long,
             "sex": "Male",
-            "bloodline_id": bl.id,
+            "lineage_ids": [bl.id],
             "hatch_date": "2026-01-01",
             "generation": 1,
             "status": "Active",
@@ -296,14 +296,14 @@ async fn bird_max_length_optional_fields() {
 #[tokio::test]
 async fn bird_invalid_enum_values_rejected() {
     let base = spawn_test_server().await;
-    let bl = seed_bloodline(&base).await;
+    let bl = seed_lineage(&base).await;
 
     // Invalid sex
     let resp = client()
         .post(format!("{base}/api/birds"))
         .json(&json!({
             "sex": "Helicopter",
-            "bloodline_id": bl.id,
+            "lineage_ids": [bl.id],
             "hatch_date": "2026-01-01",
             "generation": 1,
             "status": "Active",
@@ -318,7 +318,7 @@ async fn bird_invalid_enum_values_rejected() {
         .post(format!("{base}/api/birds"))
         .json(&json!({
             "sex": "Male",
-            "bloodline_id": bl.id,
+            "lineage_ids": [bl.id],
             "hatch_date": "2026-01-01",
             "generation": 1,
             "status": "Zombie",
@@ -330,15 +330,15 @@ async fn bird_invalid_enum_values_rejected() {
 }
 
 #[tokio::test]
-async fn bird_nonexistent_bloodline_panics() {
+async fn bird_nonexistent_lineage_panics() {
     // This tests a known weakness: create_bird unwraps the insert, so a foreign key
-    // violation on bloodline_id will cause a 500 (panic) rather than a clean error.
+    // violation on lineage_id will cause a 500 (panic) rather than a clean error.
     let base = spawn_test_server().await;
     let resp = client()
         .post(format!("{base}/api/birds"))
         .json(&json!({
             "sex": "Male",
-            "bloodline_id": 99999,
+            "lineage_ids": [99999],
             "hatch_date": "2026-01-01",
             "generation": 1,
             "status": "Active",
@@ -357,7 +357,7 @@ async fn bird_nonexistent_bloodline_panics() {
 #[tokio::test]
 async fn bird_duplicate_nfc_tag_id() {
     let base = spawn_test_server().await;
-    let bl = seed_bloodline(&base).await;
+    let bl = seed_lineage(&base).await;
     let tag = "QUAIL-ABC123";
 
     // First bird with this tag — should succeed
@@ -365,7 +365,7 @@ async fn bird_duplicate_nfc_tag_id() {
         .post(format!("{base}/api/birds"))
         .json(&json!({
             "sex": "Male",
-            "bloodline_id": bl.id,
+            "lineage_ids": [bl.id],
             "hatch_date": "2026-01-01",
             "generation": 1,
             "status": "Active",
@@ -381,7 +381,7 @@ async fn bird_duplicate_nfc_tag_id() {
         .post(format!("{base}/api/birds"))
         .json(&json!({
             "sex": "Female",
-            "bloodline_id": bl.id,
+            "lineage_ids": [bl.id],
             "hatch_date": "2026-01-01",
             "generation": 1,
             "status": "Active",
@@ -399,15 +399,15 @@ async fn bird_duplicate_nfc_tag_id() {
 }
 
 // ===========================================================================
-// 3. API INPUT VALIDATION — Bloodlines
+// 3. API INPUT VALIDATION — Lineages
 // ===========================================================================
 
 #[tokio::test]
-async fn bloodline_empty_name() {
+async fn lineage_empty_name() {
     let base = spawn_test_server().await;
     let resp = client()
-        .post(format!("{base}/api/bloodlines"))
-        .json(&CreateBloodline {
+        .post(format!("{base}/api/lineages"))
+        .json(&CreateLineage {
             name: "".into(),
             source: "x".into(),
             notes: None,
@@ -419,11 +419,11 @@ async fn bloodline_empty_name() {
 }
 
 #[tokio::test]
-async fn bloodline_whitespace_only_name() {
+async fn lineage_whitespace_only_name() {
     let base = spawn_test_server().await;
     let resp = client()
-        .post(format!("{base}/api/bloodlines"))
-        .json(&CreateBloodline {
+        .post(format!("{base}/api/lineages"))
+        .json(&CreateLineage {
             name: "   \t\n  ".into(),
             source: "x".into(),
             notes: None,
@@ -436,12 +436,12 @@ async fn bloodline_whitespace_only_name() {
 }
 
 #[tokio::test]
-async fn bloodline_duplicate_names_allowed() {
+async fn lineage_duplicate_names_allowed() {
     let base = spawn_test_server().await;
     for _ in 0..3 {
         let resp = client()
-            .post(format!("{base}/api/bloodlines"))
-            .json(&CreateBloodline {
+            .post(format!("{base}/api/lineages"))
+            .json(&CreateLineage {
                 name: "SameName".into(),
                 source: "x".into(),
                 notes: None,
@@ -451,8 +451,8 @@ async fn bloodline_duplicate_names_allowed() {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
     }
-    let list: Vec<Bloodline> = client()
-        .get(format!("{base}/api/bloodlines"))
+    let list: Vec<Lineage> = client()
+        .get(format!("{base}/api/lineages"))
         .send()
         .await
         .unwrap()
@@ -471,7 +471,7 @@ async fn post_with_empty_body() {
     let base = spawn_test_server().await;
     let endpoints = [
         "/api/brooders",
-        "/api/bloodlines",
+        "/api/lineages",
         "/api/birds",
         "/api/clutches",
         "/api/processing",
@@ -1411,7 +1411,7 @@ async fn clutch_with_zero_eggs() {
 #[tokio::test]
 async fn update_bird_with_empty_json() {
     let base = spawn_test_server().await;
-    let bl = seed_bloodline(&base).await;
+    let bl = seed_lineage(&base).await;
     let bird = seed_bird(&base, bl.id, Sex::Male).await;
 
     let resp = client()
@@ -1516,7 +1516,7 @@ async fn system_metrics_max_values() {
 #[tokio::test]
 async fn breeding_group_with_no_females() {
     let base = spawn_test_server().await;
-    let bl = seed_bloodline(&base).await;
+    let bl = seed_lineage(&base).await;
     let male = seed_bird(&base, bl.id, Sex::Male).await;
 
     let resp = client()
@@ -1536,13 +1536,13 @@ async fn breeding_group_with_no_females() {
 #[tokio::test]
 async fn chick_group_mortality_exceeds_count() {
     let base = spawn_test_server().await;
-    let bl = seed_bloodline(&base).await;
+    let bl = seed_lineage(&base).await;
 
     // Create a chick group with 5 chicks
     let resp = client()
         .post(format!("{base}/api/chick-groups"))
         .json(&json!({
-            "bloodline_id": bl.id,
+            "lineage_ids": [bl.id],
             "initial_count": 5,
             "hatch_date": "2026-03-01",
         }))
@@ -1578,7 +1578,7 @@ async fn chick_group_mortality_exceeds_count() {
 #[tokio::test]
 async fn weight_zero_grams() {
     let base = spawn_test_server().await;
-    let bl = seed_bloodline(&base).await;
+    let bl = seed_lineage(&base).await;
     let bird = seed_bird(&base, bl.id, Sex::Male).await;
 
     let resp = client()
@@ -1593,7 +1593,7 @@ async fn weight_zero_grams() {
 #[tokio::test]
 async fn weight_negative_grams() {
     let base = spawn_test_server().await;
-    let bl = seed_bloodline(&base).await;
+    let bl = seed_lineage(&base).await;
     let bird = seed_bird(&base, bl.id, Sex::Male).await;
 
     let resp = client()
@@ -1609,7 +1609,7 @@ async fn weight_negative_grams() {
 #[tokio::test]
 async fn weight_extremely_large() {
     let base = spawn_test_server().await;
-    let bl = seed_bloodline(&base).await;
+    let bl = seed_lineage(&base).await;
     let bird = seed_bird(&base, bl.id, Sex::Male).await;
 
     let resp = client()

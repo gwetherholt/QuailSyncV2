@@ -134,8 +134,8 @@ fn log_payload(payload: &TelemetryPayload) {
         }
         TelemetryPayload::QrDetected(qr) => {
             println!(
-                "[telemetry] qr     | brooder {} bloodline: {} code: {}",
-                qr.brooder_id, qr.bloodline, qr.qr_code,
+                "[telemetry] qr     | brooder {} lineage: {} code: {}",
+                qr.brooder_id, qr.lineage, qr.qr_code,
             );
         }
     }

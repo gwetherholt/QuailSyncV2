@@ -202,7 +202,8 @@ pub(crate) async fn get_breeding_group(
 pub(crate) struct BirdRecord {
     id: i64,
     sex: Sex,
-    bloodline_id: i64,
+    /// Many-to-many lineage IDs from the bird_lineages junction.
+    lineage_ids: Vec<i64>,
     mother_id: Option<i64>,
     father_id: Option<i64>,
 }
@@ -216,31 +217,46 @@ pub(crate) fn compute_relatedness(m: &BirdRecord, f: &BirdRecord) -> f64 {
     if share_mother || share_father {
         return 0.25;
     }
-    if m.bloodline_id == f.bloodline_id {
+    // Two birds are loosely related if they share ANY lineage tag — preserves
+    // the intent of the old single-bloodline check under the many-to-many model.
+    if m.lineage_ids.iter().any(|x| f.lineage_ids.contains(x)) {
         return 0.25;
     }
     0.0
 }
 
+fn fetch_lineage_ids(conn: &rusqlite::Connection, bird_id: i64) -> Vec<i64> {
+    let mut stmt = match conn.prepare("SELECT lineage_id FROM bird_lineages WHERE bird_id = ?1") {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    stmt.query_map(params![bird_id], |row| row.get::<_, i64>(0))
+        .map(|it| it.filter_map(|r| r.ok()).collect())
+        .unwrap_or_default()
+}
+
 fn load_bird_records(conn: &std::sync::MutexGuard<'_, rusqlite::Connection>) -> Vec<BirdRecord> {
     let mut stmt = conn
-        .prepare(
-            "SELECT id, sex, bloodline_id, mother_id, father_id FROM birds WHERE status = 'Active'",
-        )
+        .prepare("SELECT id, sex, mother_id, father_id FROM birds WHERE status = 'Active'")
         .expect("prepare failed");
-    stmt.query_map([], |row| {
-        let sex_str: String = row.get(1)?;
-        Ok(BirdRecord {
-            id: row.get(0)?,
-            sex: str_to_sex(&sex_str),
-            bloodline_id: row.get(2)?,
-            mother_id: row.get(3)?,
-            father_id: row.get(4)?,
+    let mut records: Vec<BirdRecord> = stmt
+        .query_map([], |row| {
+            let sex_str: String = row.get(1)?;
+            Ok(BirdRecord {
+                id: row.get(0)?,
+                sex: str_to_sex(&sex_str),
+                lineage_ids: Vec::new(),
+                mother_id: row.get(2)?,
+                father_id: row.get(3)?,
+            })
         })
-    })
-    .unwrap()
-    .filter_map(|r| r.ok())
-    .collect()
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+    for r in records.iter_mut() {
+        r.lineage_ids = fetch_lineage_ids(conn, r.id);
+    }
+    records
 }
 
 pub(crate) async fn breeding_suggest(
@@ -283,21 +299,24 @@ pub(crate) async fn inbreeding_check(
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
     let get_bird = |id: i64| -> Option<BirdRecord> {
-        conn.query_row(
-            "SELECT id, sex, bloodline_id, mother_id, father_id FROM birds WHERE id = ?1",
-            params![id],
-            |row| {
-                let sex_str: String = row.get(1)?;
-                Ok(BirdRecord {
-                    id: row.get(0)?,
-                    sex: str_to_sex(&sex_str),
-                    bloodline_id: row.get(2)?,
-                    mother_id: row.get(3)?,
-                    father_id: row.get(4)?,
-                })
-            },
-        )
-        .ok()
+        let mut record = conn
+            .query_row(
+                "SELECT id, sex, mother_id, father_id FROM birds WHERE id = ?1",
+                params![id],
+                |row| {
+                    let sex_str: String = row.get(1)?;
+                    Ok(BirdRecord {
+                        id: row.get(0)?,
+                        sex: str_to_sex(&sex_str),
+                        lineage_ids: Vec::new(),
+                        mother_id: row.get(2)?,
+                        father_id: row.get(3)?,
+                    })
+                },
+            )
+            .ok()?;
+        record.lineage_ids = fetch_lineage_ids(&conn, record.id);
+        Some(record)
     };
 
     match (get_bird(q.male_id), get_bird(q.female_id)) {
@@ -421,11 +440,13 @@ pub(crate) struct FlockSummary {
     active_birds: i64,
     males: i64,
     females: i64,
-    bloodlines: Vec<BloodlineCount>,
+    /// Birds tagged with each lineage. A bird with multiple lineages contributes
+    /// to each row, so the sum of `count` may exceed `active_birds`.
+    lineages: Vec<LineageCount>,
 }
 
 #[derive(Serialize)]
-pub(crate) struct BloodlineCount {
+pub(crate) struct LineageCount {
     name: String,
     count: i64,
 }
@@ -457,10 +478,20 @@ pub(crate) async fn flock_summary(State(state): State<AppState>) -> Json<FlockSu
         )
         .unwrap_or(0);
 
-    let mut stmt = conn.prepare("SELECT b.name, COUNT(*) FROM birds bi JOIN bloodlines b ON bi.bloodline_id = b.id WHERE bi.status = 'Active' GROUP BY b.name ORDER BY COUNT(*) DESC").expect("prepare failed");
-    let bloodlines: Vec<BloodlineCount> = stmt
+    let mut stmt = conn
+        .prepare(
+            "SELECT l.name, COUNT(*) AS c
+             FROM birds bi
+             JOIN bird_lineages bl ON bl.bird_id = bi.id
+             JOIN lineages l ON l.id = bl.lineage_id
+             WHERE bi.status = 'Active'
+             GROUP BY l.id, l.name
+             ORDER BY c DESC",
+        )
+        .expect("prepare failed");
+    let lineages: Vec<LineageCount> = stmt
         .query_map([], |row| {
-            Ok(BloodlineCount {
+            Ok(LineageCount {
                 name: row.get(0)?,
                 count: row.get(1)?,
             })
@@ -474,6 +505,6 @@ pub(crate) async fn flock_summary(State(state): State<AppState>) -> Json<FlockSu
         active_birds,
         males,
         females,
-        bloodlines,
+        lineages,
     })
 }

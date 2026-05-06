@@ -15,9 +15,9 @@ pub(crate) async fn create_clutch(
     let expected = body.set_date + chrono::Duration::days(17);
     let conn = acquire_db(&state);
     if let Err(e) = conn.execute(
-        "INSERT INTO clutches (breeding_pair_id, bloodline_id, eggs_set, eggs_fertile, eggs_hatched, set_date, expected_hatch_date, status, notes)
+        "INSERT INTO clutches (breeding_pair_id, lineage_id, eggs_set, eggs_fertile, eggs_hatched, set_date, expected_hatch_date, status, notes)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![body.breeding_pair_id, body.bloodline_id, body.eggs_set, body.eggs_fertile, body.eggs_hatched,
+        params![body.breeding_pair_id, body.lineage_id, body.eggs_set, body.eggs_fertile, body.eggs_hatched,
             body.set_date.to_string(), expected.to_string(), clutch_status_to_str(&body.status), body.notes],
     ) {
         return db_error(e);
@@ -28,7 +28,7 @@ pub(crate) async fn create_clutch(
         Json(Clutch {
             id,
             breeding_pair_id: body.breeding_pair_id,
-            bloodline_id: body.bloodline_id,
+            lineage_id: body.lineage_id,
             eggs_set: body.eggs_set,
             eggs_fertile: body.eggs_fertile,
             eggs_hatched: body.eggs_hatched,
@@ -46,7 +46,7 @@ pub(crate) async fn create_clutch(
         .into_response()
 }
 
-const CLUTCH_SELECT: &str = "SELECT id, breeding_pair_id, bloodline_id, eggs_set, eggs_fertile, eggs_hatched, set_date, expected_hatch_date, status, notes, eggs_stillborn, eggs_quit, eggs_infertile, eggs_damaged, hatch_notes FROM clutches";
+const CLUTCH_SELECT: &str = "SELECT id, breeding_pair_id, lineage_id, eggs_set, eggs_fertile, eggs_hatched, set_date, expected_hatch_date, status, notes, eggs_stillborn, eggs_quit, eggs_infertile, eggs_damaged, hatch_notes FROM clutches";
 
 pub(crate) async fn list_clutches(State(state): State<AppState>) -> Json<Vec<Clutch>> {
     let conn = acquire_db(&state);

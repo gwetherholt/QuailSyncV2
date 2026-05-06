@@ -2,7 +2,7 @@
 """
 Seed QuailSync database with realistic multi-generational quail data.
 
-Generates 5 generations across 3 bloodlines with breeding rotations,
+Generates 5 generations across 3 lineages with breeding rotations,
 realistic weight curves, clutch outcomes, mortality, and health events.
 
 Usage:
@@ -29,7 +29,7 @@ G2_HATCH = TODAY - timedelta(days=105)   # ~3.5 months ago
 G3_HATCH = TODAY - timedelta(days=60)    # ~2 months ago
 G4_HATCH = TODAY - timedelta(days=14)    # ~2 weeks ago
 
-# ── Bloodline definitions ────────────────────────────────────────────────────
+# ── Lineage definitions ────────────────────────────────────────────────────
 BLOODLINES = [
     {"name": "Texas A&M",  "source": "Texas A&M University breeding program",
      "notes": "White feathered, fast growth, excellent egg production",
@@ -50,7 +50,7 @@ BROODERS = [
 ]
 
 # Breeding rotation: each gen crosses line A males x line B females
-# The offspring are assigned to line B's bloodline (maternal line).
+# The offspring are assigned to line B's lineage (maternal line).
 CROSS_ROTATION = [
     # G0->G1: TX males x PH females, PH males x FB females, FB males x TX females
     [(0, 1), (1, 2), (2, 0)],
@@ -120,7 +120,7 @@ def reset_tables(conn):
         "chick_mortality_log", "chick_groups", "weight_records",
         "processing_records", "clutches", "breeding_pairs",
         "breeding_group_members", "breeding_groups",
-        "birds", "brooders", "bloodlines",
+        "birds", "brooders", "lineages",
     ]
     for t in tables:
         conn.execute(f"DELETE FROM {t}")
@@ -132,18 +132,18 @@ def reset_tables(conn):
     print("[reset] Cleared all seeded tables")
 
 
-def insert_bloodline(conn, bl):
+def insert_lineage(conn, bl):
     conn.execute(
-        "INSERT INTO bloodlines (name, source, notes) VALUES (?, ?, ?)",
+        "INSERT INTO lineages (name, source, notes) VALUES (?, ?, ?)",
         (bl["name"], bl["source"], bl["notes"]),
     )
     return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
 
-def insert_brooder(conn, br, bloodline_id):
+def insert_brooder(conn, br, lineage_id):
     conn.execute(
-        "INSERT INTO brooders (name, bloodline_id, life_stage) VALUES (?, ?, ?)",
-        (br["name"], bloodline_id, br["life_stage"]),
+        "INSERT INTO brooders (name, lineage_id, life_stage) VALUES (?, ?, ?)",
+        (br["name"], lineage_id, br["life_stage"]),
     )
     return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -153,13 +153,13 @@ def insert_bird(conn, bird):
     notes = name  # use name as notes if named, else None
     conn.execute(
         """INSERT INTO birds
-           (band_color, sex, bloodline_id, hatch_date, mother_id, father_id,
+           (band_color, sex, lineage_id, hatch_date, mother_id, father_id,
             generation, status, notes, nfc_tag_id)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             bird["band_color"],
             bird["sex"],
-            bird["bloodline_id"],
+            bird["lineage_id"],
             bird["hatch_date"].isoformat(),
             bird.get("mother_id"),
             bird.get("father_id"),
@@ -187,19 +187,19 @@ def insert_breeding_pair(conn, male_id, female_id, start_date, notes=None):
     return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
 
-def insert_clutch(conn, pair_id, bloodline_id, eggs_set, set_date, status,
+def insert_clutch(conn, pair_id, lineage_id, eggs_set, set_date, status,
                   eggs_fertile=None, eggs_hatched=None, notes=None,
                   eggs_infertile=None, eggs_quit=None, eggs_stillborn=None,
                   eggs_damaged=None, hatch_notes=None):
     expected = set_date + timedelta(days=17)
     conn.execute(
         """INSERT INTO clutches
-           (breeding_pair_id, bloodline_id, eggs_set, eggs_fertile, eggs_hatched,
+           (breeding_pair_id, lineage_id, eggs_set, eggs_fertile, eggs_hatched,
             set_date, expected_hatch_date, status, notes,
             eggs_infertile, eggs_quit, eggs_stillborn, eggs_damaged, hatch_notes)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            pair_id, bloodline_id, eggs_set, eggs_fertile, eggs_hatched,
+            pair_id, lineage_id, eggs_set, eggs_fertile, eggs_hatched,
             set_date.isoformat(), expected.isoformat(), status, notes,
             eggs_infertile, eggs_quit, eggs_stillborn, eggs_damaged, hatch_notes,
         ),
@@ -207,14 +207,14 @@ def insert_clutch(conn, pair_id, bloodline_id, eggs_set, set_date, status,
     return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
 
-def insert_chick_group(conn, clutch_id, bloodline_id, brooder_id,
+def insert_chick_group(conn, clutch_id, lineage_id, brooder_id,
                        initial_count, current_count, hatch_date, status="Active"):
     conn.execute(
         """INSERT INTO chick_groups
-           (clutch_id, bloodline_id, brooder_id, initial_count, current_count,
+           (clutch_id, lineage_id, brooder_id, initial_count, current_count,
             hatch_date, status)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (clutch_id, bloodline_id, brooder_id, initial_count, current_count,
+        (clutch_id, lineage_id, brooder_id, initial_count, current_count,
          hatch_date.isoformat(), status),
     )
     return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -265,12 +265,12 @@ def maybe_health_event(conn, bird_id, hatch_date):
 
 
 # ── Generation 0: Founders ───────────────────────────────────────────────────
-def seed_founders(conn, bloodline_ids):
-    """Create 10 founder birds per bloodline (6F, 4M). Returns dict of bird lists by bloodline index."""
+def seed_founders(conn, lineage_ids):
+    """Create 10 founder birds per lineage (6F, 4M). Returns dict of bird lists by lineage index."""
     birds_by_line = {0: [], 1: [], 2: []}
     bird_num = 1
 
-    for line_idx, bl_id in enumerate(bloodline_ids):
+    for line_idx, bl_id in enumerate(lineage_ids):
         bl = BLOODLINES[line_idx]
         sexes = ["Female"] * 6 + ["Male"] * 4
         random.shuffle(sexes)
@@ -287,7 +287,7 @@ def seed_founders(conn, bloodline_ids):
             bid = insert_bird(conn, {
                 "band_color": band_color,
                 "sex": sex,
-                "bloodline_id": bl_id,
+                "lineage_id": bl_id,
                 "hatch_date": hatch,
                 "generation": 0,
                 "status": "Active",
@@ -298,7 +298,7 @@ def seed_founders(conn, bloodline_ids):
             maybe_health_event(conn, bid, hatch)
 
             birds_by_line[line_idx].append({
-                "id": bid, "sex": sex, "bloodline_idx": line_idx,
+                "id": bid, "sex": sex, "lineage_idx": line_idx,
                 "hatch_date": hatch, "generation": 0,
             })
             bird_num += 1
@@ -307,7 +307,7 @@ def seed_founders(conn, bloodline_ids):
 
 
 # ── Clutch simulation ────────────────────────────────────────────────────────
-def simulate_clutch(conn, pair_id, bloodline_id, set_date, hatch_date):
+def simulate_clutch(conn, pair_id, lineage_id, set_date, hatch_date):
     """Simulate a clutch with realistic outcomes. Returns (clutch_id, hatched_count)."""
     eggs_set = random.randint(8, 15)
 
@@ -333,7 +333,7 @@ def simulate_clutch(conn, pair_id, bloodline_id, set_date, hatch_date):
     notes = f"{candling_7}; {candling_14}"
 
     clutch_id = insert_clutch(
-        conn, pair_id, bloodline_id,
+        conn, pair_id, lineage_id,
         eggs_set=eggs_set,
         set_date=set_date,
         status="Hatched",
@@ -351,8 +351,8 @@ def simulate_clutch(conn, pair_id, bloodline_id, set_date, hatch_date):
 
 
 # ── Breed a generation ───────────────────────────────────────────────────────
-def breed_generation(conn, gen_num, parent_birds, bloodline_ids, hatch_date, brooder_ids):
-    """Cross bloodlines per rotation, create clutches + offspring birds.
+def breed_generation(conn, gen_num, parent_birds, lineage_ids, hatch_date, brooder_ids):
+    """Cross lineages per rotation, create clutches + offspring birds.
 
     Returns new birds_by_line dict for use as parents of next generation.
     """
@@ -368,9 +368,9 @@ def breed_generation(conn, gen_num, parent_birds, bloodline_ids, hatch_date, bro
         if not sire_birds or not dam_birds:
             continue
 
-        # Offspring go to dam's bloodline
+        # Offspring go to dam's lineage
         offspring_line = dam_line
-        offspring_bl_id = bloodline_ids[offspring_line]
+        offspring_bl_id = lineage_ids[offspring_line]
         bl = BLOODLINES[offspring_line]
 
         # 3-4 clutches per cross
@@ -456,7 +456,7 @@ def breed_generation(conn, gen_num, parent_birds, bloodline_ids, hatch_date, bro
                 bid = insert_bird(conn, {
                     "band_color": band_color,
                     "sex": sex,
-                    "bloodline_id": offspring_bl_id,
+                    "lineage_id": offspring_bl_id,
                     "hatch_date": actual_hatch,
                     "mother_id": dam["id"],
                     "father_id": sire["id"],
@@ -482,7 +482,7 @@ def breed_generation(conn, gen_num, parent_birds, bloodline_ids, hatch_date, bro
                     )
 
                 new_birds[offspring_line].append({
-                    "id": bid, "sex": sex, "bloodline_idx": offspring_line,
+                    "id": bid, "sex": sex, "lineage_idx": offspring_line,
                     "hatch_date": actual_hatch, "generation": gen_num,
                 })
 
@@ -514,25 +514,25 @@ def seed_brooder_readings(conn, brooder_ids):
 def seed(conn):
     conn.execute("PRAGMA foreign_keys = ON")
 
-    # 1. Bloodlines
-    print("[seed] Creating 3 bloodlines...")
-    bloodline_ids = []
+    # 1. Lineages
+    print("[seed] Creating 3 lineages...")
+    lineage_ids = []
     for bl in BLOODLINES:
-        bl_id = insert_bloodline(conn, bl)
-        bloodline_ids.append(bl_id)
-        print(f"  bloodline #{bl_id}: {bl['name']}")
+        bl_id = insert_lineage(conn, bl)
+        lineage_ids.append(bl_id)
+        print(f"  lineage #{bl_id}: {bl['name']}")
 
     # 2. Brooders
     print("[seed] Creating 3 brooders...")
     brooder_ids = []
     for i, br in enumerate(BROODERS):
-        br_id = insert_brooder(conn, br, bloodline_ids[i])
+        br_id = insert_brooder(conn, br, lineage_ids[i])
         brooder_ids.append(br_id)
         print(f"  brooder #{br_id}: {br['name']}")
 
     # 3. Generation 0 — Founders
     print("[seed] Generation 0: 30 founders (10 per line)...")
-    birds = seed_founders(conn, bloodline_ids)
+    birds = seed_founders(conn, lineage_ids)
     for line_idx in range(3):
         males = sum(1 for b in birds[line_idx] if b["sex"] == "Male")
         females = sum(1 for b in birds[line_idx] if b["sex"] == "Female")
@@ -547,7 +547,7 @@ def seed(conn):
     for gen in range(1, 5):
         print(f"[seed] Generation {gen}: breeding + hatching...")
         parents = breed_generation(
-            conn, gen, parents, bloodline_ids, hatch_dates[gen - 1], brooder_ids,
+            conn, gen, parents, lineage_ids, hatch_dates[gen - 1], brooder_ids,
         )
         gen_count = sum(len(parents[i]) for i in range(3))
         total_birds += gen_count
@@ -572,7 +572,7 @@ def seed(conn):
     print("=" * 50)
 
     stats = {
-        "bloodlines": conn.execute("SELECT COUNT(*) FROM bloodlines").fetchone()[0],
+        "lineages": conn.execute("SELECT COUNT(*) FROM lineages").fetchone()[0],
         "brooders": conn.execute("SELECT COUNT(*) FROM brooders").fetchone()[0],
         "birds": conn.execute("SELECT COUNT(*) FROM birds").fetchone()[0],
         "active": conn.execute("SELECT COUNT(*) FROM birds WHERE status='Active'").fetchone()[0],
@@ -626,9 +626,9 @@ def main():
         sys.exit(1)
 
     # Check if data already exists
-    existing = conn.execute("SELECT COUNT(*) FROM bloodlines").fetchone()[0]
+    existing = conn.execute("SELECT COUNT(*) FROM lineages").fetchone()[0]
     if existing > 0 and not args.reset:
-        print(f"[warn] Database already has {existing} bloodlines. Use --reset to wipe and re-seed.")
+        print(f"[warn] Database already has {existing} lineages. Use --reset to wipe and re-seed.")
         sys.exit(0)
 
     if args.reset:
