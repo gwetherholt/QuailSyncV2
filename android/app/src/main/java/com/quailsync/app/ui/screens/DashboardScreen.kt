@@ -58,7 +58,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.quailsync.app.data.Bird
 import com.quailsync.app.data.Brooder
-import com.quailsync.app.data.Bloodline
+import com.quailsync.app.data.Lineage
 import com.quailsync.app.data.BrooderAlert
 import com.quailsync.app.data.BrooderReading
 import com.quailsync.app.data.ChickGroupDto
@@ -118,8 +118,8 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     private val _chickGroups = MutableStateFlow<List<ChickGroupDto>>(emptyList())
     val chickGroups: StateFlow<List<ChickGroupDto>> = _chickGroups.asStateFlow()
 
-    private val _bloodlines = MutableStateFlow<List<Bloodline>>(emptyList())
-    val bloodlines: StateFlow<List<Bloodline>> = _bloodlines.asStateFlow()
+    private val _lineages = MutableStateFlow<List<Lineage>>(emptyList())
+    val lineages: StateFlow<List<Lineage>> = _lineages.asStateFlow()
 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -158,7 +158,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
             _birds.value = try { api.getBirds() } catch (_: Exception) { emptyList() }
             _clutches.value = try { api.getClutches() } catch (_: Exception) { emptyList() }
             _chickGroups.value = try { api.getChickGroups() } catch (_: Exception) { emptyList() }
-            _bloodlines.value = try { api.getBloodlines() } catch (_: Exception) { emptyList() }
+            _lineages.value = try { api.getLineages() } catch (_: Exception) { emptyList() }
 
             Log.d("QuailSync", "Dashboard loaded: ${states.size} brooders, ${_birds.value.size} birds, ${_clutches.value.size} clutches, ${_chickGroups.value.size} chick groups")
         } catch (e: Exception) {
@@ -186,7 +186,7 @@ fun DashboardScreen(
     val birds by viewModel.birds.collectAsState()
     val clutches by viewModel.clutches.collectAsState()
     val chickGroups by viewModel.chickGroups.collectAsState()
-    val bloodlines by viewModel.bloodlines.collectAsState()
+    val lineages by viewModel.lineages.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val liveReadings by viewModel.webSocketService.readings.collectAsState()
@@ -203,7 +203,7 @@ fun DashboardScreen(
 
     // Derived data
     val today = LocalDate.now()
-    val bloodlineMap = bloodlines.associateBy { it.id }
+    val lineageMap = lineages.associateBy { it.id }
     val incubatingClutches = clutches.filter { it.status?.lowercase() in listOf("incubating", "active", "set") }
     val hatchCountdowns = incubatingClutches.mapNotNull { clutch ->
         val setDate = clutch.setDate?.let { parseDate(it) } ?: return@mapNotNull null
@@ -271,7 +271,7 @@ fun DashboardScreen(
                 // === 1. Hatch Countdown Banner ===
                 if (urgentHatches.isNotEmpty()) {
                     item(key = "hatch-banner") {
-                        HatchCountdownBanner(urgentHatches, bloodlineMap)
+                        HatchCountdownBanner(urgentHatches, lineageMap)
                     }
                 }
 
@@ -367,12 +367,12 @@ fun DashboardScreen(
 // =====================================================================
 
 @Composable
-private fun HatchCountdownBanner(urgentHatches: List<Triple<Clutch, Int, LocalDate>>, bloodlineMap: Map<Int, Bloodline>) {
+private fun HatchCountdownBanner(urgentHatches: List<Triple<Clutch, Int, LocalDate>>, lineageMap: Map<Int, Lineage>) {
     val nearest = urgentHatches.first()
     val clutch = nearest.first
     val daysUntil = nearest.second
-    val clutchLabel = clutch.bloodlineName
-        ?: clutch.bloodlineId?.let { bloodlineMap[it]?.name }
+    val clutchLabel = clutch.lineageName
+        ?: clutch.lineageId?.let { lineageMap[it]?.name }
         ?: "Clutch #${clutch.id}"
     val eggCount = clutch.totalEggs ?: 0
 

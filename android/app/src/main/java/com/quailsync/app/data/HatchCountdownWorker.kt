@@ -63,7 +63,7 @@ class HatchCountdownWorker(
                 val setDate = clutch.setDate?.let { parseDate(it) } ?: continue
                 val daysElapsed = ChronoUnit.DAYS.between(setDate, today).toInt()
                 val daysUntilHatch = INCUBATION_DAYS.toInt() - daysElapsed
-                val clutchLabel = clutch.bloodlineName ?: "Clutch #${clutch.id}"
+                val clutchLabel = clutch.lineageName ?: "Clutch #${clutch.id}"
 
                 when (daysUntilHatch) {
                     in Int.MIN_VALUE..0 -> {

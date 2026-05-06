@@ -714,7 +714,7 @@
      Shared state
      ========================================================= */
   var _intervals = [];
-  var _bloodlines = [];
+  var _lineages = [];
   var _birds = [];
 
   function clearIntervals(){
@@ -731,7 +731,7 @@
      ========================================================= */
   var BLOODLINE_COLORS = ['#B7C4A0','#D4A0A0','#A0B8D4','#D4C4A0','#C4A0D4','#A0D4C4','#D4A0B8','#B8D4A0','#D4B8A0','#A0C4D4'];
 
-  function bloodlineColor(idx){
+  function lineageColor(idx){
     return BLOODLINE_COLORS[idx % BLOODLINE_COLORS.length];
   }
 
@@ -771,9 +771,9 @@
     return '<span class="band-dot" style="width:'+s+'px;height:'+s+'px;background:'+safe+'" title="'+safe+'"></span>';
   }
 
-  function bloodlineName(id){
+  function lineageName(id){
     var name = '';
-    _bloodlines.forEach(function(bl){ if(bl.id===id) name=bl.name; });
+    _lineages.forEach(function(bl){ if(bl.id===id) name=bl.name; });
     return escapeHtml(name);
   }
 
@@ -1209,8 +1209,8 @@
     _pollFlock: async function(){
       var el = document.getElementById('d-flock');
       if(!el) return;
-      var bl = await API.get('/api/bloodlines');
-      if(bl) _bloodlines = bl;
+      var bl = await API.get('/api/lineages');
+      if(bl) _lineages = bl;
       var birds = await API.get('/api/birds');
       if(birds) _birds = birds; else _birds = [];
       if(_birds.length === 0){
@@ -1223,18 +1223,18 @@
       var totalM = 0, totalF = 0;
       _birds.forEach(function(b){
         if(b.status !== 'Active') return;
-        var blId = b.bloodline_id || 0;
+        var blId = b.lineage_id || 0;
         if(b.sex === 'Male'){ malesByBl[blId] = (malesByBl[blId]||0) + 1; totalM++; }
         else if(b.sex === 'Female'){ femalesByBl[blId] = (femalesByBl[blId]||0) + 1; totalF++; }
       });
 
-      // Get unique bloodline IDs that have birds
+      // Get unique lineage IDs that have birds
       var blIds = [];
       var seen = {};
       _birds.forEach(function(b){
-        if(b.status==='Active' && !seen[b.bloodline_id]){
-          seen[b.bloodline_id] = true;
-          blIds.push(b.bloodline_id);
+        if(b.status==='Active' && !seen[b.lineage_id]){
+          seen[b.lineage_id] = true;
+          blIds.push(b.lineage_id);
         }
       });
 
@@ -1246,7 +1246,7 @@
           var count = malesByBl[blId] || 0;
           if(count > 0){
             var pct = (count / totalM) * 100;
-            html += '<div class="bar-chart-seg" style="width:'+pct.toFixed(1)+'%;background:'+bloodlineColor(idx)+'" title="'+bloodlineName(blId)+': '+count+'"></div>';
+            html += '<div class="bar-chart-seg" style="width:'+pct.toFixed(1)+'%;background:'+lineageColor(idx)+'" title="'+lineageName(blId)+': '+count+'"></div>';
           }
         });
       }
@@ -1259,7 +1259,7 @@
           var count = femalesByBl[blId] || 0;
           if(count > 0){
             var pct = (count / totalF) * 100;
-            html += '<div class="bar-chart-seg" style="width:'+pct.toFixed(1)+'%;background:'+bloodlineColor(idx)+'" title="'+bloodlineName(blId)+': '+count+'"></div>';
+            html += '<div class="bar-chart-seg" style="width:'+pct.toFixed(1)+'%;background:'+lineageColor(idx)+'" title="'+lineageName(blId)+': '+count+'"></div>';
           }
         });
       }
@@ -1268,7 +1268,7 @@
       // Legend
       html += '<div class="bar-legend">';
       blIds.forEach(function(blId, idx){
-        html += '<span class="bar-legend-item"><span class="bar-legend-dot" style="background:'+bloodlineColor(idx)+'"></span>'+bloodlineName(blId)+'</span>';
+        html += '<span class="bar-legend-item"><span class="bar-legend-dot" style="background:'+lineageColor(idx)+'"></span>'+lineageName(blId)+'</span>';
       });
       html += '</div>';
 
@@ -1285,25 +1285,25 @@
      --------------------------------------------------------- */
   Page.Flock = {
     filter: 'all',
-    bloodlineFilter: null,
+    lineageFilter: null,
     render: function(app){
       app.innerHTML =
         '<div class="page-top"><div class="page-title">&#x1F426; Flock</div><button class="btn-primary" onclick="Page.Flock.openModal()">+ Add Bird</button></div>' +
         '<div class="filter-bar" id="flock-filters"></div>' +
         '<div class="table-wrap"><table class="data-table"><thead><tr>' +
-        '<th>ID</th><th>Band</th><th>Sex</th><th>Bloodline</th><th>Hatch</th><th>Gen</th><th>Status</th><th>Parents</th>' +
+        '<th>ID</th><th>Band</th><th>Sex</th><th>Lineage</th><th>Hatch</th><th>Gen</th><th>Status</th><th>Parents</th>' +
         '</tr></thead><tbody id="flock-tbody"><tr><td colspan="8">'+loadingHTML()+'</td></tr></tbody></table></div>';
     },
     start: function(){
       this.filter = 'all';
-      this.bloodlineFilter = null;
+      this.lineageFilter = null;
       this._load();
       addInterval(this._load.bind(this), 60000);
     },
     stop: function(){},
     _load: async function(){
-      var bl = await API.get('/api/bloodlines');
-      if(bl) _bloodlines = bl;
+      var bl = await API.get('/api/lineages');
+      if(bl) _lineages = bl;
       var birds = await API.get('/api/birds');
       if(birds) _birds = birds;
       this._renderFilters();
@@ -1321,15 +1321,15 @@
       ];
       var html='';
       filters.forEach(function(f){
-        var active = (self.filter===f.key && !self.bloodlineFilter)?'active':'';
+        var active = (self.filter===f.key && !self.lineageFilter)?'active':'';
         html+='<button class="filter-btn '+active+'" onclick="Page.Flock.applyFilter(\''+f.key+'\')">'+f.label+'</button>';
       });
       var seenBl = {};
-      _bloodlines.forEach(function(bl){
+      _lineages.forEach(function(bl){
         if(seenBl[bl.id]) return;
         seenBl[bl.id] = true;
-        var active = (self.bloodlineFilter===bl.id)?'active':'';
-        html+='<button class="filter-btn '+active+'" onclick="Page.Flock.applyBloodlineFilter('+bl.id+')">'+bl.name+'</button>';
+        var active = (self.lineageFilter===bl.id)?'active':'';
+        html+='<button class="filter-btn '+active+'" onclick="Page.Flock.applyLineageFilter('+bl.id+')">'+bl.name+'</button>';
       });
       el.innerHTML = html;
     },
@@ -1338,7 +1338,7 @@
       if(!tbody) return;
       var self = this;
       var filtered = _birds.filter(function(b){
-        if(self.bloodlineFilter) return b.bloodline_id === self.bloodlineFilter;
+        if(self.lineageFilter) return b.lineage_id === self.lineageFilter;
         if(self.filter==='active') return b.status==='Active';
         if(self.filter==='males') return b.sex==='Male';
         if(self.filter==='females') return b.sex==='Female';
@@ -1352,7 +1352,7 @@
 
       var html='';
       filtered.forEach(function(b){
-        var blName = bloodlineName(b.bloodline_id);
+        var blName = lineageName(b.lineage_id);
         var bandHtml = b.band_color ? bandDot(b.band_color) : '&mdash;';
         var parents = '';
         if(b.mother_id || b.father_id){
@@ -1368,19 +1368,19 @@
     },
     applyFilter: function(key){
       this.filter = key;
-      this.bloodlineFilter = null;
+      this.lineageFilter = null;
       this._renderFilters();
       this._renderTable();
     },
-    applyBloodlineFilter: function(id){
-      this.bloodlineFilter = (this.bloodlineFilter === id) ? null : id;
+    applyLineageFilter: function(id){
+      this.lineageFilter = (this.lineageFilter === id) ? null : id;
       this.filter = 'all';
       this._renderFilters();
       this._renderTable();
     },
     openModal: function(){
       var blOpts = '';
-      _bloodlines.forEach(function(bl){
+      _lineages.forEach(function(bl){
         blOpts+='<option value="'+bl.id+'">'+bl.name+'</option>';
       });
       var today = new Date().toISOString().split('T')[0];
@@ -1388,7 +1388,7 @@
         '<div class="modal"><h3>Add Bird</h3>' +
         '<label>Band Color</label><input id="m-band" type="text" placeholder="e.g. red, blue">' +
         '<label>Sex</label><select id="m-sex"><option value="Male">Male</option><option value="Female">Female</option><option value="Unknown">Unknown</option></select>' +
-        '<label>Bloodline</label><select id="m-bloodline">'+blOpts+'</select>' +
+        '<label>Lineage</label><select id="m-lineage">'+blOpts+'</select>' +
         '<label>Hatch Date</label><input id="m-hatch" type="date" value="'+today+'">' +
         '<label>Mother ID (optional)</label><input id="m-mother" type="number" placeholder="Bird ID">' +
         '<label>Father ID (optional)</label><input id="m-father" type="number" placeholder="Bird ID">' +
@@ -1405,17 +1405,17 @@
     submitBird: async function(){
       var band = document.getElementById('m-band').value.trim() || null;
       var sex = document.getElementById('m-sex').value;
-      var bloodline_id = parseInt(document.getElementById('m-bloodline').value);
+      var lineage_id = parseInt(document.getElementById('m-lineage').value);
       var hatch_date = document.getElementById('m-hatch').value;
       var mother = document.getElementById('m-mother').value;
       var father = document.getElementById('m-father').value;
       var gen = parseInt(document.getElementById('m-gen').value) || 1;
       var notes = document.getElementById('m-notes').value.trim() || null;
 
-      if(!bloodline_id || !hatch_date){ toast('Bloodline and hatch date are required','error'); return; }
+      if(!lineage_id || !hatch_date){ toast('Lineage and hatch date are required','error'); return; }
 
       var result = await API.post('/api/birds', {
-        band_color: band, sex: sex, bloodline_id: bloodline_id,
+        band_color: band, sex: sex, lineage_id: lineage_id,
         hatch_date: hatch_date,
         mother_id: mother ? parseInt(mother) : null,
         father_id: father ? parseInt(father) : null,
@@ -1444,8 +1444,8 @@
     },
     stop: function(){},
     _load: async function(){
-      var bl = await API.get('/api/bloodlines');
-      if(bl) _bloodlines = bl;
+      var bl = await API.get('/api/lineages');
+      if(bl) _lineages = bl;
       var birds = await API.get('/api/birds');
       if(birds) _birds = birds;
       this._bird = findBird(this._birdId);
@@ -1462,7 +1462,7 @@
         return;
       }
 
-      var blName = bloodlineName(b.bloodline_id);
+      var blName = lineageName(b.lineage_id);
       var statusCls = b.status.toLowerCase();
       var bandColor = b.band_color || '#ccc';
 
@@ -1473,7 +1473,7 @@
       html += '<h2>Bird #'+b.id+' <span class="status-badge '+statusCls+'">'+escapeHtml(b.status)+'</span></h2>';
       html += '<dl class="bird-meta-grid">';
       html += '<dt>Sex</dt><dd>'+b.sex+'</dd>';
-      html += '<dt>Bloodline</dt><dd>'+blName+'</dd>';
+      html += '<dt>Lineage</dt><dd>'+blName+'</dd>';
       html += '<dt>Band Color</dt><dd>'+(b.band_color || 'None')+'</dd>';
       html += '<dt>Generation</dt><dd>'+b.generation+'</dd>';
       html += '<dt>Hatch Date</dt><dd>'+b.hatch_date+'</dd>';
@@ -1694,8 +1694,8 @@
     },
     stop: function(){},
     _load: async function(){
-      var bl = await API.get('/api/bloodlines');
-      if(bl) _bloodlines = bl;
+      var bl = await API.get('/api/lineages');
+      if(bl) _lineages = bl;
       var data = await API.get('/api/clutches');
       if(data) this._clutches = data;
       this._renderTimeline();
@@ -1745,7 +1745,7 @@
         var pct = Math.min(100, (elapsed/17)*100);
         var bg = pct >= 70 ? 'var(--dusty-rose)' : pct >= 40 ? 'var(--warning)' : 'var(--sage)';
         var top = 22 + i * (barHeight + barGap);
-        var blName = bloodlineName(c.bloodline_id);
+        var blName = lineageName(c.lineage_id);
         html += '<div class="timeline-gantt-bar" style="left:'+leftPct.toFixed(1)+'%;width:'+Math.max(widthPct,3).toFixed(1)+'%;top:'+top+'px;height:'+barHeight+'px;background:'+bg+'" title="Clutch #'+c.id+(blName?' - '+escapeHtml(blName):'')+'">';
         html += '#'+c.id;
         html += '</div>';
@@ -1784,7 +1784,7 @@
         var day = Math.min(Math.floor(elapsed), 17);
         var pct = Math.min(100,(elapsed/17)*100);
 
-        var blName = bloodlineName(c.bloodline_id);
+        var blName = lineageName(c.lineage_id);
         var eggs = c.eggs_set;
         var fertile = c.eggs_fertile!=null ? c.eggs_fertile : '?';
         var hatched = c.eggs_hatched!=null ? c.eggs_hatched : '?';
@@ -1933,13 +1933,13 @@
         toast('Hatch recorded: '+hatched+' chicks!');
         // Offer to create chick group if hatched > 0
         if(hatched > 0 && clutch){
-          this._showChickGroupPrompt(id, hatched, clutch.bloodline_id);
+          this._showChickGroupPrompt(id, hatched, clutch.lineage_id);
         } else {
           this._load();
         }
       }
     },
-    _showChickGroupPrompt: async function(clutchId, hatched, bloodlineId){
+    _showChickGroupPrompt: async function(clutchId, hatched, lineageId){
       var brooders = await API.get('/api/brooders') || [];
       var brOpts = '<option value="">-- No brooder --</option>';
       brooders.forEach(function(b){
@@ -1951,7 +1951,7 @@
         '<label>Assign to Brooder</label><select id="mcg-brooder">'+brOpts+'</select>' +
         '<input type="hidden" id="mcg-clutch" value="'+clutchId+'">' +
         '<input type="hidden" id="mcg-count" value="'+hatched+'">' +
-        '<input type="hidden" id="mcg-bloodline" value="'+(bloodlineId||'')+'">' +
+        '<input type="hidden" id="mcg-lineage" value="'+(lineageId||'')+'">' +
         '<div class="modal-actions"><button class="btn-cancel" onclick="Page.Clutches.closeChickGroupPrompt()">Skip</button><button class="btn-primary" onclick="Page.Clutches.submitChickGroup()">Create Group</button></div>' +
         '</div></div>';
       document.body.insertAdjacentHTML('beforeend', html);
@@ -1964,15 +1964,15 @@
     submitChickGroup: async function(){
       var clutchId = parseInt(document.getElementById('mcg-clutch').value);
       var count = parseInt(document.getElementById('mcg-count').value);
-      var bloodline = parseInt(document.getElementById('mcg-bloodline').value);
+      var lineage = parseInt(document.getElementById('mcg-lineage').value);
       var brooder = document.getElementById('mcg-brooder').value;
       var today = new Date().toISOString().split('T')[0];
 
-      if(!bloodline){ toast('Clutch has no bloodline — set it first','error'); return; }
+      if(!lineage){ toast('Clutch has no lineage — set it first','error'); return; }
 
       var body = {
         clutch_id: clutchId,
-        bloodline_id: bloodline,
+        lineage_id: lineage,
         brooder_id: brooder ? parseInt(brooder) : null,
         initial_count: count,
         hatch_date: today,
@@ -1990,13 +1990,13 @@
     },
     openModal: function(){
       var blOpts = '<option value="">-- None --</option>';
-      _bloodlines.forEach(function(bl){
+      _lineages.forEach(function(bl){
         blOpts+='<option value="'+bl.id+'">'+bl.name+'</option>';
       });
       var today = new Date().toISOString().split('T')[0];
       var html = '<div class="modal-overlay" id="clutch-modal-overlay" onclick="if(event.target===this)Page.Clutches.closeModal()">' +
         '<div class="modal"><h3>Add Clutch</h3>' +
-        '<label>Bloodline</label><select id="mc-bloodline">'+blOpts+'</select>' +
+        '<label>Lineage</label><select id="mc-lineage">'+blOpts+'</select>' +
         '<label>Eggs Set</label><input id="mc-eggs" type="number" min="1" value="12">' +
         '<label>Set Date</label><input id="mc-date" type="date" value="'+today+'">' +
         '<label>Notes</label><textarea id="mc-notes" placeholder="Optional notes"></textarea>' +
@@ -2009,7 +2009,7 @@
       if(ov) ov.remove();
     },
     submitClutch: async function(){
-      var bloodline = document.getElementById('mc-bloodline').value;
+      var lineage = document.getElementById('mc-lineage').value;
       var eggs = parseInt(document.getElementById('mc-eggs').value);
       var setDate = document.getElementById('mc-date').value;
       var notes = document.getElementById('mc-notes').value.trim() || null;
@@ -2018,7 +2018,7 @@
 
       var result = await API.post('/api/clutches', {
         breeding_pair_id: null,
-        bloodline_id: bloodline ? parseInt(bloodline) : null,
+        lineage_id: lineage ? parseInt(lineage) : null,
         eggs_set: eggs, eggs_fertile: null, eggs_hatched: null,
         set_date: setDate, status: 'Incubating', notes: notes
       });
@@ -2052,8 +2052,8 @@
     },
     stop: function(){},
     _load: async function(){
-      var bl = await API.get('/api/bloodlines');
-      if(bl) _bloodlines = bl;
+      var bl = await API.get('/api/lineages');
+      if(bl) _lineages = bl;
       var birds = await API.get('/api/birds');
       if(birds) _birds = birds;
       this._groups = await API.get('/api/breeding-groups') || [];
@@ -2093,7 +2093,7 @@
         html += '<div style="font-size:.78rem;color:#888;margin-bottom:.3rem">MALE</div>';
         html += '<div class="breed-birds">';
         if(male){
-          html += '<span class="breed-bird-chip">'+bandDot(male.band_color, 10)+' '+birdLink(male.id)+' <span style="color:#888;font-size:.72rem">'+bloodlineName(male.bloodline_id)+'</span></span>';
+          html += '<span class="breed-bird-chip">'+bandDot(male.band_color, 10)+' '+birdLink(male.id)+' <span style="color:#888;font-size:.72rem">'+lineageName(male.lineage_id)+'</span></span>';
         } else {
           html += '<span class="breed-bird-chip">'+birdLink(g.male_id)+'</span>';
         }
@@ -2106,7 +2106,7 @@
           g.female_ids.forEach(function(fid){
             var fb = findBird(fid);
             if(fb){
-              html += '<span class="breed-bird-chip">'+bandDot(fb.band_color, 10)+' '+birdLink(fb.id)+' <span style="color:#888;font-size:.72rem">'+bloodlineName(fb.bloodline_id)+'</span></span>';
+              html += '<span class="breed-bird-chip">'+bandDot(fb.band_color, 10)+' '+birdLink(fb.id)+' <span style="color:#888;font-size:.72rem">'+lineageName(fb.lineage_id)+'</span></span>';
             } else {
               html += '<span class="breed-bird-chip">'+birdLink(fid)+'</span>';
             }
@@ -2139,11 +2139,11 @@
           html += '<div class="pair-info">';
           if(mBird) html += bandDot(mBird.band_color, 12)+' ';
           html += birdLink(p.male_id, 'Male #'+p.male_id);
-          if(mBird) html += ' <span style="font-size:.75rem;color:#888">'+bloodlineName(mBird.bloodline_id)+'</span>';
+          if(mBird) html += ' <span style="font-size:.75rem;color:#888">'+lineageName(mBird.lineage_id)+'</span>';
           html += ' &times; ';
           if(fBird) html += bandDot(fBird.band_color, 12)+' ';
           html += birdLink(p.female_id, 'Female #'+p.female_id);
-          if(fBird) html += ' <span style="font-size:.75rem;color:#888">'+bloodlineName(fBird.bloodline_id)+'</span>';
+          if(fBird) html += ' <span style="font-size:.75rem;color:#888">'+lineageName(fBird.lineage_id)+'</span>';
           html += '</div>';
           html += '<span class="coeff safe">'+p.coefficient.toFixed(3)+'</span>';
           html += '</div>';
@@ -2159,11 +2159,11 @@
           html += '<div class="pair-info">';
           if(mBird) html += bandDot(mBird.band_color, 12)+' ';
           html += birdLink(p.male_id, 'Male #'+p.male_id);
-          if(mBird) html += ' <span style="font-size:.75rem;color:#888">'+bloodlineName(mBird.bloodline_id)+'</span>';
+          if(mBird) html += ' <span style="font-size:.75rem;color:#888">'+lineageName(mBird.lineage_id)+'</span>';
           html += ' &times; ';
           if(fBird) html += bandDot(fBird.band_color, 12)+' ';
           html += birdLink(p.female_id, 'Female #'+p.female_id);
-          if(fBird) html += ' <span style="font-size:.75rem;color:#888">'+bloodlineName(fBird.bloodline_id)+'</span>';
+          if(fBird) html += ' <span style="font-size:.75rem;color:#888">'+lineageName(fBird.lineage_id)+'</span>';
           html += '</div>';
           html += '<span class="coeff risky">'+p.coefficient.toFixed(3)+'</span>';
           html += '</div>';
@@ -2192,8 +2192,8 @@
     },
     stop: function(){},
     _load: async function(){
-      var bl = await API.get('/api/bloodlines');
-      if(bl) _bloodlines = bl;
+      var bl = await API.get('/api/lineages');
+      if(bl) _lineages = bl;
       var birds = await API.get('/api/birds');
       if(birds) _birds = birds;
       this._cullRecs = await API.get('/api/flock/cull-recommendations') || [];
@@ -2228,7 +2228,7 @@
         html += '<div class="kanban-card-header">';
         if(bird) html += bandDot(bird.band_color, 12)+' ';
         html += birdLink(r.bird_id);
-        if(bird) html += ' <span style="font-size:.72rem;color:#888">'+bloodlineName(bird.bloodline_id)+'</span>';
+        if(bird) html += ' <span style="font-size:.72rem;color:#888">'+lineageName(bird.lineage_id)+'</span>';
         html += '</div>';
         html += '<div class="kanban-card-reason">'+escapeHtml(reason)+'</div>';
         html += '<div class="kanban-card-actions"><button class="btn-primary" style="font-size:.72rem;padding:.2rem .5rem" onclick="Page.Processing.scheduleFromRec('+r.bird_id+',\''+escapeHtml(reason).replace(/'/g,"\\'")+'\')">Schedule</button></div>';
@@ -2248,7 +2248,7 @@
         html += '<div class="kanban-card-header">';
         if(bird) html += bandDot(bird.band_color, 12)+' ';
         html += birdLink(p.bird_id);
-        if(bird) html += ' <span style="font-size:.72rem;color:#888">'+bloodlineName(bird.bloodline_id)+'</span>';
+        if(bird) html += ' <span style="font-size:.72rem;color:#888">'+lineageName(bird.lineage_id)+'</span>';
         html += '</div>';
         html += '<div class="kanban-card-reason">'+escapeHtml(p.reason||'—')+'</div>';
         html += '<div class="kanban-card-date">Scheduled: '+(p.scheduled_date||'&mdash;')+'</div>';
@@ -2516,7 +2516,7 @@
         var hatchD = new Date(g.hatch_date+'T00:00:00');
         var ageDays = Math.floor((now - hatchD) / 86400000);
         var mortalityPct = g.initial_count > 0 ? ((g.initial_count - g.current_count) / g.initial_count * 100) : 0;
-        var blName = bloodlineName(g.bloodline_id);
+        var blName = lineageName(g.lineage_id);
         var statusCls = g.status === 'Active' ? 'active' : g.status === 'Graduated' ? 'sold' : 'deceased';
 
         html += '<div class="clutch-card'+(g.status !== 'Active' ? ' muted' : '')+'">';
@@ -2553,15 +2553,15 @@
       el.innerHTML = html;
     },
     openCreateModal: async function(){
-      var bloodlines = await API.get('/api/bloodlines') || [];
+      var lineages = await API.get('/api/lineages') || [];
       var brooders = await API.get('/api/brooders') || [];
-      var blOpts = ''; bloodlines.forEach(function(bl){ blOpts += '<option value="'+bl.id+'">'+bl.name+'</option>'; });
+      var blOpts = ''; lineages.forEach(function(bl){ blOpts += '<option value="'+bl.id+'">'+bl.name+'</option>'; });
       var brOpts = '<option value="">-- None --</option>';
       brooders.forEach(function(b){ brOpts += '<option value="'+b.id+'">'+b.name+'</option>'; });
       var today = new Date().toISOString().split('T')[0];
       var html = '<div class="modal-overlay" id="nursery-modal-overlay" onclick="if(event.target===this)Page.Nursery.closeModal()">' +
         '<div class="modal"><h3>New Chick Group</h3>' +
-        '<label>Bloodline</label><select id="mn-bloodline">'+blOpts+'</select>' +
+        '<label>Lineage</label><select id="mn-lineage">'+blOpts+'</select>' +
         '<label>Chick Count</label><input id="mn-count" type="number" min="1" value="12">' +
         '<label>Hatch Date</label><input id="mn-hatch" type="date" value="'+today+'">' +
         '<label>Brooder</label><select id="mn-brooder">'+brOpts+'</select>' +
@@ -2575,14 +2575,14 @@
       if(ov) ov.remove();
     },
     submitCreate: async function(){
-      var bloodline = parseInt(document.getElementById('mn-bloodline').value);
+      var lineage = parseInt(document.getElementById('mn-lineage').value);
       var count = parseInt(document.getElementById('mn-count').value);
       var hatch = document.getElementById('mn-hatch').value;
       var brooder = document.getElementById('mn-brooder').value;
       var notes = document.getElementById('mn-notes').value.trim() || null;
-      if(!bloodline || !count || !hatch){ toast('Bloodline, count, and hatch date required','error'); return; }
+      if(!lineage || !count || !hatch){ toast('Lineage, count, and hatch date required','error'); return; }
       var result = await API.post('/api/chick-groups', {
-        bloodline_id: bloodline, initial_count: count, hatch_date: hatch,
+        lineage_id: lineage, initial_count: count, hatch_date: hatch,
         brooder_id: brooder ? parseInt(brooder) : null, clutch_id: null, notes: notes
       });
       this.closeModal();
@@ -2705,13 +2705,13 @@
       for(var i=0;i<6;i++) code += chars.charAt(Math.floor(Math.random()*chars.length));
       return 'QUAIL-' + code;
     },
-    _loadBloodlines: async function(){
-      var bl = await API.get('/api/bloodlines');
-      if(bl) _bloodlines = bl;
-      var sel = document.getElementById('nfc-bloodline');
+    _loadLineages: async function(){
+      var bl = await API.get('/api/lineages');
+      if(bl) _lineages = bl;
+      var sel = document.getElementById('nfc-lineage');
       if(!sel) return;
       var opts = '';
-      _bloodlines.forEach(function(b){ opts+='<option value="'+b.id+'">'+b.name+'</option>'; });
+      _lineages.forEach(function(b){ opts+='<option value="'+b.id+'">'+b.name+'</option>'; });
       sel.innerHTML = opts;
     },
     _getRecordBytes: function(record){
@@ -2870,7 +2870,7 @@
       html += '<div class="tag-row"><input type="text" id="nfc-tag-id" value="'+this._generateTagId()+'"><button onclick="document.getElementById(\'nfc-tag-id\').value=Page.NfcScan._generateTagId()">Regenerate</button></div>';
       html += '<label>Sex</label><select id="nfc-sex"><option value="Male">Male</option><option value="Female">Female</option><option value="Unknown">Unknown</option></select>';
       html += '<label>Band Color</label><input type="text" id="nfc-band" placeholder="e.g. red, blue">';
-      html += '<label>Bloodline</label><select id="nfc-bloodline"><option value="">Loading...</option></select>';
+      html += '<label>Lineage</label><select id="nfc-lineage"><option value="">Loading...</option></select>';
       var today = new Date().toISOString().split('T')[0];
       html += '<label>Hatch Date</label><input type="date" id="nfc-hatch" value="'+today+'">';
       html += '<label>Generation</label><input type="number" id="nfc-gen" value="1" min="1">';
@@ -2896,7 +2896,7 @@
       app.innerHTML = html;
     },
     start: function(){
-      this._loadBloodlines();
+      this._loadLineages();
     },
     stop: function(){
       this._cancelActive();
@@ -2979,7 +2979,7 @@
         tagId: (document.getElementById('nfc-tag-id').value||'').trim(),
         sex: document.getElementById('nfc-sex').value,
         band_color: (document.getElementById('nfc-band').value||'').trim()||null,
-        bloodline_id: parseInt(document.getElementById('nfc-bloodline').value),
+        lineage_id: parseInt(document.getElementById('nfc-lineage').value),
         hatch_date: document.getElementById('nfc-hatch').value,
         generation: parseInt(document.getElementById('nfc-gen').value)||1,
         notes: (document.getElementById('nfc-notes').value||'').trim()||null
@@ -2998,7 +2998,7 @@
     _buildBirdBody: function(v){
       return {
         nfc_tag_id:v.tagId, sex:v.sex, band_color:v.band_color,
-        bloodline_id:v.bloodline_id, hatch_date:v.hatch_date,
+        lineage_id:v.lineage_id, hatch_date:v.hatch_date,
         mother_id:null, father_id:null,
         generation:v.generation, status:'Active', notes:v.notes
       };
@@ -3025,7 +3025,7 @@
        handler (user gesture) with no intervening scan() calls. */
     writeAndCreate: async function(){
       var v = this._getFormValues();
-      if(!v.bloodline_id||!v.hatch_date){ toast('Bloodline and hatch date are required','error'); return; }
+      if(!v.lineage_id||!v.hatch_date){ toast('Lineage and hatch date are required','error'); return; }
       if(!v.tagId){ toast('Tag ID is required','error'); return; }
       var statusEl = document.getElementById('nfc-write-status');
       var btn = document.getElementById('nfc-write-btn');
@@ -3104,7 +3104,7 @@
 
     createOnly: async function(){
       var v = this._getFormValues();
-      if(!v.bloodline_id||!v.hatch_date){ toast('Bloodline and hatch date are required','error'); return; }
+      if(!v.lineage_id||!v.hatch_date){ toast('Lineage and hatch date are required','error'); return; }
       if(!v.tagId){ toast('Tag ID is required','error'); return; }
       var statusEl = document.getElementById('nfc-write-status');
       if(statusEl) statusEl.innerHTML='<span style="color:var(--sage-dark)">Creating bird\u2026</span>';

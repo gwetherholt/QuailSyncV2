@@ -85,7 +85,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.quailsync.app.data.Bird
-import com.quailsync.app.data.Bloodline
+import com.quailsync.app.data.Lineage
 import com.quailsync.app.data.Clutch
 import com.quailsync.app.data.CreateBirdRequest
 import com.quailsync.app.data.CreateWeightRequest
@@ -128,7 +128,7 @@ sealed class BatchState {
     data class PerBirdEntry(
         val currentIndex: Int,
         val totalCount: Int,
-        val bloodlineId: Int,
+        val lineageId: Int,
         val graduated: List<GraduatedBird>,
         val lastMaleBandColor: String = "",
         val lastFemaleBandColor: String = "",
@@ -138,7 +138,7 @@ sealed class BatchState {
     data class CreatingBird(
         val currentIndex: Int,
         val totalCount: Int,
-        val bloodlineId: Int,
+        val lineageId: Int,
         val graduated: List<GraduatedBird>,
         val sex: String,
         val bandColor: String,
@@ -151,7 +151,7 @@ sealed class BatchState {
     data class AwaitingTagWrite(
         val currentIndex: Int,
         val totalCount: Int,
-        val bloodlineId: Int,
+        val lineageId: Int,
         val graduated: List<GraduatedBird>,
         val pendingBird: Bird,
         val lastMaleBandColor: String,
@@ -162,7 +162,7 @@ sealed class BatchState {
     data class PostTagConfirm(
         val currentIndex: Int,
         val totalCount: Int,
-        val bloodlineId: Int,
+        val lineageId: Int,
         val graduated: List<GraduatedBird>,
         val justTaggedBird: Bird,
         val justTaggedTagId: String,
@@ -174,7 +174,7 @@ sealed class BatchState {
 
     data class Complete(
         val graduated: List<GraduatedBird>,
-        val bloodlineName: String?,
+        val lineageName: String?,
     ) : BatchState()
 }
 
@@ -188,8 +188,8 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
     private val _birds = MutableStateFlow<List<Bird>>(emptyList())
     val birds: StateFlow<List<Bird>> = _birds.asStateFlow()
 
-    private val _bloodlines = MutableStateFlow<List<Bloodline>>(emptyList())
-    val bloodlines: StateFlow<List<Bloodline>> = _bloodlines.asStateFlow()
+    private val _lineages = MutableStateFlow<List<Lineage>>(emptyList())
+    val lineages: StateFlow<List<Lineage>> = _lineages.asStateFlow()
 
     private val _clutches = MutableStateFlow<List<Clutch>>(emptyList())
     @Suppress("unused") val clutches: StateFlow<List<Clutch>> = _clutches.asStateFlow()
@@ -207,7 +207,7 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
     private fun loadData() {
         viewModelScope.launch {
             try { _birds.value = api.getBirds() } catch (e: Exception) { Log.e("QuailSync", "Failed to load birds", e) }
-            try { _bloodlines.value = api.getBloodlines() } catch (e: Exception) { Log.e("QuailSync", "Failed to load bloodlines", e) }
+            try { _lineages.value = api.getLineages() } catch (e: Exception) { Log.e("QuailSync", "Failed to load lineages", e) }
             try { _clutches.value = api.getClutches() } catch (e: Exception) { Log.e("QuailSync", "Failed to load clutches", e) }
         }
     }
@@ -289,11 +289,11 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
         _batchState.value = BatchState.Idle
     }
 
-    fun startBatchTagging(count: Int, bloodlineId: Int) {
+    fun startBatchTagging(count: Int, lineageId: Int) {
         _batchState.value = BatchState.PerBirdEntry(
             currentIndex = 0,
             totalCount = count,
-            bloodlineId = bloodlineId,
+            lineageId = lineageId,
             graduated = emptyList(),
         )
     }
@@ -312,7 +312,7 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
         _batchState.value = BatchState.CreatingBird(
             currentIndex = state.currentIndex,
             totalCount = state.totalCount,
-            bloodlineId = state.bloodlineId,
+            lineageId = state.lineageId,
             graduated = state.graduated,
             sex = sex,
             bandColor = bandColor,
@@ -329,7 +329,7 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
                     else -> "Unknown"
                 }
                 val request = CreateBirdRequest(
-                    bloodlineId = state.bloodlineId.toLong(),
+                    lineageIds = listOf(state.lineageId.toLong()),
                     sex = sexValue,
                     status = "Active",
                     hatchDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE),
@@ -337,7 +337,7 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
                     bandColor = bandColor.ifBlank { null },
                     notes = notes.ifBlank { null },
                 )
-                Log.d("QuailSync", "Batch: creating bird: sex=$sexValue, bloodline=${state.bloodlineId}, band=$bandColor")
+                Log.d("QuailSync", "Batch: creating bird: sex=$sexValue, lineage=${state.lineageId}, band=$bandColor")
                 val bird = api.createBird(request)
                 Log.d("QuailSync", "Batch: created bird ${bird.id}, entering write mode")
 
@@ -369,7 +369,7 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
                 _batchState.value = BatchState.AwaitingTagWrite(
                     currentIndex = state.currentIndex,
                     totalCount = state.totalCount,
-                    bloodlineId = state.bloodlineId,
+                    lineageId = state.lineageId,
                     graduated = state.graduated,
                     pendingBird = bird,
                     lastMaleBandColor = updatedMale,
@@ -406,7 +406,7 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
         _batchState.value = BatchState.PostTagConfirm(
             currentIndex = state.currentIndex + 1,
             totalCount = state.totalCount,
-            bloodlineId = state.bloodlineId,
+            lineageId = state.lineageId,
             graduated = newGraduated,
             justTaggedBird = state.pendingBird,
             justTaggedTagId = tagId,
@@ -475,14 +475,14 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
         val state = _batchState.value as? BatchState.PostTagConfirm ?: return
 
         if (state.currentIndex >= state.totalCount) {
-            val bloodlineName = _bloodlines.value.find { it.id == state.bloodlineId }?.name
-            _batchState.value = BatchState.Complete(state.graduated, bloodlineName)
+            val lineageName = _lineages.value.find { it.id == state.lineageId }?.name
+            _batchState.value = BatchState.Complete(state.graduated, lineageName)
             viewModelScope.launch { try { _birds.value = api.getBirds() } catch (_: Exception) {} }
         } else {
             _batchState.value = BatchState.PerBirdEntry(
                 currentIndex = state.currentIndex,
                 totalCount = state.totalCount,
-                bloodlineId = state.bloodlineId,
+                lineageId = state.lineageId,
                 graduated = state.graduated,
                 lastMaleBandColor = state.lastMaleBandColor,
                 lastFemaleBandColor = state.lastFemaleBandColor,
@@ -604,14 +604,14 @@ fun NfcMainScreen(nfcService: NfcService, viewModel: NfcViewModel) {
 }
 
 // =====================================================================
-// Batch Setup — bloodline + count only
+// Batch Setup — lineage + count only
 // =====================================================================
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BatchSetupScreen(viewModel: NfcViewModel) {
-    val bloodlines by viewModel.bloodlines.collectAsState()
-    var selectedBloodlineId by remember { mutableStateOf<Int?>(null) }
+    val lineages by viewModel.lineages.collectAsState()
+    var selectedLineageId by remember { mutableStateOf<Int?>(null) }
     var birdCount by remember { mutableStateOf("") }
     var expanded by remember { mutableStateOf(false) }
 
@@ -624,14 +624,14 @@ fun BatchSetupScreen(viewModel: NfcViewModel) {
 
         ExposedDropdownMenuBox(expanded, { expanded = it }) {
             OutlinedTextField(
-                value = selectedBloodlineId?.let { id -> bloodlines.find { it.id == id }?.name ?: "Bloodline #$id" } ?: "",
-                onValueChange = {}, readOnly = true, label = { Text("Bloodline") },
+                value = selectedLineageId?.let { id -> lineages.find { it.id == id }?.name ?: "Lineage #$id" } ?: "",
+                onValueChange = {}, readOnly = true, label = { Text("Lineage") },
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
                 modifier = Modifier.menuAnchor().fillMaxWidth(),
             )
             ExposedDropdownMenu(expanded, { expanded = false }) {
-                bloodlines.forEach { bl ->
-                    DropdownMenuItem(text = { Text(bl.name) }, onClick = { selectedBloodlineId = bl.id; expanded = false })
+                lineages.forEach { bl ->
+                    DropdownMenuItem(text = { Text(bl.name) }, onClick = { selectedLineageId = bl.id; expanded = false })
                 }
             }
         }
@@ -646,8 +646,8 @@ fun BatchSetupScreen(viewModel: NfcViewModel) {
 
         val count = birdCount.toIntOrNull() ?: 0
         Button(
-            onClick = { selectedBloodlineId?.let { viewModel.startBatchTagging(count, it) } },
-            enabled = count > 0 && selectedBloodlineId != null,
+            onClick = { selectedLineageId?.let { viewModel.startBatchTagging(count, it) } },
+            enabled = count > 0 && selectedLineageId != null,
             modifier = Modifier.fillMaxWidth().height(52.dp),
             colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
         ) {
@@ -1115,8 +1115,8 @@ fun BatchCompleteScreen(state: BatchState.Complete, viewModel: NfcViewModel) {
         Icon(Icons.Default.CheckCircle, null, tint = AlertGreen, modifier = Modifier.size(80.dp))
         Spacer(Modifier.height(16.dp))
         Text("${state.graduated.size} birds graduated", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
-        if (state.bloodlineName != null) {
-            Text("from ${state.bloodlineName} bloodline", style = MaterialTheme.typography.titleMedium, color = SageGreen)
+        if (state.lineageName != null) {
+            Text("from ${state.lineageName} lineage", style = MaterialTheme.typography.titleMedium, color = SageGreen)
         }
         Spacer(Modifier.height(8.dp))
         Text("Males: $maleCount  Females: $femaleCount  Unknown: $unknownCount", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1235,7 +1235,7 @@ fun NfcBirdInfo(bird: Bird) {
                 Text(bird.bandId ?: "Bird #${bird.id}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     bird.sex?.let { Text(it.replaceFirstChar { c -> c.uppercase() }, style = MaterialTheme.typography.bodyMedium) }
-                    bird.bloodlineName?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = SageGreen) }
+                    bird.lineageName?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = SageGreen) }
                     bird.status?.let { Text(it.replaceFirstChar { c -> c.uppercase() }, style = MaterialTheme.typography.bodyMedium) }
                 }
             }
@@ -1257,14 +1257,14 @@ fun WriteTagSection(birds: List<Bird>, writeMode: Boolean, onStartWrite: (Int) -
         } else {
             ExposedDropdownMenuBox(expanded, { expanded = it }) {
                 OutlinedTextField(
-                    value = selectedBirdId?.let { id -> birds.find { it.id == id }?.let { "${it.bandId ?: "Bird #${it.id}"} — ${it.bloodlineName ?: it.sex ?: ""}" } ?: "Bird #$id" } ?: "",
+                    value = selectedBirdId?.let { id -> birds.find { it.id == id }?.let { "${it.bandId ?: "Bird #${it.id}"} — ${it.lineageName ?: it.sex ?: ""}" } ?: "Bird #$id" } ?: "",
                     onValueChange = {}, readOnly = true, label = { Text("Select bird to write") },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
                     modifier = Modifier.menuAnchor().fillMaxWidth(),
                 )
                 ExposedDropdownMenu(expanded, { expanded = false }) {
                     birds.forEach { bird ->
-                        DropdownMenuItem(text = { Text("${bird.bandId ?: "Bird #${bird.id}"} — ${bird.bloodlineName ?: ""}") }, onClick = { selectedBirdId = bird.id; expanded = false })
+                        DropdownMenuItem(text = { Text("${bird.bandId ?: "Bird #${bird.id}"} — ${bird.lineageName ?: ""}") }, onClick = { selectedBirdId = bird.id; expanded = false })
                     }
                 }
             }
@@ -1284,7 +1284,7 @@ fun NfcHistoryItem(scan: NfcScanResult) {
                 Text(scan.tagId, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                 scan.payload?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = SageGreen) }
             }
-            scan.bird?.let { Text("${it.bandId ?: "Bird #${it.id}"} — ${it.bloodlineName ?: ""}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            scan.bird?.let { Text("${it.bandId ?: "Bird #${it.id}"} — ${it.lineageName ?: ""}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         Text(scan.timestamp.format(DateTimeFormatter.ofPattern("HH:mm")), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
@@ -1311,7 +1311,7 @@ fun TagConflictDialog(conflict: TagConflict, existingBird: Bird, onConfirm: () -
                         Spacer(Modifier.width(12.dp))
                         Column {
                             Text(existingBird.bandId ?: "Bird #${existingBird.id}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                            val details = listOfNotNull(existingBird.sex?.replaceFirstChar { it.uppercase() }, existingBird.bloodlineName, existingBird.status?.uppercase()).joinToString(" · ")
+                            val details = listOfNotNull(existingBird.sex?.replaceFirstChar { it.uppercase() }, existingBird.lineageName, existingBird.status?.uppercase()).joinToString(" · ")
                             if (details.isNotEmpty()) Text(details, style = MaterialTheme.typography.bodyMedium)
                         }
                     }

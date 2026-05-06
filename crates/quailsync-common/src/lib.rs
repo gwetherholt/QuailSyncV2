@@ -51,7 +51,8 @@ pub struct CameraAnnounce {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QrDetected {
     pub brooder_id: i64,
-    pub bloodline: String,
+    #[serde(alias = "bloodline")] // back-compat for already-printed QR labels
+    pub lineage: String,
     pub qr_code: String,
 }
 
@@ -175,7 +176,7 @@ pub enum ClutchStatus {
 // --- Model structs (server responses, include id) ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Bloodline {
+pub struct Lineage {
     pub id: i64,
     pub name: String,
     pub source: String,
@@ -187,7 +188,6 @@ pub struct Bird {
     pub id: i64,
     pub band_color: Option<String>,
     pub sex: Sex,
-    pub bloodline_id: i64,
     pub hatch_date: NaiveDate,
     pub mother_id: Option<i64>,
     pub father_id: Option<i64>,
@@ -200,6 +200,10 @@ pub struct Bird {
     pub current_brooder_id: Option<i64>,
     #[serde(default)]
     pub photo_path: Option<String>,
+    /// Many-to-many lineage tags. Populated from the `bird_lineages`
+    /// junction table; empty Vec is allowed (legacy migration only).
+    #[serde(default)]
+    pub lineages: Vec<Lineage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -216,7 +220,7 @@ pub struct BreedingPair {
 pub struct Clutch {
     pub id: i64,
     pub breeding_pair_id: Option<i64>,
-    pub bloodline_id: Option<i64>,
+    pub lineage_id: Option<i64>,
     pub eggs_set: u32,
     pub eggs_fertile: Option<u32>,
     pub eggs_hatched: Option<u32>,
@@ -234,7 +238,7 @@ pub struct Clutch {
 // --- Create structs (POST bodies, no id) ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateBloodline {
+pub struct CreateLineage {
     pub name: String,
     pub source: String,
     pub notes: Option<String>,
@@ -244,7 +248,6 @@ pub struct CreateBloodline {
 pub struct CreateBird {
     pub band_color: Option<String>,
     pub sex: Sex,
-    pub bloodline_id: i64,
     pub hatch_date: NaiveDate,
     pub mother_id: Option<i64>,
     pub father_id: Option<i64>,
@@ -253,6 +256,8 @@ pub struct CreateBird {
     pub notes: Option<String>,
     #[serde(default)]
     pub nfc_tag_id: Option<String>,
+    /// One or more lineage IDs; must be non-empty (validated at handler level).
+    pub lineage_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -267,7 +272,7 @@ pub struct CreateBreedingPair {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateClutch {
     pub breeding_pair_id: Option<i64>,
-    pub bloodline_id: Option<i64>,
+    pub lineage_id: Option<i64>,
     pub eggs_set: u32,
     pub eggs_fertile: Option<u32>,
     pub eggs_hatched: Option<u32>,
@@ -498,7 +503,7 @@ pub struct CreateDetectionResult {
 pub struct Brooder {
     pub id: i64,
     pub name: String,
-    pub bloodline_id: Option<i64>,
+    pub lineage_id: Option<i64>,
     pub life_stage: LifeStage,
     pub qr_code: String,
     pub notes: Option<String>,
@@ -509,7 +514,7 @@ pub struct Brooder {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateBrooder {
     pub name: String,
-    pub bloodline_id: Option<i64>,
+    pub lineage_id: Option<i64>,
     pub life_stage: LifeStage,
     pub qr_code: String,
     pub notes: Option<String>,
@@ -532,7 +537,6 @@ pub enum ChickGroupStatus {
 pub struct ChickGroup {
     pub id: i64,
     pub clutch_id: Option<i64>,
-    pub bloodline_id: i64,
     pub brooder_id: Option<i64>,
     pub initial_count: u32,
     pub current_count: u32,
@@ -541,6 +545,10 @@ pub struct ChickGroup {
     pub notes: Option<String>,
     #[serde(default)]
     pub is_ready_to_transition: bool,
+    /// Many-to-many lineage tags. Populated from the `chick_group_lineages`
+    /// junction table; must be non-empty for new groups (validated at handler level).
+    #[serde(default)]
+    pub lineages: Vec<Lineage>,
 }
 
 /// Coturnix maturity threshold — fully feathered, sexable, ready to band.
@@ -574,11 +582,19 @@ impl ChickGroup {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateChickGroup {
     pub clutch_id: Option<i64>,
-    pub bloodline_id: i64,
     pub brooder_id: Option<i64>,
     pub initial_count: u32,
     pub hatch_date: NaiveDate,
     pub notes: Option<String>,
+    /// One or more lineage IDs; must be non-empty (validated at handler level).
+    pub lineage_ids: Vec<i64>,
+}
+
+/// Body for PUT /api/chick-groups/{id}/lineages — replaces the group's
+/// lineage set atomically.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplaceLineagesRequest {
+    pub lineage_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

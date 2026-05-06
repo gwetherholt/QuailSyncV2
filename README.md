@@ -144,7 +144,7 @@ Chick groups track mortality daily. When birds are old enough (28 days), graduat
 
 ### Breeding Intelligence
 
-Inbreeding coefficient calculated for every possible male-female pairing. Flags anything above 6.25% as risky. Breeding groups enforce 3-to-5 females per male. Safe pairing suggestions scored by genetic distance across bloodlines.
+Inbreeding coefficient calculated for every possible male-female pairing. Flags anything above 6.25% as risky. Breeding groups enforce 3-to-5 females per male. Safe pairing suggestions scored by genetic distance across lineages.
 
 <table>
   <tr>
@@ -203,7 +203,7 @@ cargo test           # Unit + integration tests
 
 These are the "try to break it" tests. They cover:
 - **API input validation** — empty names, 10,000-character strings, SQL injection attempts, XSS payloads, unicode/emoji, null bytes in every POST/PUT endpoint
-- **Database boundaries** — inserting readings for non-existent brooders, duplicate NFC tag IDs, deleting bloodlines that have birds referencing them, querying brooders with zero readings vs. 100,000 readings
+- **Database boundaries** — inserting readings for non-existent brooders, duplicate NFC tag IDs, deleting lineages that have birds referencing them, querying brooders with zero readings vs. 100,000 readings
 - **WebSocket edge cases** — connect and immediately disconnect, send empty messages, send 1MB messages, send binary instead of text, send 1,000 messages per second, 100 concurrent client connections
 - **Alert engine boundaries** — readings exactly at threshold, rapid oscillation above/below threshold, alerts with no config set, negative values, NaN, Infinity
 - **Path traversal / security** — backup restore with filenames like `../../etc/passwd`, null bytes, encoded characters (`%2e%2e%2f`), extremely long URL paths
@@ -216,7 +216,7 @@ Each test spins up a fresh Axum server on a random port with an in-memory SQLite
 - `AlertConfig` default values and serialization
 - `InbreedingCoefficient` threshold logic — safe below 6.25%, unsafe at/above, serde roundtrip
 - `ClutchStatus` enum behavior and JSON string values
-- Full API integration: create and list bloodlines, create and list birds, breeding suggestions for same-bloodline pairs (coefficient 0.25, unsafe), different-bloodline pairs (coefficient 0.0, safe), and full siblings (coefficient 0.5, unsafe)
+- Full API integration: create and list lineages, create and list birds, breeding suggestions for same-lineage pairs (coefficient 0.25, unsafe), different-lineage pairs (coefficient 0.0, safe), and full siblings (coefficient 0.5, unsafe)
 
 ### Python — 58 tests
 
@@ -260,7 +260,7 @@ Attached to leg bands on each bird. Read/written via the Android app using the p
 
 ### Incubators
 
-Nurture Right 360 (primary) and Magicfly (secondary) for staggered hatches across bloodlines. Coturnix quail have a 17-day incubation cycle.
+Nurture Right 360 (primary) and Magicfly (secondary) for staggered hatches across lineages. Coturnix quail have a 17-day incubation cycle.
 
 ---
 
@@ -346,6 +346,20 @@ QuailSyncV2/
 ```bash
 docker compose up -d --build
 ```
+
+> **Migration note (2026-05):** Bloodline was renamed to **lineage**, and chick groups + birds now support **multiple lineages per record** (many-to-many). Existing data is migrated automatically on server startup: the legacy `bloodlines` table is renamed to `lineages`, the legacy `bloodline_id` columns on `chick_groups` and `birds` are backfilled into the new `chick_group_lineages` / `bird_lineages` junction tables, and the old columns are dropped. The migration is idempotent and runs every boot.
+>
+> **Before deploying on the Pi**, take a backup with the existing nightly script (or run it manually so you have an off-host copy in `/mnt/pc-snapshots/quailsync-nightly/`):
+>
+> ```bash
+> bash scripts/nightly-backup.sh
+> sudo docker compose pull server   # pull the new image
+> sudo docker compose up -d server  # migration runs on boot
+> tail -n 50 /var/log/quailsync.log # confirm "init" + no errors
+> ```
+>
+> Clients (Android app, web dashboard, `quailsync-cli`) speak the new API — `/api/lineages`, `lineage_ids: [...]` arrays for chick group + bird creation. Old build of the Android app talking to the new server will fail on chick group create until updated.
+
 
 The server runs on port 3000 (HTTP) and 3443 (HTTPS with auto-generated self-signed certs). The SQLite database is created on first run.
 
@@ -532,7 +546,7 @@ The Pi runs locally and connects to the cloud server:
 |---|---|---|
 | GET | `/api/brooders` | List brooders with latest readings |
 | POST | `/api/brooders` | Create brooder |
-| PUT | `/api/brooders/{id}` | Update brooder (name, camera_url, qr_code, bloodline_id) |
+| PUT | `/api/brooders/{id}` | Update brooder (name, camera_url, qr_code, lineage_id) |
 | DELETE | `/api/brooders/{id}` | Delete brooder + all readings |
 | GET | `/api/brooders/{id}/status` | Current reading + alert state |
 | GET | `/api/brooders/{id}/readings` | Historical readings |
@@ -545,8 +559,8 @@ The Pi runs locally and connects to the cloud server:
 | POST | `/api/birds/{id}/weights` | Log weight |
 | GET | `/api/birds/{id}/weights` | Weight history |
 | GET | `/api/nfc/{tag_id}` | Look up bird by NFC tag |
-| GET | `/api/bloodlines` | List bloodlines |
-| POST | `/api/bloodlines` | Create bloodline |
+| GET | `/api/lineages` | List lineages |
+| POST | `/api/lineages` | Create lineage |
 | GET | `/api/breeding-groups` | List breeding groups |
 | POST | `/api/breeding-groups` | Create group (validates male:female ratio) |
 | GET | `/api/breeding/suggest` | Inbreeding-scored pair suggestions |

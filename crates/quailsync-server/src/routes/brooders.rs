@@ -17,10 +17,10 @@ pub(crate) async fn create_brooder(
     Json(body): Json<CreateBrooder>,
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
-    if let Some(bl_id) = body.bloodline_id {
+    if let Some(bl_id) = body.lineage_id {
         let exists = conn
             .query_row(
-                "SELECT COUNT(*) FROM bloodlines WHERE id = ?1",
+                "SELECT COUNT(*) FROM lineages WHERE id = ?1",
                 params![bl_id],
                 |row| row.get::<_, i64>(0),
             )
@@ -28,19 +28,19 @@ pub(crate) async fn create_brooder(
         if exists == 0 {
             return (
                 StatusCode::BAD_REQUEST,
-                format!("Bloodline #{bl_id} does not exist"),
+                format!("Lineage #{bl_id} does not exist"),
             )
                 .into_response();
         }
     }
     match conn.execute(
-        "INSERT INTO brooders (name, bloodline_id, life_stage, qr_code, notes, camera_url) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![body.name, body.bloodline_id, life_stage_to_str(&body.life_stage), body.qr_code, body.notes, body.camera_url],
+        "INSERT INTO brooders (name, lineage_id, life_stage, qr_code, notes, camera_url) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![body.name, body.lineage_id, life_stage_to_str(&body.life_stage), body.qr_code, body.notes, body.camera_url],
     ) {
         Ok(_) => {
             let id = conn.last_insert_rowid();
             (StatusCode::CREATED, Json(Brooder {
-                id, name: body.name, bloodline_id: body.bloodline_id, life_stage: body.life_stage,
+                id, name: body.name, lineage_id: body.lineage_id, life_stage: body.life_stage,
                 qr_code: body.qr_code, notes: body.notes, camera_url: body.camera_url,
             })).into_response()
         }
@@ -102,16 +102,16 @@ pub(crate) async fn update_brooder(
         )
         .ok();
     }
-    if let Some(bl_id) = body.get("bloodline_id") {
+    if let Some(bl_id) = body.get("lineage_id") {
         if bl_id.is_null() {
             conn.execute(
-                "UPDATE brooders SET bloodline_id = NULL WHERE id = ?1",
+                "UPDATE brooders SET lineage_id = NULL WHERE id = ?1",
                 params![id],
             )
             .ok();
         } else if let Some(v) = bl_id.as_i64() {
             conn.execute(
-                "UPDATE brooders SET bloodline_id = ?1 WHERE id = ?2",
+                "UPDATE brooders SET lineage_id = ?1 WHERE id = ?2",
                 params![v, id],
             )
             .ok();
@@ -247,7 +247,7 @@ pub(crate) async fn get_headcount_latest(
 
 pub(crate) async fn list_brooders(State(state): State<AppState>) -> Json<Vec<Brooder>> {
     let conn = acquire_db(&state);
-    let mut stmt = conn.prepare("SELECT id, name, bloodline_id, life_stage, qr_code, notes, camera_url FROM brooders ORDER BY id").expect("prepare failed");
+    let mut stmt = conn.prepare("SELECT id, name, lineage_id, life_stage, qr_code, notes, camera_url FROM brooders ORDER BY id").expect("prepare failed");
     let rows: Vec<Brooder> = stmt
         .query_map([], row_to_brooder)
         .unwrap()
@@ -302,7 +302,7 @@ pub(crate) async fn brooder_status(
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
     let brooder = match conn.query_row(
-        "SELECT id, name, bloodline_id, life_stage, qr_code, notes, camera_url FROM brooders WHERE id = ?1",
+        "SELECT id, name, lineage_id, life_stage, qr_code, notes, camera_url FROM brooders WHERE id = ?1",
         params![id], row_to_brooder,
     ) {
         Ok(b) => b,
@@ -415,10 +415,13 @@ pub(crate) async fn assign_group_to_brooder(
         return db_error(e);
     }
     match conn.query_row(
-        "SELECT id, clutch_id, bloodline_id, brooder_id, initial_count, current_count, hatch_date, status, notes FROM chick_groups WHERE id = ?1",
+        "SELECT id, clutch_id, brooder_id, initial_count, current_count, hatch_date, status, notes FROM chick_groups WHERE id = ?1",
         params![body.group_id], row_to_chick_group,
     ) {
-        Ok(group) => (StatusCode::OK, Json(group)).into_response(),
+        Ok(mut group) => {
+            group.lineages = fetch_chick_group_lineages(&conn, group.id);
+            (StatusCode::OK, Json(group)).into_response()
+        }
         Err(e) => db_error(e),
     }
 }
@@ -443,24 +446,26 @@ pub(crate) async fn brooder_residents(
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
     let mut stmt = conn.prepare(
-        "SELECT id, clutch_id, bloodline_id, brooder_id, initial_count, current_count, hatch_date, status, notes
+        "SELECT id, clutch_id, brooder_id, initial_count, current_count, hatch_date, status, notes
          FROM chick_groups WHERE brooder_id = ?1 AND status = 'Active'"
     ).expect("prepare failed");
-    let groups: Vec<ChickGroup> = stmt
+    let mut groups: Vec<ChickGroup> = stmt
         .query_map(params![brooder_id], row_to_chick_group)
         .unwrap()
         .filter_map(|r| r.ok())
         .collect();
+    populate_chick_group_lineages(&conn, &mut groups);
 
     let mut stmt = conn.prepare(
-        "SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path
+        "SELECT id, band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path
          FROM birds WHERE current_brooder_id = ?1 AND status = 'Active'"
     ).expect("prepare failed");
-    let birds: Vec<Bird> = stmt
+    let mut birds: Vec<Bird> = stmt
         .query_map(params![brooder_id], row_to_bird)
         .unwrap()
         .filter_map(|r| r.ok())
         .collect();
+    populate_bird_lineages(&conn, &mut birds);
 
     Json(BrooderResidentsResponse {
         brooder_id,

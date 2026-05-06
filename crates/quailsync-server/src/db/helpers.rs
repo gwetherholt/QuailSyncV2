@@ -1,5 +1,6 @@
 use chrono::NaiveDate;
 use quailsync_common::*;
+use rusqlite::{params, Connection};
 
 // ---------------------------------------------------------------------------
 // Enum conversion helpers
@@ -133,24 +134,28 @@ pub fn str_to_chick_group_status(s: &str) -> ChickGroupStatus {
 // Row-mapping helpers (DRY — replaces 7+ duplicated Bird-from-row blocks, etc.)
 // ---------------------------------------------------------------------------
 
+/// Maps a `birds` row produced by `BIRD_SELECT` (id, band_color, sex,
+/// hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id,
+/// current_brooder_id, photo_path). The `lineages` field is left empty —
+/// callers populate it via `fetch_bird_lineages`.
 pub fn row_to_bird(row: &rusqlite::Row) -> rusqlite::Result<Bird> {
     let sex_str: String = row.get(2)?;
-    let hatch_str: String = row.get(4)?;
-    let status_str: String = row.get(8)?;
+    let hatch_str: String = row.get(3)?;
+    let status_str: String = row.get(7)?;
     Ok(Bird {
         id: row.get(0)?,
         band_color: row.get(1)?,
         sex: str_to_sex(&sex_str),
-        bloodline_id: row.get(3)?,
         hatch_date: NaiveDate::parse_from_str(&hatch_str, "%Y-%m-%d").unwrap_or_default(),
-        mother_id: row.get(5)?,
-        father_id: row.get(6)?,
-        generation: row.get(7)?,
+        mother_id: row.get(4)?,
+        father_id: row.get(5)?,
+        generation: row.get(6)?,
         status: str_to_bird_status(&status_str),
-        notes: row.get(9)?,
-        nfc_tag_id: row.get(10)?,
-        current_brooder_id: row.get(11)?,
-        photo_path: row.get(12)?,
+        notes: row.get(8)?,
+        nfc_tag_id: row.get(9)?,
+        current_brooder_id: row.get(10)?,
+        photo_path: row.get(11)?,
+        lineages: Vec::new(),
     })
 }
 
@@ -161,7 +166,7 @@ pub fn row_to_clutch(row: &rusqlite::Row) -> rusqlite::Result<Clutch> {
     Ok(Clutch {
         id: row.get(0)?,
         breeding_pair_id: row.get(1)?,
-        bloodline_id: row.get(2)?,
+        lineage_id: row.get(2)?,
         eggs_set: row.get(3)?,
         eggs_fertile: row.get(4)?,
         eggs_hatched: row.get(5)?,
@@ -177,20 +182,24 @@ pub fn row_to_clutch(row: &rusqlite::Row) -> rusqlite::Result<Clutch> {
     })
 }
 
+/// Maps a `chick_groups` row produced by `GROUP_SELECT` (id, clutch_id,
+/// brooder_id, initial_count, current_count, hatch_date, status, notes).
+/// The `lineages` field is left empty — callers populate it via
+/// `fetch_chick_group_lineages`.
 pub fn row_to_chick_group(row: &rusqlite::Row) -> rusqlite::Result<ChickGroup> {
-    let hatch_str: String = row.get(6)?;
-    let status_str: String = row.get(7)?;
+    let hatch_str: String = row.get(5)?;
+    let status_str: String = row.get(6)?;
     let mut group = ChickGroup {
         id: row.get(0)?,
         clutch_id: row.get(1)?,
-        bloodline_id: row.get(2)?,
-        brooder_id: row.get(3)?,
-        initial_count: row.get(4)?,
-        current_count: row.get(5)?,
+        brooder_id: row.get(2)?,
+        initial_count: row.get(3)?,
+        current_count: row.get(4)?,
         hatch_date: NaiveDate::parse_from_str(&hatch_str, "%Y-%m-%d").unwrap_or_default(),
         status: str_to_chick_group_status(&status_str),
-        notes: row.get(8)?,
+        notes: row.get(7)?,
         is_ready_to_transition: false,
+        lineages: Vec::new(),
     };
     group.is_ready_to_transition = group.compute_is_ready_to_transition();
     Ok(group)
@@ -201,7 +210,7 @@ pub fn row_to_brooder(row: &rusqlite::Row) -> rusqlite::Result<Brooder> {
     Ok(Brooder {
         id: row.get(0)?,
         name: row.get(1)?,
-        bloodline_id: row.get(2)?,
+        lineage_id: row.get(2)?,
         life_stage: str_to_life_stage(&stage_str),
         qr_code: row.get(4)?,
         notes: row.get(5)?,
@@ -220,6 +229,111 @@ pub fn row_to_breeding_pair(row: &rusqlite::Row) -> rusqlite::Result<BreedingPai
         end_date: end_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok()),
         notes: row.get(5)?,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Lineage junction lookups
+// ---------------------------------------------------------------------------
+
+/// Load the lineages attached to a single chick group via the junction table.
+pub fn fetch_chick_group_lineages(conn: &Connection, group_id: i64) -> Vec<Lineage> {
+    let mut stmt = match conn.prepare(
+        "SELECT l.id, l.name, l.source, l.notes
+         FROM lineages l
+         JOIN chick_group_lineages cgl ON cgl.lineage_id = l.id
+         WHERE cgl.chick_group_id = ?1
+         ORDER BY l.id",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    stmt.query_map(params![group_id], |row| {
+        Ok(Lineage {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            source: row.get(2)?,
+            notes: row.get(3)?,
+        })
+    })
+    .map(|it| it.filter_map(|r| r.ok()).collect())
+    .unwrap_or_default()
+}
+
+/// Load the lineages attached to a single bird via the junction table.
+pub fn fetch_bird_lineages(conn: &Connection, bird_id: i64) -> Vec<Lineage> {
+    let mut stmt = match conn.prepare(
+        "SELECT l.id, l.name, l.source, l.notes
+         FROM lineages l
+         JOIN bird_lineages bl ON bl.lineage_id = l.id
+         WHERE bl.bird_id = ?1
+         ORDER BY l.id",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    stmt.query_map(params![bird_id], |row| {
+        Ok(Lineage {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            source: row.get(2)?,
+            notes: row.get(3)?,
+        })
+    })
+    .map(|it| it.filter_map(|r| r.ok()).collect())
+    .unwrap_or_default()
+}
+
+/// Populate the `lineages` field on every chick group in the slice.
+pub fn populate_chick_group_lineages(conn: &Connection, groups: &mut [ChickGroup]) {
+    for g in groups.iter_mut() {
+        g.lineages = fetch_chick_group_lineages(conn, g.id);
+    }
+}
+
+/// Populate the `lineages` field on every bird in the slice.
+pub fn populate_bird_lineages(conn: &Connection, birds: &mut [Bird]) {
+    for b in birds.iter_mut() {
+        b.lineages = fetch_bird_lineages(conn, b.id);
+    }
+}
+
+/// Replace a chick group's lineage set atomically. Returns Err on any DB error
+/// or if the group does not exist. Validates non-empty input at the call site.
+pub fn replace_chick_group_lineages(
+    conn: &Connection,
+    group_id: i64,
+    lineage_ids: &[i64],
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM chick_group_lineages WHERE chick_group_id = ?1",
+        params![group_id],
+    )?;
+    for lid in lineage_ids {
+        conn.execute(
+            "INSERT INTO chick_group_lineages (chick_group_id, lineage_id) VALUES (?1, ?2)",
+            params![group_id, lid],
+        )?;
+    }
+    Ok(())
+}
+
+/// Replace a bird's lineage set atomically.
+pub fn replace_bird_lineages(
+    conn: &Connection,
+    bird_id: i64,
+    lineage_ids: &[i64],
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM bird_lineages WHERE bird_id = ?1",
+        params![bird_id],
+    )?;
+    for lid in lineage_ids {
+        conn.execute(
+            "INSERT INTO bird_lineages (bird_id, lineage_id) VALUES (?1, ?2)",
+            params![bird_id, lid],
+        )?;
+    }
+    Ok(())
 }
 
 pub fn row_to_processing_record(row: &rusqlite::Row) -> rusqlite::Result<ProcessingRecord> {

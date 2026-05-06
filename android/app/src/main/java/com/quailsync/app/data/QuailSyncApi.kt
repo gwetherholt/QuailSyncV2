@@ -28,7 +28,7 @@ data class Brooder(
     @SerializedName("latest_humidity_percent") val latestHumidityPercent: Double? = null,
     @SerializedName("camera_url") val cameraUrl: String? = null,
     @SerializedName("qr_code") val qrCode: String? = null,
-    @SerializedName("bloodline_id") val bloodlineId: Int? = null,
+    @SerializedName("lineage_id") val lineageId: Int? = null,
     @SerializedName("life_stage") val lifeStage: String? = null,
 )
 
@@ -68,14 +68,19 @@ data class Bird(
     @SerializedName("sex") val sex: String? = null,
     @SerializedName("status") val status: String? = null,
     @SerializedName("hatch_date") val hatchDate: String? = null,
-    @SerializedName("bloodline_id") val bloodlineId: Int? = null,
-    @SerializedName("bloodline_name") val bloodlineName: String? = null,
     @SerializedName("brooder_id") val brooderId: Int? = null,
     @SerializedName("notes") val notes: String? = null,
     @SerializedName("sire_id") val sireId: Int? = null,
     @SerializedName("dam_id") val damId: Int? = null,
     @SerializedName("latest_weight") val latestWeight: Double? = null,
-)
+    /** Many-to-many lineages, populated by the server from the junction table. */
+    @SerializedName("lineages") val lineages: List<Lineage> = emptyList(),
+) {
+    /** Compatibility shim — first lineage's id, for screens that haven't been migrated to display the full list yet. */
+    val lineageId: Int? get() = lineages.firstOrNull()?.id
+    /** Compatibility shim — first lineage's name. */
+    val lineageName: String? get() = lineages.firstOrNull()?.name
+}
 
 data class BirdWeight(
     @SerializedName("id") val id: Int? = null,
@@ -91,14 +96,14 @@ data class CreateWeightRequest(
     @SerializedName("notes") val notes: String? = null,
 )
 
-data class Bloodline(
+data class Lineage(
     @SerializedName("id") val id: Int,
     @SerializedName("name") val name: String,
     @SerializedName("source") val source: String? = null,
     @SerializedName("notes") val notes: String? = null,
 )
 
-data class CreateBloodlineRequest(
+data class CreateLineageRequest(
     @SerializedName("name") val name: String,
     @SerializedName("source") val source: String = "",
     @SerializedName("notes") val notes: String? = null,
@@ -107,8 +112,8 @@ data class CreateBloodlineRequest(
 data class Clutch(
     @SerializedName("id") val id: Int,
     @SerializedName("parent_pair_id") val parentPairId: Int? = null,
-    @SerializedName("bloodline_id") val bloodlineId: Int? = null,
-    @SerializedName("bloodline_name") val bloodlineName: String? = null,
+    @SerializedName("lineage_id") val lineageId: Int? = null,
+    @SerializedName("lineage_name") val lineageName: String? = null,
     @SerializedName("egg_count") val eggCount: Int? = null,
     @SerializedName("eggs_set") val eggsSet: Int? = null,
     @SerializedName("fertile_count") val fertileCount: Int? = null,
@@ -131,7 +136,7 @@ data class Clutch(
 }
 
 data class CreateClutchRequest(
-    @SerializedName("bloodline_id") val bloodlineId: Int? = null,
+    @SerializedName("lineage_id") val lineageId: Int? = null,
     @SerializedName("eggs_set") val eggsSet: Int,
     @SerializedName("set_date") val setDate: String,
     @SerializedName("status") val status: String = "Incubating",
@@ -153,11 +158,16 @@ data class UpdateClutchRequest(
 
 data class CreateChickGroupRequest(
     @SerializedName("clutch_id") val clutchId: Int? = null,
-    @SerializedName("bloodline_id") val bloodlineId: Int,
+    /** Many-to-many lineage IDs. Must contain at least one — server returns 400 otherwise. */
+    @SerializedName("lineage_ids") val lineageIds: List<Int>,
     @SerializedName("brooder_id") val brooderId: Int? = null,
     @SerializedName("initial_count") val initialCount: Int,
     @SerializedName("hatch_date") val hatchDate: String,
     @SerializedName("notes") val notes: String? = null,
+)
+
+data class ReplaceLineagesRequest(
+    @SerializedName("lineage_ids") val lineageIds: List<Int>,
 )
 
 data class Camera(
@@ -180,7 +190,8 @@ data class UpdateBirdRequest(
 data class CreateBirdRequest(
     @SerializedName("band_color") val bandColor: String? = null,
     @SerializedName("sex") val sex: String = "Unknown",
-    @SerializedName("bloodline_id") val bloodlineId: Long,
+    /** Many-to-many lineage IDs. Must contain at least one. */
+    @SerializedName("lineage_ids") val lineageIds: List<Long>,
     @SerializedName("hatch_date") val hatchDate: String,
     @SerializedName("mother_id") val motherId: Long? = null,
     @SerializedName("father_id") val fatherId: Long? = null,
@@ -217,7 +228,6 @@ data class HeadcountResponse(
 data class ChickGroupDto(
     @SerializedName("id") val id: Int,
     @SerializedName("clutch_id") val clutchId: Int? = null,
-    @SerializedName("bloodline_id") val bloodlineId: Int,
     @SerializedName("brooder_id") val brooderId: Int? = null,
     @SerializedName("initial_count") val initialCount: Int,
     @SerializedName("current_count") val currentCount: Int,
@@ -225,7 +235,15 @@ data class ChickGroupDto(
     @SerializedName("status") val status: String,
     @SerializedName("notes") val notes: String? = null,
     @SerializedName("is_ready_to_transition") val isReadyToTransition: Boolean = false,
-)
+    /** Many-to-many lineages, populated by the server from the junction table. */
+    @SerializedName("lineages") val lineages: List<Lineage> = emptyList(),
+) {
+    /** Compatibility shim — first lineage's id, for screens that haven't been migrated to display the full list yet. */
+    val lineageId: Int? get() = lineages.firstOrNull()?.id
+    /** Compatibility shim — comma-separated lineage names, suitable for single-line card displays. */
+    val lineageNames: String get() = lineages.joinToString(", ") { it.name }
+}
+
 
 data class AssignGroupRequest(
     @SerializedName("group_id") val groupId: Int,
@@ -389,11 +407,11 @@ interface QuailSyncApi {
         @Part photo: MultipartBody.Part,
     ): PhotoUploadResponse
 
-    @GET("api/bloodlines")
-    suspend fun getBloodlines(): List<Bloodline>
+    @GET("api/lineages")
+    suspend fun getLineages(): List<Lineage>
 
-    @POST("api/bloodlines")
-    suspend fun createBloodline(@Body request: CreateBloodlineRequest): Bloodline
+    @POST("api/lineages")
+    suspend fun createLineage(@Body request: CreateLineageRequest): Lineage
 
     @GET("api/clutches")
     suspend fun getClutches(): List<Clutch>
@@ -442,6 +460,20 @@ interface QuailSyncApi {
 
     @POST("api/chick-groups/{id}/mortality")
     suspend fun logMortality(@Path("id") groupId: Int, @Body request: MortalityRequest): ChickGroupDto
+
+    /** Replace the chick group's lineage set atomically. Body must contain ≥1 ID. */
+    @PUT("api/chick-groups/{id}/lineages")
+    suspend fun replaceChickGroupLineages(
+        @Path("id") groupId: Int,
+        @Body request: ReplaceLineagesRequest,
+    ): ChickGroupDto
+
+    /** Replace a bird's lineage set atomically. Body must contain ≥1 ID. */
+    @PUT("api/birds/{id}/lineages")
+    suspend fun replaceBirdLineages(
+        @Path("id") birdId: Int,
+        @Body request: ReplaceLineagesRequest,
+    ): Bird
 
     @PUT("api/birds/{id}/move")
     suspend fun moveBird(@Path("id") id: Int, @Body request: MoveBirdRequest): Bird

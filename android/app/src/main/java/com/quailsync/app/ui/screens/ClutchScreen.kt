@@ -4,6 +4,7 @@
     "CanBeVal",
     "UnusedVariable"
 )
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 
 package com.quailsync.app.ui.screens
 
@@ -13,6 +14,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material3.FilterChip
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -75,12 +80,12 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.quailsync.app.data.Bloodline
+import com.quailsync.app.data.Lineage
 import com.quailsync.app.data.Brooder
 import com.quailsync.app.data.ChickGroupDto
 import com.quailsync.app.data.Clutch
 import com.quailsync.app.data.CreateChickGroupRequest
-import com.quailsync.app.data.CreateBloodlineRequest
+import com.quailsync.app.data.CreateLineageRequest
 import com.quailsync.app.data.CreateClutchRequest
 import com.quailsync.app.data.MortalityRequest
 import com.quailsync.app.data.QuailSyncApi
@@ -117,8 +122,8 @@ class ClutchViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _clutches = MutableStateFlow<List<Clutch>>(emptyList())
     val clutches: StateFlow<List<Clutch>> = _clutches.asStateFlow()
-    private val _bloodlines = MutableStateFlow<List<Bloodline>>(emptyList())
-    val bloodlines: StateFlow<List<Bloodline>> = _bloodlines.asStateFlow()
+    private val _lineages = MutableStateFlow<List<Lineage>>(emptyList())
+    val lineages: StateFlow<List<Lineage>> = _lineages.asStateFlow()
     private val _chickGroups = MutableStateFlow<List<ChickGroupDto>>(emptyList())
     val chickGroups: StateFlow<List<ChickGroupDto>> = _chickGroups.asStateFlow()
     private val _brooders = MutableStateFlow<List<Brooder>>(emptyList())
@@ -136,7 +141,7 @@ class ClutchViewModel(application: Application) : AndroidViewModel(application) 
     private suspend fun loadDataSuspend() {
         try {
             _clutches.value = api.getClutches()
-            _bloodlines.value = try { api.getBloodlines() } catch (_: Exception) { emptyList() }
+            _lineages.value = try { api.getLineages() } catch (_: Exception) { emptyList() }
             _chickGroups.value = try { api.getChickGroups() } catch (_: Exception) { emptyList() }
             _brooders.value = try { api.getBrooders() } catch (_: Exception) { emptyList() }
         } catch (e: Exception) { Log.e("QuailSync", "Failed to load hatchery data", e) }
@@ -177,13 +182,13 @@ class ClutchViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    suspend fun createBloodline(request: CreateBloodlineRequest): Bloodline? {
+    suspend fun createLineage(request: CreateLineageRequest): Lineage? {
         return try {
-            val bl = api.createBloodline(request)
-            // Refresh bloodlines list so dropdown updates
-            _bloodlines.value = try { api.getBloodlines() } catch (_: Exception) { _bloodlines.value }
+            val bl = api.createLineage(request)
+            // Refresh lineages list so dropdown updates
+            _lineages.value = try { api.getLineages() } catch (_: Exception) { _lineages.value }
             bl
-        } catch (e: Exception) { Log.e("QuailSync", "Create bloodline failed", e); null }
+        } catch (e: Exception) { Log.e("QuailSync", "Create lineage failed", e); null }
     }
 }
 
@@ -194,13 +199,13 @@ class ClutchViewModel(application: Application) : AndroidViewModel(application) 
 @Composable
 fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
     val clutches by viewModel.clutches.collectAsState()
-    val bloodlines by viewModel.bloodlines.collectAsState()
+    val lineages by viewModel.lineages.collectAsState()
     val chickGroups by viewModel.chickGroups.collectAsState()
     val broodersList by viewModel.brooders.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
 
-    val bloodlineMap = remember(bloodlines) { bloodlines.associateBy { it.id } }
+    val lineageMap = remember(lineages) { lineages.associateBy { it.id } }
     val brooderMap = remember(broodersList) { broodersList.associateBy { it.id } }
     val clutchGroupMap = remember(chickGroups) { chickGroups.filter { it.clutchId != null }.associateBy { it.clutchId } }
 
@@ -263,7 +268,7 @@ fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
                         items(sortedClutches, key = { "clutch-${it.id}" }) { clutch ->
                             val group = clutchGroupMap[clutch.id]
                             val brooderName = group?.brooderId?.let { brooderMap[it]?.name }
-                            ClutchCard(clutch, clutch.bloodlineName ?: bloodlineMap[clutch.bloodlineId]?.name, brooderName,
+                            ClutchCard(clutch, clutch.lineageName ?: lineageMap[clutch.lineageId]?.name, brooderName,
                                 onCandle = { candlingClutch = clutch },
                                 onRecordHatch = { hatchClutch = clutch },
                                 onEdit = { editClutch = clutch },
@@ -273,14 +278,14 @@ fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
                     if (activeGroups.isNotEmpty()) {
                         item { Spacer(Modifier.height(4.dp)); HorizontalDivider(); Spacer(Modifier.height(4.dp)); Text("Chick Groups", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                         items(activeGroups, key = { "group-${it.id}" }) { group ->
-                            ChickGroupCard(group, bloodlineMap[group.bloodlineId]?.name, group.brooderId?.let { brooderMap[it]?.name },
+                            ChickGroupCard(group, lineageMap[group.lineageId]?.name, group.brooderId?.let { brooderMap[it]?.name },
                                 onEdit = { editGroup = group }, onDelete = { deleteGroup = group },
                                 onLogMortality = { mortalityGroup = group })
                         }
                     }
                     if (graduatedGroups.isNotEmpty()) {
                         item { Spacer(Modifier.height(4.dp)); HorizontalDivider(); Spacer(Modifier.height(4.dp)); Text("Completed", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                        items(graduatedGroups, key = { "done-${it.id}" }) { group -> GraduatedGroupCard(group, bloodlineMap[group.bloodlineId]?.name) }
+                        items(graduatedGroups, key = { "done-${it.id}" }) { group -> GraduatedGroupCard(group, lineageMap[group.lineageId]?.name) }
                     }
                     item { Spacer(Modifier.height(8.dp)) }
                 }
@@ -361,7 +366,7 @@ fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
 
     if (createGroupForClutch != null) {
         val (clutch, count) = createGroupForClutch!!
-        CreateChickGroupDialog(clutch, count, bloodlineMap, broodersList, viewModel,
+        CreateChickGroupDialog(clutch, count, lineageMap, broodersList, viewModel,
             onDismiss = { createGroupForClutch = null },
             onSuccess = {
                 createGroupForClutch = null
@@ -472,17 +477,17 @@ fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddClutchDialog(viewModel: ClutchViewModel, onDismiss: () -> Unit, onSuccess: () -> Unit) {
-    // Use live bloodlines from the ViewModel so new ones appear immediately
-    val liveBloodlines by viewModel.bloodlines.collectAsState()
+    // Use live lineages from the ViewModel so new ones appear immediately
+    val liveLineages by viewModel.lineages.collectAsState()
 
-    var selectedBloodlineId by remember { mutableStateOf<Int?>(null) }
+    var selectedLineageId by remember { mutableStateOf<Int?>(null) }
     var eggsSet by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
     var expanded by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
 
-    // Inline new bloodline fields
-    var showNewBloodline by remember { mutableStateOf(false) }
+    // Inline new lineage fields
+    var showNewLineage by remember { mutableStateOf(false) }
     var newBlName by remember { mutableStateOf("") }
     var newBlSource by remember { mutableStateOf("") }
     var newBlNotes by remember { mutableStateOf("") }
@@ -499,27 +504,27 @@ fun AddClutchDialog(viewModel: ClutchViewModel, onDismiss: () -> Unit, onSuccess
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                // Bloodline dropdown
+                // Lineage dropdown
                 ExposedDropdownMenuBox(expanded, { expanded = it }) {
                     OutlinedTextField(
-                        value = selectedBloodlineId?.let { id -> liveBloodlines.find { it.id == id }?.name ?: "" } ?: "",
-                        onValueChange = {}, readOnly = true, label = { Text("Bloodline") },
+                        value = selectedLineageId?.let { id -> liveLineages.find { it.id == id }?.name ?: "" } ?: "",
+                        onValueChange = {}, readOnly = true, label = { Text("Lineage") },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
                         modifier = Modifier.menuAnchor().fillMaxWidth(),
                     )
                     ExposedDropdownMenu(expanded, { expanded = false }) {
-                        liveBloodlines.forEach { bl ->
-                            DropdownMenuItem(text = { Text(bl.name) }, onClick = { selectedBloodlineId = bl.id; expanded = false })
+                        liveLineages.forEach { bl ->
+                            DropdownMenuItem(text = { Text(bl.name) }, onClick = { selectedLineageId = bl.id; expanded = false })
                         }
                     }
                 }
 
-                // New bloodline section
-                if (!showNewBloodline) {
-                    TextButton(onClick = { showNewBloodline = true }) {
+                // New lineage section
+                if (!showNewLineage) {
+                    TextButton(onClick = { showNewLineage = true }) {
                         Icon(Icons.Default.Add, null, Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("New Bloodline")
+                        Text("New Lineage")
                     }
                 } else {
                     Card(
@@ -528,7 +533,7 @@ fun AddClutchDialog(viewModel: ClutchViewModel, onDismiss: () -> Unit, onSuccess
                         colors = CardDefaults.cardColors(containerColor = SageGreenLight.copy(alpha = 0.1f)),
                     ) {
                         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("New Bloodline", style = MaterialTheme.typography.titleSmall)
+                            Text("New Lineage", style = MaterialTheme.typography.titleSmall)
                             OutlinedTextField(
                                 value = newBlName, onValueChange = { newBlName = it },
                                 label = { Text("Name") }, modifier = Modifier.fillMaxWidth(), singleLine = true,
@@ -544,26 +549,26 @@ fun AddClutchDialog(viewModel: ClutchViewModel, onDismiss: () -> Unit, onSuccess
                             )
                             Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp)) {
                                 OutlinedButton(
-                                    onClick = { showNewBloodline = false },
+                                    onClick = { showNewLineage = false },
                                     Modifier.weight(1f),
                                 ) { Text("Cancel") }
                                 Button(
                                     onClick = {
                                         creatingBl = true
                                         scope.launch {
-                                            val bl = viewModel.createBloodline(CreateBloodlineRequest(
+                                            val bl = viewModel.createLineage(CreateLineageRequest(
                                                 name = newBlName.trim(),
                                                 source = newBlSource.trim().ifBlank { "" },
                                                 notes = newBlNotes.trim().ifBlank { null },
                                             ))
                                             creatingBl = false
                                             if (bl != null) {
-                                                selectedBloodlineId = bl.id
-                                                showNewBloodline = false
+                                                selectedLineageId = bl.id
+                                                showNewLineage = false
                                                 newBlName = ""; newBlSource = ""; newBlNotes = ""
-                                                Toast.makeText(context, "Bloodline '${bl.name}' created!", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(context, "Lineage '${bl.name}' created!", Toast.LENGTH_SHORT).show()
                                             } else {
-                                                Toast.makeText(context, "Failed to create bloodline", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(context, "Failed to create lineage", Toast.LENGTH_SHORT).show()
                                             }
                                         }
                                     },
@@ -598,7 +603,7 @@ fun AddClutchDialog(viewModel: ClutchViewModel, onDismiss: () -> Unit, onSuccess
                         val count = eggsSet.toIntOrNull() ?: 0
                         if (count > 0) {
                             val ok = viewModel.createClutch(CreateClutchRequest(
-                                bloodlineId = selectedBloodlineId, eggsSet = count,
+                                lineageId = selectedLineageId, eggsSet = count,
                                 setDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE),
                                 notes = notes.ifBlank { null },
                             ))
@@ -724,7 +729,7 @@ fun RecordHatchDialog(clutch: Clutch, viewModel: ClutchViewModel, onDismiss: () 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CreateChickGroupDialog(
-    clutch: Clutch, hatchedCount: Int, bloodlineMap: Map<Int, Bloodline>, brooders: List<Brooder>,
+    clutch: Clutch, hatchedCount: Int, lineageMap: Map<Int, Lineage>, brooders: List<Brooder>,
     viewModel: ClutchViewModel, onDismiss: () -> Unit, onSuccess: () -> Unit,
 ) {
     var selectedBrooderId by remember { mutableStateOf<Int?>(null) }
@@ -737,7 +742,7 @@ fun CreateChickGroupDialog(
         title = { Text("Create Chick Group?") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("$hatchedCount chicks hatched from ${clutch.bloodlineName ?: bloodlineMap[clutch.bloodlineId]?.name ?: "Clutch #${clutch.id}"}.",
+                Text("$hatchedCount chicks hatched from ${clutch.lineageName ?: lineageMap[clutch.lineageId]?.name ?: "Clutch #${clutch.id}"}.",
                     style = MaterialTheme.typography.bodyMedium)
                 Text("Assign to a brooder:", style = MaterialTheme.typography.bodyMedium)
                 ExposedDropdownMenuBox(brooderExpanded, { brooderExpanded = it }) {
@@ -755,21 +760,35 @@ fun CreateChickGroupDialog(
             }
         },
         confirmButton = {
+            // Inherit the parent clutch's lineage as a singleton; if the clutch
+            // has none, the user must set one on the clutch first — we no longer
+            // silently fall back to lineage #1 (was the "auto-assign Fernbank" bug).
+            val parentLineageId = clutch.lineageId
             Button(
                 onClick = {
+                    if (parentLineageId == null) return@Button
                     saving = true
                     scope.launch {
                         val ok = viewModel.createChickGroup(CreateChickGroupRequest(
-                            clutchId = clutch.id, bloodlineId = clutch.bloodlineId ?: 1,
+                            clutchId = clutch.id,
+                            lineageIds = listOf(parentLineageId),
                             brooderId = selectedBrooderId, initialCount = hatchedCount,
                             hatchDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE),
                         ))
                         if (ok) onSuccess() else saving = false
                     }
                 },
-                enabled = !saving,
+                enabled = !saving && parentLineageId != null,
                 colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
-            ) { Text(if (saving) "Creating..." else "Create Group") }
+            ) {
+                Text(
+                    when {
+                        saving -> "Creating..."
+                        parentLineageId == null -> "Set clutch lineage first"
+                        else -> "Create Group"
+                    }
+                )
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Skip") } },
     )
@@ -780,7 +799,7 @@ fun CreateChickGroupDialog(
 // =====================================================================
 
 @Composable
-fun ClutchCard(clutch: Clutch, bloodlineName: String?, brooderName: String? = null, onCandle: () -> Unit = {}, onRecordHatch: () -> Unit = {}, onEdit: () -> Unit = {}, onDelete: () -> Unit = {}) {
+fun ClutchCard(clutch: Clutch, lineageName: String?, brooderName: String? = null, onCandle: () -> Unit = {}, onRecordHatch: () -> Unit = {}, onEdit: () -> Unit = {}, onDelete: () -> Unit = {}) {
     val today = remember { LocalDate.now() }
     val setDate = remember(clutch.setDate) { parseDate(clutch.setDate) }
     val daysElapsed = remember(setDate, today) { setDate?.let { ChronoUnit.DAYS.between(it, today).toInt() } }
@@ -795,8 +814,8 @@ fun ClutchCard(clutch: Clutch, bloodlineName: String?, brooderName: String? = nu
         Column(Modifier.padding(16.dp)) {
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(bloodlineName ?: "Clutch #${clutch.id}", style = MaterialTheme.typography.titleLarge)
-                    if (bloodlineName != null) Text("Clutch #${clutch.id}", style = MaterialTheme.typography.bodyMedium)
+                    Text(lineageName ?: "Clutch #${clutch.id}", style = MaterialTheme.typography.titleLarge)
+                    if (lineageName != null) Text("Clutch #${clutch.id}", style = MaterialTheme.typography.bodyMedium)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     ClutchStatusBadge(clutch.status, isHatching)
@@ -911,7 +930,7 @@ fun ClutchCard(clutch: Clutch, bloodlineName: String?, brooderName: String? = nu
 // =====================================================================
 
 @Composable
-fun ChickGroupCard(group: ChickGroupDto, bloodlineName: String?, brooderName: String?, onEdit: () -> Unit = {}, onDelete: () -> Unit = {}, onLogMortality: () -> Unit = {}) {
+fun ChickGroupCard(group: ChickGroupDto, lineageName: String?, brooderName: String?, onEdit: () -> Unit = {}, onDelete: () -> Unit = {}, onLogMortality: () -> Unit = {}) {
     val today = remember { LocalDate.now() }
     val hatchDate = remember(group.hatchDate) { parseDate(group.hatchDate) }
     val ageDays = remember(hatchDate, today) { hatchDate?.let { ChronoUnit.DAYS.between(it, today).toInt() } ?: 0 }
@@ -922,7 +941,7 @@ fun ChickGroupCard(group: ChickGroupDto, bloodlineName: String?, brooderName: St
         Column(Modifier.padding(16.dp)) {
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(bloodlineName ?: "Group #${group.id}", style = MaterialTheme.typography.titleLarge)
+                    Text(lineageName ?: "Group #${group.id}", style = MaterialTheme.typography.titleLarge)
                     Text("Group #${group.id}", style = MaterialTheme.typography.bodyMedium)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -983,12 +1002,12 @@ fun ChickGroupCard(group: ChickGroupDto, bloodlineName: String?, brooderName: St
 // =====================================================================
 
 @Composable
-fun GraduatedGroupCard(group: ChickGroupDto, bloodlineName: String?) {
+fun GraduatedGroupCard(group: ChickGroupDto, lineageName: String?) {
     val mortalityPct = if (group.initialCount > 0) ((group.initialCount - group.currentCount).toFloat() / group.initialCount * 100) else 0f
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)), elevation = CardDefaults.cardElevation(0.dp)) {
         Row(Modifier.fillMaxWidth().padding(14.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(bloodlineName ?: "Group #${group.id}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(lineageName ?: "Group #${group.id}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("${group.currentCount}/${group.initialCount} chicks · ${group.status} · Hatched ${group.hatchDate}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (mortalityPct > 0) Text("%.0f%% loss".format(mortalityPct), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1025,7 +1044,7 @@ fun EditClutchDialog(clutch: Clutch, viewModel: ClutchViewModel, onDismiss: () -
         title = { Text("Edit Clutch #${clutch.id}") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("${clutch.bloodlineName ?: "Clutch"} — ${clutch.totalEggs ?: "?"} eggs set", style = MaterialTheme.typography.bodyMedium)
+                Text("${clutch.lineageName ?: "Clutch"} — ${clutch.totalEggs ?: "?"} eggs set", style = MaterialTheme.typography.bodyMedium)
 
                 // Set date
                 OutlinedTextField(
@@ -1205,14 +1224,16 @@ fun AddStandaloneChickGroupDialog(
     var hatchDate by remember { mutableStateOf(LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)) }
     var notes by remember { mutableStateOf("") }
     var selectedBrooderId by remember { mutableStateOf<Int?>(null) }
-    var selectedBloodlineId by remember { mutableStateOf<Int?>(null) }
+    // Multi-select lineage tags. Default is empty: users MUST pick at least one
+    // before the Create button enables — replaces the silent fallback to
+    // lineage #1 ("auto-assign Fernbank" bug).
+    val selectedLineageIds = remember { mutableStateListOf<Int>() }
     var brooderExpanded by remember { mutableStateOf(false) }
-    var bloodlineExpanded by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
-    var showNewBloodline by remember { mutableStateOf(false) }
+    var showNewLineage by remember { mutableStateOf(false) }
     var newBlName by remember { mutableStateOf("") }
     var newBlSource by remember { mutableStateOf("") }
-    val liveBloodlines by viewModel.bloodlines.collectAsState()
+    val liveLineages by viewModel.lineages.collectAsState()
     val scope = rememberCoroutineScope()
 
     AlertDialog(
@@ -1257,45 +1278,54 @@ fun AddStandaloneChickGroupDialog(
                     }
                 }
 
-                // Bloodline dropdown with inline create
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    ExposedDropdownMenuBox(bloodlineExpanded, { bloodlineExpanded = it }, modifier = Modifier.weight(1f)) {
-                        OutlinedTextField(
-                            value = selectedBloodlineId?.let { id -> liveBloodlines.find { it.id == id }?.name ?: "" } ?: "",
-                            onValueChange = {}, readOnly = true,
-                            label = { Text("Bloodline (optional)") },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(bloodlineExpanded) },
-                            modifier = Modifier.menuAnchor().fillMaxWidth(),
+                // Multi-select lineage tags. Tap a chip to toggle.
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            "Lineages (pick at least one)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f),
                         )
-                        ExposedDropdownMenu(bloodlineExpanded, { bloodlineExpanded = false }) {
-                            DropdownMenuItem(text = { Text("None") }, onClick = { selectedBloodlineId = null; bloodlineExpanded = false })
-                            liveBloodlines.forEach { bl ->
-                                DropdownMenuItem(
-                                    text = { Text(bl.name) },
-                                    onClick = { selectedBloodlineId = bl.id; bloodlineExpanded = false },
-                                )
-                            }
+                        IconButton(onClick = { showNewLineage = true }) {
+                            Icon(Icons.Default.Add, "New lineage", tint = SageGreen)
                         }
                     }
-                    IconButton(onClick = { showNewBloodline = true }) {
-                        Icon(Icons.Default.Add, "New bloodline", tint = SageGreen)
+                    androidx.compose.foundation.layout.FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        liveLineages.forEach { bl ->
+                            val on = selectedLineageIds.contains(bl.id)
+                            FilterChip(
+                                selected = on,
+                                onClick = {
+                                    if (on) selectedLineageIds.remove(bl.id)
+                                    else selectedLineageIds.add(bl.id)
+                                },
+                                label = { Text(bl.name) },
+                            )
+                        }
                     }
                 }
 
-                // Inline new bloodline fields
-                if (showNewBloodline) {
+                // Inline new lineage fields
+                if (showNewLineage) {
                     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text("New Bloodline", style = MaterialTheme.typography.labelMedium)
+                            Text("New Lineage", style = MaterialTheme.typography.labelMedium)
                             OutlinedTextField(value = newBlName, onValueChange = { newBlName = it }, label = { Text("Name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                             OutlinedTextField(value = newBlSource, onValueChange = { newBlSource = it }, label = { Text("Source") }, placeholder = { Text("e.g. Breeder name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                             Row(Modifier.fillMaxWidth(), Arrangement.End, Alignment.CenterVertically) {
-                                TextButton(onClick = { showNewBloodline = false; newBlName = ""; newBlSource = "" }) { Text("Cancel") }
+                                TextButton(onClick = { showNewLineage = false; newBlName = ""; newBlSource = "" }) { Text("Cancel") }
                                 Button(
                                     onClick = {
                                         scope.launch {
-                                            val bl = viewModel.createBloodline(CreateBloodlineRequest(name = newBlName, source = newBlSource))
-                                            if (bl != null) { selectedBloodlineId = bl.id; showNewBloodline = false; newBlName = ""; newBlSource = "" }
+                                            val bl = viewModel.createLineage(CreateLineageRequest(name = newBlName, source = newBlSource))
+                                            if (bl != null) {
+                                                selectedLineageIds.add(bl.id)
+                                                showNewLineage = false; newBlName = ""; newBlSource = ""
+                                            }
                                         }
                                     },
                                     enabled = newBlName.isNotBlank(),
@@ -1328,7 +1358,7 @@ fun AddStandaloneChickGroupDialog(
                             val ok = viewModel.createChickGroup(
                                 CreateChickGroupRequest(
                                     clutchId = null,
-                                    bloodlineId = selectedBloodlineId ?: 1,
+                                    lineageIds = selectedLineageIds.toList(),
                                     brooderId = selectedBrooderId,
                                     initialCount = n,
                                     hatchDate = hatchDate,
@@ -1339,7 +1369,7 @@ fun AddStandaloneChickGroupDialog(
                         }
                     }
                 },
-                enabled = (count.toIntOrNull() ?: 0) > 0 && !saving,
+                enabled = (count.toIntOrNull() ?: 0) > 0 && !saving && selectedLineageIds.isNotEmpty(),
                 colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
             ) { Text(if (saving) "Creating..." else "Create Group") }
         },

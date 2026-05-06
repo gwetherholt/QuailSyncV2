@@ -89,8 +89,8 @@ pub fn build_app(state: AppState) -> Router {
             axum::routing::delete(telemetry::clear_readings),
         )
         .route(
-            "/api/bloodlines",
-            get(birds::list_bloodlines).post(birds::create_bloodline),
+            "/api/lineages",
+            get(birds::list_lineages).post(birds::create_lineage),
         )
         .route(
             "/api/birds",
@@ -224,6 +224,14 @@ pub fn build_app(state: AppState) -> Router {
                 .delete(chick_groups::delete_chick_group),
         )
         // Section 10: POST for mortality (creates a log entry) and graduate (creates birds)
+        .route(
+            "/api/chick-groups/{id}/lineages",
+            axum::routing::put(chick_groups::replace_chick_group_lineages_handler),
+        )
+        .route(
+            "/api/birds/{id}/lineages",
+            axum::routing::put(birds::replace_bird_lineages_handler),
+        )
         .route(
             "/api/chick-groups/{id}/mortality",
             axum::routing::post(chick_groups::log_mortality),

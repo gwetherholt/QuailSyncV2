@@ -13,12 +13,19 @@ pub(crate) async fn create_bird(
     State(state): State<AppState>,
     Json(body): Json<CreateBird>,
 ) -> impl IntoResponse {
+    if body.lineage_ids.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "lineage_ids must contain at least one lineage",
+        )
+            .into_response();
+    }
     let conn = acquire_db(&state);
     if let Err(e) = conn.execute(
-        "INSERT INTO birds (band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO birds (band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
-            body.band_color, sex_to_str(&body.sex), body.bloodline_id,
+            body.band_color, sex_to_str(&body.sex),
             body.hatch_date.to_string(), body.mother_id, body.father_id,
             body.generation, bird_status_to_str(&body.status), body.notes, body.nfc_tag_id,
         ],
@@ -26,13 +33,16 @@ pub(crate) async fn create_bird(
         return db_error(e);
     }
     let id = conn.last_insert_rowid();
+    if let Err(e) = replace_bird_lineages(&conn, id, &body.lineage_ids) {
+        return db_error(e);
+    }
+    let lineages = fetch_bird_lineages(&conn, id);
     (
         StatusCode::CREATED,
         Json(Bird {
             id,
             band_color: body.band_color,
             sex: body.sex,
-            bloodline_id: body.bloodline_id,
             hatch_date: body.hatch_date,
             mother_id: body.mother_id,
             father_id: body.father_id,
@@ -42,12 +52,13 @@ pub(crate) async fn create_bird(
             nfc_tag_id: body.nfc_tag_id,
             current_brooder_id: None,
             photo_path: None,
+            lineages,
         }),
     )
         .into_response()
 }
 
-const BIRD_SELECT: &str = "SELECT id, band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path FROM birds";
+const BIRD_SELECT: &str = "SELECT id, band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path FROM birds";
 
 pub(crate) async fn list_birds(State(state): State<AppState>) -> Json<Vec<Bird>> {
     let conn = acquire_db(&state);
@@ -55,11 +66,12 @@ pub(crate) async fn list_birds(State(state): State<AppState>) -> Json<Vec<Bird>>
         .prepare(&format!("{BIRD_SELECT} ORDER BY id"))
         .expect("prepare failed");
     // TODO: filter_map silently drops row-mapping errors
-    let rows: Vec<Bird> = stmt
+    let mut rows: Vec<Bird> = stmt
         .query_map([], row_to_bird)
         .unwrap()
         .filter_map(|r| r.ok())
         .collect();
+    populate_bird_lineages(&conn, &mut rows);
     Json(rows)
 }
 
@@ -112,7 +124,10 @@ pub(crate) async fn update_bird(
         params![id],
         row_to_bird,
     ) {
-        Ok(bird) => (StatusCode::OK, Json(Some(bird))).into_response(),
+        Ok(mut bird) => {
+            bird.lineages = fetch_bird_lineages(&conn, bird.id);
+            (StatusCode::OK, Json(Some(bird))).into_response()
+        }
         Err(e) => db_error(e),
     }
 }
@@ -165,7 +180,10 @@ pub(crate) async fn get_bird_by_nfc(
         params![tag_id],
         row_to_bird,
     ) {
-        Ok(b) => (StatusCode::OK, Json(Some(b))).into_response(),
+        Ok(mut b) => {
+            b.lineages = fetch_bird_lineages(&conn, b.id);
+            (StatusCode::OK, Json(Some(b))).into_response()
+        }
         Err(_) => (StatusCode::NOT_FOUND, Json(None::<Bird>)).into_response(),
     }
 }
@@ -187,7 +205,10 @@ pub(crate) async fn move_bird(
         params![bird_id],
         row_to_bird,
     ) {
-        Ok(bird) => Json(bird).into_response(),
+        Ok(mut bird) => {
+            bird.lineages = fetch_bird_lineages(&conn, bird.id);
+            Json(bird).into_response()
+        }
         Err(e) => db_error(e),
     }
 }
@@ -268,15 +289,15 @@ pub(crate) async fn delete_weight(
     }
 }
 
-// --- Bloodlines ---
+// --- Lineages ---
 
-pub(crate) async fn create_bloodline(
+pub(crate) async fn create_lineage(
     State(state): State<AppState>,
-    Json(body): Json<CreateBloodline>,
+    Json(body): Json<CreateLineage>,
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
     if let Err(e) = conn.execute(
-        "INSERT INTO bloodlines (name, source, notes) VALUES (?1, ?2, ?3)",
+        "INSERT INTO lineages (name, source, notes) VALUES (?1, ?2, ?3)",
         params![body.name, body.source, body.notes],
     ) {
         return db_error(e);
@@ -284,7 +305,7 @@ pub(crate) async fn create_bloodline(
     let id = conn.last_insert_rowid();
     (
         StatusCode::CREATED,
-        Json(Bloodline {
+        Json(Lineage {
             id,
             name: body.name,
             source: body.source,
@@ -294,14 +315,14 @@ pub(crate) async fn create_bloodline(
         .into_response()
 }
 
-pub(crate) async fn list_bloodlines(State(state): State<AppState>) -> Json<Vec<Bloodline>> {
+pub(crate) async fn list_lineages(State(state): State<AppState>) -> Json<Vec<Lineage>> {
     let conn = acquire_db(&state);
     let mut stmt = conn
-        .prepare("SELECT id, name, source, notes FROM bloodlines ORDER BY id")
+        .prepare("SELECT id, name, source, notes FROM lineages ORDER BY id")
         .expect("prepare failed");
-    let rows: Vec<Bloodline> = stmt
+    let rows: Vec<Lineage> = stmt
         .query_map([], |row| {
-            Ok(Bloodline {
+            Ok(Lineage {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 source: row.get(2)?,
@@ -312,4 +333,45 @@ pub(crate) async fn list_bloodlines(State(state): State<AppState>) -> Json<Vec<B
         .filter_map(|r| r.ok())
         .collect();
     Json(rows)
+}
+
+/// PUT /api/birds/{id}/lineages — replace a bird's lineage set atomically.
+pub(crate) async fn replace_bird_lineages_handler(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<ReplaceLineagesRequest>,
+) -> impl IntoResponse {
+    if body.lineage_ids.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "lineage_ids must contain at least one lineage",
+        )
+            .into_response();
+    }
+    let conn = acquire_db(&state);
+    let exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM birds WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|c| c > 0)
+        .unwrap_or(false);
+    if !exists {
+        return (StatusCode::NOT_FOUND, "bird not found").into_response();
+    }
+    if let Err(e) = replace_bird_lineages(&conn, id, &body.lineage_ids) {
+        return db_error(e);
+    }
+    match conn.query_row(
+        &format!("{BIRD_SELECT} WHERE id = ?1"),
+        params![id],
+        row_to_bird,
+    ) {
+        Ok(mut bird) => {
+            bird.lineages = fetch_bird_lineages(&conn, bird.id);
+            (StatusCode::OK, Json(bird)).into_response()
+        }
+        Err(e) => db_error(e),
+    }
 }

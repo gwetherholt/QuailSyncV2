@@ -7,14 +7,69 @@ use rusqlite::{params, Connection};
 // Database setup
 // ---------------------------------------------------------------------------
 
+/// Returns true if `table` has a column named `column`.
+/// Used by the lineage migration to check whether legacy bloodline_id columns
+/// still exist before backfilling junction tables and dropping them.
+fn column_exists(conn: &Connection, table: &str, column: &str) -> bool {
+    let sql = format!("PRAGMA table_info(\"{table}\")");
+    let mut stmt = match conn.prepare(&sql) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let cols: Vec<String> = match stmt.query_map([], |row| row.get::<_, String>(1)) {
+        Ok(it) => it.filter_map(|r| r.ok()).collect(),
+        Err(_) => return false,
+    };
+    cols.iter().any(|c| c == column)
+}
+
+/// Returns true if a table named `table` exists.
+fn table_exists(conn: &Connection, table: &str) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?1",
+        [table],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
 pub fn init_db(conn: &Connection) {
     conn.execute_batch("PRAGMA foreign_keys = ON;")
         .expect("failed to enable foreign keys");
+
+    // -------------------------------------------------------------------------
+    // PRE-MIGRATION: bloodline -> lineage rename.
+    //
+    // This MUST run before the main CREATE TABLE batch below — otherwise
+    // `CREATE TABLE IF NOT EXISTS lineages` would create an empty new table
+    // alongside the legacy `bloodlines` table, blocking the rename.
+    //
+    // Idempotent: errors are swallowed when the source name no longer exists.
+    // -------------------------------------------------------------------------
+    if table_exists(conn, "bloodlines") && !table_exists(conn, "lineages") {
+        conn.execute("ALTER TABLE bloodlines RENAME TO lineages", [])
+            .ok();
+    }
+    if column_exists(conn, "brooders", "bloodline_id") {
+        conn.execute(
+            "ALTER TABLE brooders RENAME COLUMN bloodline_id TO lineage_id",
+            [],
+        )
+        .ok();
+    }
+    if column_exists(conn, "clutches", "bloodline_id") {
+        conn.execute(
+            "ALTER TABLE clutches RENAME COLUMN bloodline_id TO lineage_id",
+            [],
+        )
+        .ok();
+    }
+
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS brooders (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             name         TEXT NOT NULL,
-            bloodline_id INTEGER REFERENCES bloodlines(id),
+            lineage_id   INTEGER REFERENCES lineages(id),
             life_stage   TEXT NOT NULL DEFAULT 'Chick',
             qr_code      TEXT NOT NULL DEFAULT '',
             notes        TEXT
@@ -55,7 +110,7 @@ pub fn init_db(conn: &Connection) {
             timestamp       TEXT    NOT NULL DEFAULT (datetime('now'))
         );
 
-        CREATE TABLE IF NOT EXISTS bloodlines (
+        CREATE TABLE IF NOT EXISTS lineages (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             name            TEXT    NOT NULL,
             source          TEXT    NOT NULL,
@@ -66,7 +121,6 @@ pub fn init_db(conn: &Connection) {
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             band_color      TEXT,
             sex             TEXT    NOT NULL,
-            bloodline_id    INTEGER NOT NULL REFERENCES bloodlines(id),
             hatch_date      TEXT    NOT NULL,
             mother_id       INTEGER REFERENCES birds(id),
             father_id       INTEGER REFERENCES birds(id),
@@ -88,7 +142,7 @@ pub fn init_db(conn: &Connection) {
         CREATE TABLE IF NOT EXISTS clutches (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
             breeding_pair_id    INTEGER REFERENCES breeding_pairs(id),
-            bloodline_id        INTEGER REFERENCES bloodlines(id),
+            lineage_id          INTEGER REFERENCES lineages(id),
             eggs_set            INTEGER NOT NULL,
             eggs_fertile        INTEGER,
             eggs_hatched        INTEGER,
@@ -218,7 +272,6 @@ pub fn init_db(conn: &Connection) {
         "CREATE TABLE IF NOT EXISTS chick_groups (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             clutch_id     INTEGER REFERENCES clutches(id),
-            bloodline_id  INTEGER NOT NULL REFERENCES bloodlines(id),
             brooder_id    INTEGER REFERENCES brooders(id),
             initial_count INTEGER NOT NULL,
             current_count INTEGER NOT NULL,
@@ -236,6 +289,59 @@ pub fn init_db(conn: &Connection) {
         );",
     )
     .expect("failed to create chick group tables");
+
+    // -------------------------------------------------------------------------
+    // Many-to-many lineage migration.
+    //
+    // 1. Create the junction tables (idempotent via IF NOT EXISTS).
+    // 2. Backfill from any legacy bloodline_id columns that still exist.
+    // 3. Drop the now-redundant bloodline_id columns (SQLite ≥ 3.35).
+    //
+    // Order matters: the junctions must exist before we INSERT into them, and
+    // the source columns must exist when we read from them, so the DROPs happen
+    // last.
+    // -------------------------------------------------------------------------
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS chick_group_lineages (
+            chick_group_id INTEGER NOT NULL REFERENCES chick_groups(id) ON DELETE CASCADE,
+            lineage_id     INTEGER NOT NULL REFERENCES lineages(id) ON DELETE RESTRICT,
+            PRIMARY KEY (chick_group_id, lineage_id)
+        );
+         CREATE TABLE IF NOT EXISTS bird_lineages (
+            bird_id    INTEGER NOT NULL REFERENCES birds(id) ON DELETE CASCADE,
+            lineage_id INTEGER NOT NULL REFERENCES lineages(id) ON DELETE RESTRICT,
+            PRIMARY KEY (bird_id, lineage_id)
+        );
+         CREATE INDEX IF NOT EXISTS idx_chick_group_lineages_lineage
+            ON chick_group_lineages(lineage_id);
+         CREATE INDEX IF NOT EXISTS idx_bird_lineages_lineage
+            ON bird_lineages(lineage_id);",
+    )
+    .expect("failed to create lineage junction tables");
+
+    let chick_groups_had_bloodline = column_exists(conn, "chick_groups", "bloodline_id");
+    if chick_groups_had_bloodline {
+        conn.execute(
+            "INSERT OR IGNORE INTO chick_group_lineages (chick_group_id, lineage_id)
+             SELECT id, bloodline_id FROM chick_groups WHERE bloodline_id IS NOT NULL",
+            [],
+        )
+        .expect("failed to backfill chick_group_lineages");
+        conn.execute("ALTER TABLE chick_groups DROP COLUMN bloodline_id", [])
+            .ok();
+    }
+
+    let birds_had_bloodline = column_exists(conn, "birds", "bloodline_id");
+    if birds_had_bloodline {
+        conn.execute(
+            "INSERT OR IGNORE INTO bird_lineages (bird_id, lineage_id)
+             SELECT id, bloodline_id FROM birds WHERE bloodline_id IS NOT NULL",
+            [],
+        )
+        .expect("failed to backfill bird_lineages");
+        conn.execute("ALTER TABLE birds DROP COLUMN bloodline_id", [])
+            .ok();
+    }
 
     // --- Headcount inference results ---
     conn.execute_batch(
@@ -255,7 +361,6 @@ pub fn init_db(conn: &Connection) {
          CREATE INDEX IF NOT EXISTS idx_readings_received ON brooder_readings(received_at);
          CREATE INDEX IF NOT EXISTS idx_system_metrics_received ON system_metrics(received_at);
          CREATE INDEX IF NOT EXISTS idx_birds_status ON birds(status);
-         CREATE INDEX IF NOT EXISTS idx_birds_bloodline ON birds(bloodline_id);
          CREATE INDEX IF NOT EXISTS idx_birds_nfc ON birds(nfc_tag_id);
          CREATE INDEX IF NOT EXISTS idx_birds_brooder ON birds(current_brooder_id);
          CREATE INDEX IF NOT EXISTS idx_weights_bird_date ON weight_records(bird_id, date);
@@ -350,8 +455,8 @@ pub fn store_payload(conn: &Connection, payload: &TelemetryPayload) {
             )
             .ok();
             println!(
-                "[qr] Updated brooder {} qr_code={} bloodline={}",
-                qr.brooder_id, qr.qr_code, qr.bloodline
+                "[qr] Updated brooder {} qr_code={} lineage={}",
+                qr.brooder_id, qr.qr_code, qr.lineage
             );
         }
     }

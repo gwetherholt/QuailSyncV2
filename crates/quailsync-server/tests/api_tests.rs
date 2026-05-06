@@ -1,7 +1,7 @@
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use quailsync_common::{
-    Bird, BirdStatus, Bloodline, ChickGroup, CreateBird, CreateBloodline, CreateChickGroup,
+    Bird, BirdStatus, Lineage, ChickGroup, CreateBird, CreateLineage, CreateChickGroup,
     GraduateBird, GraduateRequest, InbreedingCoefficient, Sex,
 };
 use quailsync_server::{build_app, init_db, AppState};
@@ -58,55 +58,55 @@ async fn health_returns_ok() {
 }
 
 // ---------------------------------------------------------------------------
-// Bloodlines: POST then GET
+// Lineages: POST then GET
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn create_and_list_bloodlines() {
+async fn create_and_list_lineages() {
     let base = spawn_test_server().await;
     let client = reqwest::Client::new();
 
-    // POST a bloodline
-    let create = CreateBloodline {
+    // POST a lineage
+    let create = CreateLineage {
         name: "Texas A&M".into(),
         source: "Oregon".into(),
         notes: Some("white feathers".into()),
     };
     let resp = client
-        .post(format!("{base}/api/bloodlines"))
+        .post(format!("{base}/api/lineages"))
         .json(&create)
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 201);
 
-    let created: Bloodline = resp.json().await.unwrap();
+    let created: Lineage = resp.json().await.unwrap();
     assert_eq!(created.id, 1);
     assert_eq!(created.name, "Texas A&M");
     assert_eq!(created.source, "Oregon");
     assert_eq!(created.notes.as_deref(), Some("white feathers"));
 
-    // POST a second bloodline
-    let create2 = CreateBloodline {
+    // POST a second lineage
+    let create2 = CreateLineage {
         name: "Pharaoh".into(),
         source: "California".into(),
         notes: None,
     };
     let resp2 = client
-        .post(format!("{base}/api/bloodlines"))
+        .post(format!("{base}/api/lineages"))
         .json(&create2)
         .send()
         .await
         .unwrap();
     assert_eq!(resp2.status(), 201);
 
-    // GET all bloodlines
-    let resp = reqwest::get(format!("{base}/api/bloodlines"))
+    // GET all lineages
+    let resp = reqwest::get(format!("{base}/api/lineages"))
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
 
-    let list: Vec<Bloodline> = resp.json().await.unwrap();
+    let list: Vec<Lineage> = resp.json().await.unwrap();
     assert_eq!(list.len(), 2);
     assert_eq!(list[0].name, "Texas A&M");
     assert_eq!(list[1].name, "Pharaoh");
@@ -121,14 +121,14 @@ async fn create_and_list_birds() {
     let base = spawn_test_server().await;
     let client = reqwest::Client::new();
 
-    // Need a bloodline first
-    let bl = CreateBloodline {
+    // Need a lineage first
+    let bl = CreateLineage {
         name: "Coturnix".into(),
         source: "Local".into(),
         notes: None,
     };
     client
-        .post(format!("{base}/api/bloodlines"))
+        .post(format!("{base}/api/lineages"))
         .json(&bl)
         .send()
         .await
@@ -138,7 +138,7 @@ async fn create_and_list_birds() {
     let bird = CreateBird {
         band_color: Some("red".into()),
         sex: Sex::Male,
-        bloodline_id: 1,
+        lineage_ids: vec![1],
         hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
         mother_id: None,
         father_id: None,
@@ -168,18 +168,18 @@ async fn create_and_list_birds() {
 }
 
 // ---------------------------------------------------------------------------
-// Breeding suggest: same bloodline → 0.25
+// Breeding suggest: same lineage → 0.25
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn breeding_suggest_same_bloodline() {
+async fn breeding_suggest_same_lineage() {
     let base = spawn_test_server().await;
     let client = reqwest::Client::new();
 
-    // One bloodline
+    // One lineage
     client
-        .post(format!("{base}/api/bloodlines"))
-        .json(&CreateBloodline {
+        .post(format!("{base}/api/lineages"))
+        .json(&CreateLineage {
             name: "A".into(),
             source: "X".into(),
             notes: None,
@@ -190,13 +190,13 @@ async fn breeding_suggest_same_bloodline() {
 
     let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
 
-    // Male in bloodline 1
+    // Male in lineage 1
     client
         .post(format!("{base}/api/birds"))
         .json(&CreateBird {
             band_color: None,
             sex: Sex::Male,
-            bloodline_id: 1,
+            lineage_ids: vec![1],
             hatch_date: today,
             mother_id: None,
             father_id: None,
@@ -209,13 +209,13 @@ async fn breeding_suggest_same_bloodline() {
         .await
         .unwrap();
 
-    // Female in same bloodline 1
+    // Female in same lineage 1
     client
         .post(format!("{base}/api/birds"))
         .json(&CreateBird {
             band_color: None,
             sex: Sex::Female,
-            bloodline_id: 1,
+            lineage_ids: vec![1],
             hatch_date: today,
             mother_id: None,
             father_id: None,
@@ -240,19 +240,19 @@ async fn breeding_suggest_same_bloodline() {
 }
 
 // ---------------------------------------------------------------------------
-// Breeding suggest: different bloodlines → 0.0
+// Breeding suggest: different lineages → 0.0
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn breeding_suggest_different_bloodlines() {
+async fn breeding_suggest_different_lineages() {
     let base = spawn_test_server().await;
     let client = reqwest::Client::new();
 
-    // Two bloodlines
+    // Two lineages
     for name in ["A", "B"] {
         client
-            .post(format!("{base}/api/bloodlines"))
-            .json(&CreateBloodline {
+            .post(format!("{base}/api/lineages"))
+            .json(&CreateLineage {
                 name: name.into(),
                 source: "X".into(),
                 notes: None,
@@ -264,13 +264,13 @@ async fn breeding_suggest_different_bloodlines() {
 
     let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
 
-    // Male in bloodline 1
+    // Male in lineage 1
     client
         .post(format!("{base}/api/birds"))
         .json(&CreateBird {
             band_color: None,
             sex: Sex::Male,
-            bloodline_id: 1,
+            lineage_ids: vec![1],
             hatch_date: today,
             mother_id: None,
             father_id: None,
@@ -283,13 +283,13 @@ async fn breeding_suggest_different_bloodlines() {
         .await
         .unwrap();
 
-    // Female in bloodline 2
+    // Female in lineage 2
     client
         .post(format!("{base}/api/birds"))
         .json(&CreateBird {
             band_color: None,
             sex: Sex::Female,
-            bloodline_id: 2,
+            lineage_ids: vec![2],
             hatch_date: today,
             mother_id: None,
             father_id: None,
@@ -321,8 +321,8 @@ async fn breeding_suggest_full_siblings() {
     let client = reqwest::Client::new();
 
     client
-        .post(format!("{base}/api/bloodlines"))
-        .json(&CreateBloodline {
+        .post(format!("{base}/api/lineages"))
+        .json(&CreateLineage {
             name: "A".into(),
             source: "X".into(),
             notes: None,
@@ -339,7 +339,7 @@ async fn breeding_suggest_full_siblings() {
         .json(&CreateBird {
             band_color: None,
             sex: Sex::Male,
-            bloodline_id: 1,
+            lineage_ids: vec![1],
             hatch_date: today,
             mother_id: None,
             father_id: None,
@@ -358,7 +358,7 @@ async fn breeding_suggest_full_siblings() {
         .json(&CreateBird {
             band_color: None,
             sex: Sex::Female,
-            bloodline_id: 1,
+            lineage_ids: vec![1],
             hatch_date: today,
             mother_id: None,
             father_id: None,
@@ -377,7 +377,7 @@ async fn breeding_suggest_full_siblings() {
         .json(&CreateBird {
             band_color: None,
             sex: Sex::Male,
-            bloodline_id: 1,
+            lineage_ids: vec![1],
             hatch_date: today,
             mother_id: Some(2),
             father_id: Some(1),
@@ -396,7 +396,7 @@ async fn breeding_suggest_full_siblings() {
         .json(&CreateBird {
             band_color: None,
             sex: Sex::Female,
-            bloodline_id: 1,
+            lineage_ids: vec![1],
             hatch_date: today,
             mother_id: Some(2),
             father_id: Some(1),
@@ -433,8 +433,8 @@ async fn chick_groups_expose_is_ready_to_transition() {
     let client = reqwest::Client::new();
 
     client
-        .post(format!("{base}/api/bloodlines"))
-        .json(&CreateBloodline {
+        .post(format!("{base}/api/lineages"))
+        .json(&CreateLineage {
             name: "Coturnix".into(),
             source: "Local".into(),
             notes: None,
@@ -452,7 +452,7 @@ async fn chick_groups_expose_is_ready_to_transition() {
             .post(format!("{base}/api/chick-groups"))
             .json(&CreateChickGroup {
                 clutch_id: None,
-                bloodline_id: 1,
+                lineage_ids: vec![1],
                 brooder_id: None,
                 initial_count: 10,
                 hatch_date: hatch,
@@ -512,8 +512,8 @@ async fn graduate_creates_birds_with_unique_ids_and_intake_fields() {
     let client = reqwest::Client::new();
 
     client
-        .post(format!("{base}/api/bloodlines"))
-        .json(&CreateBloodline {
+        .post(format!("{base}/api/lineages"))
+        .json(&CreateLineage {
             name: "Coturnix".into(),
             source: "Local".into(),
             notes: None,
@@ -527,7 +527,7 @@ async fn graduate_creates_birds_with_unique_ids_and_intake_fields() {
         .post(format!("{base}/api/chick-groups"))
         .json(&CreateChickGroup {
             clutch_id: None,
-            bloodline_id: 1,
+            lineage_ids: vec![1],
             brooder_id: None,
             initial_count: 3,
             hatch_date: today - chrono::Duration::days(40),
@@ -625,14 +625,14 @@ async fn graduate_accepts_payload_without_new_fields() {
     let base = spawn_test_server().await;
     let client = reqwest::Client::new();
 
-    client.post(format!("{base}/api/bloodlines"))
-        .json(&CreateBloodline { name: "X".into(), source: "L".into(), notes: None })
+    client.post(format!("{base}/api/lineages"))
+        .json(&CreateLineage { name: "X".into(), source: "L".into(), notes: None })
         .send().await.unwrap();
 
     let today = chrono::Local::now().date_naive();
     let group: ChickGroup = client.post(format!("{base}/api/chick-groups"))
         .json(&CreateChickGroup {
-            clutch_id: None, bloodline_id: 1, brooder_id: None,
+            clutch_id: None, lineage_ids: vec![1], brooder_id: None,
             initial_count: 2, hatch_date: today - chrono::Duration::days(40), notes: None,
         })
         .send().await.unwrap().json().await.unwrap();
@@ -798,5 +798,275 @@ mod system_alerts_tests {
         let client = reqwest::Client::new();
         let resp = client.post(format!("{base}/api/alerts/9999/dismiss")).send().await.unwrap();
         assert_eq!(resp.status(), 404);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Many-to-many lineage tests (Approach 3 — Hybrid)
+// ---------------------------------------------------------------------------
+
+mod lineage_tests {
+    use super::*;
+    use quailsync_common::ReplaceLineagesRequest;
+
+    async fn seed_two_lineages(base: &str, client: &reqwest::Client) -> (Lineage, Lineage) {
+        let a: Lineage = client
+            .post(format!("{base}/api/lineages"))
+            .json(&CreateLineage { name: "A".into(), source: "S".into(), notes: None })
+            .send().await.unwrap().json().await.unwrap();
+        let b: Lineage = client
+            .post(format!("{base}/api/lineages"))
+            .json(&CreateLineage { name: "B".into(), source: "S".into(), notes: None })
+            .send().await.unwrap().json().await.unwrap();
+        (a, b)
+    }
+
+    #[tokio::test]
+    async fn create_chick_group_with_empty_lineage_ids_returns_400() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("{base}/api/chick-groups"))
+            .json(&serde_json::json!({
+                "lineage_ids": [],
+                "initial_count": 5,
+                "hatch_date": "2026-03-01",
+            }))
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn create_chick_group_with_single_lineage_succeeds() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (a, _b) = seed_two_lineages(&base, &client).await;
+        let resp = client
+            .post(format!("{base}/api/chick-groups"))
+            .json(&CreateChickGroup {
+                clutch_id: None,
+                brooder_id: None,
+                initial_count: 7,
+                hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+                notes: None,
+                lineage_ids: vec![a.id],
+            })
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 201);
+        let g: ChickGroup = resp.json().await.unwrap();
+        assert_eq!(g.lineages.len(), 1);
+        assert_eq!(g.lineages[0].id, a.id);
+        assert_eq!(g.lineages[0].name, "A");
+    }
+
+    #[tokio::test]
+    async fn create_chick_group_with_multiple_lineages_succeeds() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (a, b) = seed_two_lineages(&base, &client).await;
+        let resp = client
+            .post(format!("{base}/api/chick-groups"))
+            .json(&CreateChickGroup {
+                clutch_id: None,
+                brooder_id: None,
+                initial_count: 7,
+                hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+                notes: None,
+                lineage_ids: vec![a.id, b.id],
+            })
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 201);
+        let g: ChickGroup = resp.json().await.unwrap();
+        let mut names: Vec<String> = g.lineages.iter().map(|l| l.name.clone()).collect();
+        names.sort();
+        assert_eq!(names, vec!["A".to_string(), "B".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn put_lineages_replaces_set_atomically() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (a, b) = seed_two_lineages(&base, &client).await;
+        let g: ChickGroup = client
+            .post(format!("{base}/api/chick-groups"))
+            .json(&CreateChickGroup {
+                clutch_id: None,
+                brooder_id: None,
+                initial_count: 5,
+                hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+                notes: None,
+                lineage_ids: vec![a.id],
+            })
+            .send().await.unwrap().json().await.unwrap();
+        assert_eq!(g.lineages.len(), 1);
+
+        // Replace [a] with [a, b].
+        let resp = client
+            .put(format!("{base}/api/chick-groups/{}/lineages", g.id))
+            .json(&ReplaceLineagesRequest { lineage_ids: vec![a.id, b.id] })
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 200);
+        let updated: ChickGroup = resp.json().await.unwrap();
+        assert_eq!(updated.lineages.len(), 2);
+
+        // Replace with [b] only — should remove a.
+        let resp = client
+            .put(format!("{base}/api/chick-groups/{}/lineages", g.id))
+            .json(&ReplaceLineagesRequest { lineage_ids: vec![b.id] })
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 200);
+        let updated: ChickGroup = resp.json().await.unwrap();
+        assert_eq!(updated.lineages.len(), 1);
+        assert_eq!(updated.lineages[0].id, b.id);
+    }
+
+    #[tokio::test]
+    async fn put_lineages_with_empty_returns_400() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (a, _b) = seed_two_lineages(&base, &client).await;
+        let g: ChickGroup = client
+            .post(format!("{base}/api/chick-groups"))
+            .json(&CreateChickGroup {
+                clutch_id: None, brooder_id: None,
+                initial_count: 5,
+                hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+                notes: None,
+                lineage_ids: vec![a.id],
+            })
+            .send().await.unwrap().json().await.unwrap();
+        let resp = client
+            .put(format!("{base}/api/chick-groups/{}/lineages", g.id))
+            .json(&ReplaceLineagesRequest { lineage_ids: vec![] })
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn create_bird_with_empty_lineage_ids_returns_400() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("{base}/api/birds"))
+            .json(&serde_json::json!({
+                "sex": "Male",
+                "lineage_ids": [],
+                "hatch_date": "2026-01-01",
+                "generation": 1,
+                "status": "Active",
+            }))
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn legacy_bloodline_id_rows_migrate_into_junction() {
+        // Seed an OLD-shape DB (bloodlines table, chick_groups.bloodline_id,
+        // birds.bloodline_id NOT NULL), then run init_db and assert that the
+        // junction tables end up populated and the old columns are gone.
+        use quailsync_server::init_db;
+        use rusqlite::Connection;
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE bloodlines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                source TEXT NOT NULL,
+                notes TEXT
+            );
+             CREATE TABLE birds (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                band_color TEXT,
+                sex TEXT NOT NULL,
+                bloodline_id INTEGER NOT NULL REFERENCES bloodlines(id),
+                hatch_date TEXT NOT NULL,
+                mother_id INTEGER,
+                father_id INTEGER,
+                generation INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'Active',
+                notes TEXT,
+                nfc_tag_id TEXT UNIQUE
+            );
+             CREATE TABLE brooders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                bloodline_id INTEGER REFERENCES bloodlines(id),
+                life_stage TEXT NOT NULL DEFAULT 'Chick',
+                qr_code TEXT NOT NULL DEFAULT '',
+                notes TEXT
+            );
+             CREATE TABLE chick_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                clutch_id INTEGER,
+                bloodline_id INTEGER NOT NULL REFERENCES bloodlines(id),
+                brooder_id INTEGER,
+                initial_count INTEGER NOT NULL,
+                current_count INTEGER NOT NULL,
+                hatch_date TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'Active',
+                notes TEXT
+            );",
+        ).unwrap();
+        conn.execute("INSERT INTO bloodlines (name, source) VALUES ('Fernbank', 'Local')", []).unwrap();
+        conn.execute("INSERT INTO bloodlines (name, source) VALUES ('NWQuail', 'NW')", []).unwrap();
+        conn.execute(
+            "INSERT INTO birds (sex, bloodline_id, hatch_date) VALUES ('Male', 1, '2026-01-01')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO birds (sex, bloodline_id, hatch_date) VALUES ('Female', 2, '2026-01-01')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO chick_groups (bloodline_id, initial_count, current_count, hatch_date)
+             VALUES (1, 10, 10, '2026-03-01')",
+            [],
+        ).unwrap();
+
+        // Run the migration.
+        init_db(&conn);
+
+        // The legacy table is gone; the new one carries the same rows.
+        let lineage_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM lineages", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(lineage_count, 2);
+
+        // Old bloodline_id columns are dropped.
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(birds)").unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(!cols.contains(&"bloodline_id".to_string()));
+
+        // Junction rows match the legacy assignments.
+        let bird_lineage_pairs: Vec<(i64, i64)> = conn
+            .prepare("SELECT bird_id, lineage_id FROM bird_lineages ORDER BY bird_id").unwrap()
+            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert_eq!(bird_lineage_pairs, vec![(1, 1), (2, 2)]);
+
+        let group_lineage_pairs: Vec<(i64, i64)> = conn
+            .prepare("SELECT chick_group_id, lineage_id FROM chick_group_lineages").unwrap()
+            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert_eq!(group_lineage_pairs, vec![(1, 1)]);
+
+        // Brooders renamed in place — column is now lineage_id.
+        let brooder_cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(brooders)").unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(brooder_cols.contains(&"lineage_id".to_string()));
+        assert!(!brooder_cols.contains(&"bloodline_id".to_string()));
     }
 }

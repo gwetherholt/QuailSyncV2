@@ -69,7 +69,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.quailsync.app.data.Bird
-import com.quailsync.app.data.Bloodline
+import com.quailsync.app.data.Lineage
 import com.quailsync.app.data.BreedingGroupDto
 import com.quailsync.app.data.CreateBreedingGroupRequest
 import com.quailsync.app.data.CullBatchRequest
@@ -99,8 +99,8 @@ class BreedingViewModel(application: Application) : AndroidViewModel(application
     private val _birds = MutableStateFlow<List<Bird>>(emptyList())
     val birds: StateFlow<List<Bird>> = _birds.asStateFlow()
 
-    private val _bloodlines = MutableStateFlow<List<Bloodline>>(emptyList())
-    val bloodlines: StateFlow<List<Bloodline>> = _bloodlines.asStateFlow()
+    private val _lineages = MutableStateFlow<List<Lineage>>(emptyList())
+    val lineages: StateFlow<List<Lineage>> = _lineages.asStateFlow()
 
     private val _groups = MutableStateFlow<List<BreedingGroupDto>>(emptyList())
     val groups: StateFlow<List<BreedingGroupDto>> = _groups.asStateFlow()
@@ -119,7 +119,7 @@ class BreedingViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             _isLoading.value = true
             _birds.value = try { api.getBirds() } catch (_: Exception) { emptyList() }
-            _bloodlines.value = try { api.getBloodlines() } catch (_: Exception) { emptyList() }
+            _lineages.value = try { api.getLineages() } catch (_: Exception) { emptyList() }
             _groups.value = try { api.getBreedingGroups() } catch (_: Exception) { emptyList() }
             _cullRecs.value = try { api.getCullRecommendations() } catch (e: Exception) {
                 Log.e("QuailSync", "Failed to load cull recs", e); emptyList()
@@ -196,7 +196,7 @@ fun BreedingScreen(viewModel: BreedingViewModel = viewModel(), onBack: () -> Uni
 private fun CullListTab(viewModel: BreedingViewModel) {
     val cullRecs by viewModel.cullRecs.collectAsState()
     val birds by viewModel.birds.collectAsState()
-    val bloodlines by viewModel.bloodlines.collectAsState()
+    val lineages by viewModel.lineages.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -204,7 +204,7 @@ private fun CullListTab(viewModel: BreedingViewModel) {
     var showCullDialog by remember { mutableStateOf(false) }
 
     val birdMap = birds.associateBy { it.id }
-    val bloodlineMap = bloodlines.associateBy { it.id }
+    val lineageMap = lineages.associateBy { it.id }
     val today = LocalDate.now()
 
     Column(Modifier.fillMaxSize()) {
@@ -225,7 +225,7 @@ private fun CullListTab(viewModel: BreedingViewModel) {
             ) {
                 items(cullRecs, key = { it.birdId }) { rec ->
                     val bird = birdMap[rec.birdId]
-                    val bloodline = bird?.bloodlineId?.let { bloodlineMap[it] }
+                    val lineage = bird?.lineageId?.let { lineageMap[it] }
                     val age = bird?.hatchDate?.let {
                         try {
                             ChronoUnit.DAYS.between(LocalDate.parse(it.take(10)), today).toInt()
@@ -279,8 +279,8 @@ private fun CullListTab(viewModel: BreedingViewModel) {
                                     color = priorityColor,
                                 )
                                 Row {
-                                    if (bloodline != null) {
-                                        Text(bloodline.name, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    if (lineage != null) {
+                                        Text(lineage.name, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         Spacer(Modifier.width(8.dp))
                                     }
                                     if (age != null) {
@@ -397,7 +397,7 @@ private fun CullDialog(count: Int, onConfirm: (method: String, notes: String) ->
 private fun BreedingGroupsTab(viewModel: BreedingViewModel) {
     val groups by viewModel.groups.collectAsState()
     val birds by viewModel.birds.collectAsState()
-    val bloodlines by viewModel.bloodlines.collectAsState()
+    val lineages by viewModel.lineages.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -405,7 +405,7 @@ private fun BreedingGroupsTab(viewModel: BreedingViewModel) {
 
     val activeBirds = birds.filter { it.status?.lowercase() == "active" }
     val birdMap = birds.associateBy { it.id }
-    val bloodlineMap = bloodlines.associateBy { it.id }
+    val lineageMap = lineages.associateBy { it.id }
 
     // Birds already assigned to a group
     val assignedBirdIds = groups.flatMap { listOf(it.maleId) + it.femaleIds }.toSet()
@@ -457,8 +457,8 @@ private fun BreedingGroupsTab(viewModel: BreedingViewModel) {
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            male?.bloodlineId?.let { bid ->
-                                bloodlineMap[bid]?.let { bl ->
+                            male?.lineageId?.let { bid ->
+                                lineageMap[bid]?.let { bl ->
                                     Text(" (${bl.name})", style = MaterialTheme.typography.labelSmall, color = SageGreen)
                                 }
                             }
@@ -472,8 +472,8 @@ private fun BreedingGroupsTab(viewModel: BreedingViewModel) {
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                f.bloodlineId?.let { bid ->
-                                    bloodlineMap[bid]?.let { bl ->
+                                f.lineageId?.let { bid ->
+                                    lineageMap[bid]?.let { bl ->
                                         Text(" (${bl.name})", style = MaterialTheme.typography.labelSmall, color = SageGreen)
                                     }
                                 }
@@ -501,7 +501,7 @@ private fun BreedingGroupsTab(viewModel: BreedingViewModel) {
         CreateBreedingGroupDialog(
             males = activeBirds.filter { it.sex?.lowercase() == "male" && it.id !in assignedBirdIds },
             females = activeBirds.filter { it.sex?.lowercase() == "female" && it.id !in assignedBirdIds },
-            bloodlineMap = bloodlineMap,
+            lineageMap = lineageMap,
             onConfirm = { name, maleId, femaleIds, notes ->
                 showCreateDialog = false
                 scope.launch {
@@ -523,7 +523,7 @@ private fun BreedingGroupsTab(viewModel: BreedingViewModel) {
 private fun CreateBreedingGroupDialog(
     males: List<Bird>,
     females: List<Bird>,
-    bloodlineMap: Map<Int, Bloodline>,
+    lineageMap: Map<Int, Lineage>,
     onConfirm: (name: String, maleId: Int, femaleIds: List<Int>, notes: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -554,7 +554,7 @@ private fun CreateBreedingGroupDialog(
                     )
                     ExposedDropdownMenu(maleExpanded, { maleExpanded = false }) {
                         males.forEach { m ->
-                            val bl = m.bloodlineId?.let { bloodlineMap[it]?.name } ?: ""
+                            val bl = m.lineageId?.let { lineageMap[it]?.name } ?: ""
                             DropdownMenuItem(
                                 text = { Text("${m.bandColor ?: "Bird"} #${m.id} $bl") },
                                 onClick = { selectedMaleId = m.id; maleExpanded = false },
@@ -568,7 +568,7 @@ private fun CreateBreedingGroupDialog(
                 Column {
                     females.take(20).forEach { f ->
                         val checked = f.id in selectedFemaleIds
-                        val bl = f.bloodlineId?.let { bloodlineMap[it]?.name } ?: ""
+                        val bl = f.lineageId?.let { lineageMap[it]?.name } ?: ""
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(
                                 checked = checked,
@@ -605,13 +605,13 @@ private fun CreateBreedingGroupDialog(
 @Composable
 private fun PairCheckTab(viewModel: BreedingViewModel) {
     val birds by viewModel.birds.collectAsState()
-    val bloodlines by viewModel.bloodlines.collectAsState()
+    val lineages by viewModel.lineages.collectAsState()
     val scope = rememberCoroutineScope()
 
     val activeBirds = birds.filter { it.status?.lowercase() == "active" }
     val males = activeBirds.filter { it.sex?.lowercase() == "male" }
     val females = activeBirds.filter { it.sex?.lowercase() == "female" }
-    val bloodlineMap = bloodlines.associateBy { it.id }
+    val lineageMap = lineages.associateBy { it.id }
 
     var selectedMaleId by remember { mutableStateOf<Int?>(null) }
     var selectedFemaleId by remember { mutableStateOf<Int?>(null) }
@@ -632,7 +632,7 @@ private fun PairCheckTab(viewModel: BreedingViewModel) {
             OutlinedTextField(
                 value = selectedMaleId?.let { id ->
                     males.find { it.id == id }?.let { b ->
-                        val bl = b.bloodlineId?.let { bloodlineMap[it]?.name } ?: ""
+                        val bl = b.lineageId?.let { lineageMap[it]?.name } ?: ""
                         "${b.bandColor ?: "Bird"} #${b.id} $bl"
                     }
                 } ?: "",
@@ -643,7 +643,7 @@ private fun PairCheckTab(viewModel: BreedingViewModel) {
             )
             ExposedDropdownMenu(maleExpanded, { maleExpanded = false }) {
                 males.forEach { m ->
-                    val bl = m.bloodlineId?.let { bloodlineMap[it]?.name } ?: ""
+                    val bl = m.lineageId?.let { lineageMap[it]?.name } ?: ""
                     DropdownMenuItem(
                         text = { Text("${m.bandColor ?: "Bird"} #${m.id} $bl") },
                         onClick = { selectedMaleId = m.id; maleExpanded = false; result = null },
@@ -657,7 +657,7 @@ private fun PairCheckTab(viewModel: BreedingViewModel) {
             OutlinedTextField(
                 value = selectedFemaleId?.let { id ->
                     females.find { it.id == id }?.let { b ->
-                        val bl = b.bloodlineId?.let { bloodlineMap[it]?.name } ?: ""
+                        val bl = b.lineageId?.let { lineageMap[it]?.name } ?: ""
                         "${b.bandColor ?: "Bird"} #${b.id} $bl"
                     }
                 } ?: "",
@@ -668,7 +668,7 @@ private fun PairCheckTab(viewModel: BreedingViewModel) {
             )
             ExposedDropdownMenu(femaleExpanded, { femaleExpanded = false }) {
                 females.forEach { f ->
-                    val bl = f.bloodlineId?.let { bloodlineMap[it]?.name } ?: ""
+                    val bl = f.lineageId?.let { lineageMap[it]?.name } ?: ""
                     DropdownMenuItem(
                         text = { Text("${f.bandColor ?: "Bird"} #${f.id} $bl") },
                         onClick = { selectedFemaleId = f.id; femaleExpanded = false; result = null },

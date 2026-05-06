@@ -12,19 +12,29 @@ pub(crate) async fn create_chick_group(
     State(state): State<AppState>,
     Json(body): Json<CreateChickGroup>,
 ) -> impl IntoResponse {
+    if body.lineage_ids.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "lineage_ids must contain at least one lineage",
+        )
+            .into_response();
+    }
     let conn = acquire_db(&state);
     if let Err(e) = conn.execute(
-        "INSERT INTO chick_groups (clutch_id, bloodline_id, brooder_id, initial_count, current_count, hatch_date, status, notes)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'Active', ?7)",
-        params![body.clutch_id, body.bloodline_id, body.brooder_id, body.initial_count, body.initial_count, body.hatch_date.to_string(), body.notes],
+        "INSERT INTO chick_groups (clutch_id, brooder_id, initial_count, current_count, hatch_date, status, notes)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'Active', ?6)",
+        params![body.clutch_id, body.brooder_id, body.initial_count, body.initial_count, body.hatch_date.to_string(), body.notes],
     ) {
         return db_error(e);
     }
     let id = conn.last_insert_rowid();
+    if let Err(e) = replace_chick_group_lineages(&conn, id, &body.lineage_ids) {
+        return db_error(e);
+    }
+    let lineages = fetch_chick_group_lineages(&conn, id);
     let mut group = ChickGroup {
         id,
         clutch_id: body.clutch_id,
-        bloodline_id: body.bloodline_id,
         brooder_id: body.brooder_id,
         initial_count: body.initial_count,
         current_count: body.initial_count,
@@ -32,12 +42,13 @@ pub(crate) async fn create_chick_group(
         status: ChickGroupStatus::Active,
         notes: body.notes,
         is_ready_to_transition: false,
+        lineages,
     };
     group.is_ready_to_transition = group.compute_is_ready_to_transition();
     (StatusCode::CREATED, Json(group)).into_response()
 }
 
-const GROUP_SELECT: &str = "SELECT id, clutch_id, bloodline_id, brooder_id, initial_count, current_count, hatch_date, status, notes FROM chick_groups";
+const GROUP_SELECT: &str = "SELECT id, clutch_id, brooder_id, initial_count, current_count, hatch_date, status, notes FROM chick_groups";
 
 pub(crate) async fn list_chick_groups(State(state): State<AppState>) -> Json<Vec<ChickGroup>> {
     let conn = acquire_db(&state);
@@ -46,11 +57,12 @@ pub(crate) async fn list_chick_groups(State(state): State<AppState>) -> Json<Vec
             "{GROUP_SELECT} ORDER BY status='Active' DESC, id DESC"
         ))
         .expect("prepare failed");
-    let rows: Vec<ChickGroup> = stmt
+    let mut rows: Vec<ChickGroup> = stmt
         .query_map([], row_to_chick_group)
         .unwrap()
         .filter_map(|r| r.ok())
         .collect();
+    populate_chick_group_lineages(&conn, &mut rows);
     Json(rows)
 }
 
@@ -64,7 +76,10 @@ pub(crate) async fn get_chick_group(
         params![id],
         row_to_chick_group,
     ) {
-        Ok(g) => (StatusCode::OK, Json(Some(g))).into_response(),
+        Ok(mut g) => {
+            g.lineages = fetch_chick_group_lineages(&conn, g.id);
+            (StatusCode::OK, Json(Some(g))).into_response()
+        }
         Err(_) => (StatusCode::NOT_FOUND, Json(None::<ChickGroup>)).into_response(),
     }
 }
@@ -112,6 +127,47 @@ pub(crate) async fn update_chick_group(
     StatusCode::OK
 }
 
+/// PUT /api/chick-groups/{id}/lineages — replace the group's lineage set atomically.
+pub(crate) async fn replace_chick_group_lineages_handler(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<ReplaceLineagesRequest>,
+) -> impl IntoResponse {
+    if body.lineage_ids.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "lineage_ids must contain at least one lineage",
+        )
+            .into_response();
+    }
+    let conn = acquire_db(&state);
+    let exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM chick_groups WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|c| c > 0)
+        .unwrap_or(false);
+    if !exists {
+        return (StatusCode::NOT_FOUND, "chick group not found").into_response();
+    }
+    if let Err(e) = replace_chick_group_lineages(&conn, id, &body.lineage_ids) {
+        return db_error(e);
+    }
+    match conn.query_row(
+        &format!("{GROUP_SELECT} WHERE id = ?1"),
+        params![id],
+        row_to_chick_group,
+    ) {
+        Ok(mut g) => {
+            g.lineages = fetch_chick_group_lineages(&conn, g.id);
+            (StatusCode::OK, Json(g)).into_response()
+        }
+        Err(e) => db_error(e),
+    }
+}
+
 pub(crate) async fn delete_chick_group(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -119,6 +175,11 @@ pub(crate) async fn delete_chick_group(
     let conn = acquire_db(&state);
     conn.execute(
         "DELETE FROM chick_mortality_log WHERE group_id = ?1",
+        params![id],
+    )
+    .ok();
+    conn.execute(
+        "DELETE FROM chick_group_lineages WHERE chick_group_id = ?1",
         params![id],
     )
     .ok();
@@ -209,6 +270,17 @@ pub(crate) async fn graduate_chick_group(
         return (StatusCode::BAD_REQUEST, "group is not active").into_response();
     }
 
+    // Birds inherit the group's lineages by default.
+    let group_lineage_ids: Vec<i64> = conn
+        .prepare("SELECT lineage_id FROM chick_group_lineages WHERE chick_group_id = ?1")
+        .ok()
+        .and_then(|mut stmt| {
+            stmt.query_map(params![id], |row| row.get::<_, i64>(0))
+                .ok()
+                .map(|it| it.filter_map(|r| r.ok()).collect())
+        })
+        .unwrap_or_default();
+
     // Section 7: Look up parent generation from the clutch's breeding pair
     let parent_generation: u32 = group.clutch_id
         .and_then(|cid| {
@@ -240,14 +312,19 @@ pub(crate) async fn graduate_chick_group(
     let mut birds_created = Vec::new();
     for gb in &body.birds {
         if let Err(e) = conn.execute(
-            "INSERT INTO birds (band_color, sex, bloodline_id, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'Active', ?8, ?9, ?10, ?11)",
-            params![gb.band_color, sex_to_str(&gb.sex), group.bloodline_id, group.hatch_date.to_string(),
+            "INSERT INTO birds (band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'Active', ?7, ?8, ?9, ?10)",
+            params![gb.band_color, sex_to_str(&gb.sex), group.hatch_date.to_string(),
                 mother_id, father_id, generation, gb.notes, gb.nfc_tag_id, group.brooder_id, gb.photo_path],
         ) {
             return db_error(e);
         }
         let bird_id = conn.last_insert_rowid();
+
+        // Inherit the parent group's lineages
+        if let Err(e) = replace_bird_lineages(&conn, bird_id, &group_lineage_ids) {
+            return db_error(e);
+        }
 
         // Persist initial weight to weight_records so it shows in growth history.
         if let Some(grams) = gb.weight_grams {
@@ -259,11 +336,11 @@ pub(crate) async fn graduate_chick_group(
             }
         }
 
+        let lineages = fetch_bird_lineages(&conn, bird_id);
         birds_created.push(Bird {
             id: bird_id,
             band_color: gb.band_color.clone(),
             sex: gb.sex.clone(),
-            bloodline_id: group.bloodline_id,
             hatch_date: group.hatch_date,
             mother_id,
             father_id,
@@ -273,6 +350,7 @@ pub(crate) async fn graduate_chick_group(
             nfc_tag_id: gb.nfc_tag_id.clone(),
             current_brooder_id: group.brooder_id,
             photo_path: gb.photo_path.clone(),
+            lineages,
         });
     }
 
@@ -294,7 +372,6 @@ mod tests {
         ChickGroup {
             id: 1,
             clutch_id: None,
-            bloodline_id: 1,
             brooder_id: None,
             initial_count: 12,
             current_count: 12,
@@ -302,6 +379,7 @@ mod tests {
             status,
             notes: None,
             is_ready_to_transition: false,
+            lineages: Vec::new(),
         }
     }
 

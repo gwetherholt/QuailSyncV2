@@ -94,7 +94,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.quailsync.app.data.Bird
 import com.quailsync.app.data.BirdWeight
-import com.quailsync.app.data.Bloodline
+import com.quailsync.app.data.Lineage
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.ServerConfig
 import com.quailsync.app.ui.theme.SageGreen
@@ -117,8 +117,8 @@ class FlockViewModel(application: Application) : AndroidViewModel(application) {
     private val _birds = MutableStateFlow<List<Bird>>(emptyList())
     val birds: StateFlow<List<Bird>> = _birds.asStateFlow()
 
-    private val _bloodlines = MutableStateFlow<List<Bloodline>>(emptyList())
-    val bloodlines: StateFlow<List<Bloodline>> = _bloodlines.asStateFlow()
+    private val _lineages = MutableStateFlow<List<Lineage>>(emptyList())
+    val lineages: StateFlow<List<Lineage>> = _lineages.asStateFlow()
 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -143,8 +143,8 @@ class FlockViewModel(application: Application) : AndroidViewModel(application) {
             val birdList = api.getBirds()
             Log.d("QuailSync", "Birds loaded: ${birdList.size}")
             _birds.value = birdList
-            val bloodlineList = try { api.getBloodlines() } catch (e: Exception) { Log.e("QuailSync", "Failed to load bloodlines", e); emptyList() }
-            _bloodlines.value = bloodlineList
+            val lineageList = try { api.getLineages() } catch (e: Exception) { Log.e("QuailSync", "Failed to load lineages", e); emptyList() }
+            _lineages.value = lineageList
         } catch (e: Exception) {
             Log.e("QuailSync", "Failed to load birds", e)
         } finally {
@@ -264,7 +264,7 @@ sealed class FlockFilter {
     data object Records : FlockFilter()
     data object Males : FlockFilter()
     data object Females : FlockFilter()
-    data class ByBloodline(val bloodlineId: Int, val name: String) : FlockFilter()
+    data class ByLineage(val lineageId: Int, val name: String) : FlockFilter()
 }
 
 private fun formatSex(sex: String?): String {
@@ -315,7 +315,7 @@ fun rememberBirdPhoto(birdId: Int, refreshKey: Int = 0): Bitmap? {
 @Composable
 fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
     val birds by viewModel.birds.collectAsState()
-    val bloodlines by viewModel.bloodlines.collectAsState()
+    val lineages by viewModel.lineages.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     var selectedFilter by remember { mutableStateOf<FlockFilter>(FlockFilter.Active) }
@@ -323,7 +323,7 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
     var showAddBird by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
-    val bloodlineMap = remember(bloodlines) { bloodlines.associateBy { it.id } }
+    val lineageMap = remember(lineages) { lineages.associateBy { it.id } }
 
     val filteredBirds = remember(birds, selectedFilter) {
         when (selectedFilter) {
@@ -332,7 +332,7 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
             FlockFilter.Records -> birds.filter { it.status?.lowercase() in listOf("culled", "deceased", "sold") }
             FlockFilter.Males -> birds.filter { it.sex?.lowercase() == "male" && it.status?.lowercase() == "active" }
             FlockFilter.Females -> birds.filter { it.sex?.lowercase() == "female" && it.status?.lowercase() == "active" }
-            is FlockFilter.ByBloodline -> birds.filter { it.bloodlineId == (selectedFilter as FlockFilter.ByBloodline).bloodlineId }
+            is FlockFilter.ByLineage -> birds.filter { it.lineageId == (selectedFilter as FlockFilter.ByLineage).lineageId }
         }
     }
 
@@ -356,7 +356,7 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
         }
 
         if (!isLoading || birds.isNotEmpty()) {
-            FlockFilterChips(bloodlines, selectedFilter) { selectedFilter = it }
+            FlockFilterChips(lineages, selectedFilter) { selectedFilter = it }
         }
 
         when {
@@ -375,7 +375,7 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
             else -> {
                 LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(filteredBirds, key = { it.id }) { bird ->
-                        BirdCard(bird, bird.bloodlineName ?: bloodlineMap[bird.bloodlineId]?.name) { selectedBird = bird }
+                        BirdCard(bird, bird.lineageName ?: lineageMap[bird.lineageId]?.name) { selectedBird = bird }
                     }
                     item { Spacer(Modifier.height(8.dp)) }
                 }
@@ -386,7 +386,7 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
     if (selectedBird != null) {
         BirdDetailDialog(
             selectedBird!!,
-            selectedBird!!.bloodlineName ?: bloodlineMap[selectedBird!!.bloodlineId]?.name,
+            selectedBird!!.lineageName ?: lineageMap[selectedBird!!.lineageId]?.name,
             viewModel,
             onDismiss = { selectedBird = null },
             onStatusChanged = { selectedBird = null; viewModel.refresh() },
@@ -395,7 +395,7 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
     }
 
     if (showAddBird) {
-        AddBirdDialog(bloodlines, viewModel, onDismiss = { showAddBird = false }, onSuccess = { bird ->
+        AddBirdDialog(lineages, viewModel, onDismiss = { showAddBird = false }, onSuccess = { bird ->
             showAddBird = false
             Toast.makeText(context, "Bird #${bird.id} created!", Toast.LENGTH_SHORT).show()
         })
@@ -407,7 +407,7 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
 // =====================================================================
 
 @Composable
-fun FlockFilterChips(bloodlines: List<Bloodline>, selectedFilter: FlockFilter, onFilterSelected: (FlockFilter) -> Unit) {
+fun FlockFilterChips(lineages: List<Lineage>, selectedFilter: FlockFilter, onFilterSelected: (FlockFilter) -> Unit) {
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -418,10 +418,10 @@ fun FlockFilterChips(bloodlines: List<Bloodline>, selectedFilter: FlockFilter, o
         FilterChip(selectedFilter is FlockFilter.Records, { onFilterSelected(FlockFilter.Records) }, { Text("Records") }, colors = chipColors)
         FilterChip(selectedFilter is FlockFilter.Males, { onFilterSelected(FlockFilter.Males) }, { Text("Males") }, colors = chipColors)
         FilterChip(selectedFilter is FlockFilter.Females, { onFilterSelected(FlockFilter.Females) }, { Text("Females") }, colors = chipColors)
-        bloodlines.forEach { bl ->
+        lineages.forEach { bl ->
             FilterChip(
-                selectedFilter is FlockFilter.ByBloodline && selectedFilter.bloodlineId == bl.id,
-                { onFilterSelected(FlockFilter.ByBloodline(bl.id, bl.name)) },
+                selectedFilter is FlockFilter.ByLineage && selectedFilter.lineageId == bl.id,
+                { onFilterSelected(FlockFilter.ByLineage(bl.id, bl.name)) },
                 { Text(bl.name) }, colors = chipColors,
             )
         }
@@ -433,7 +433,7 @@ fun FlockFilterChips(bloodlines: List<Bloodline>, selectedFilter: FlockFilter, o
 // =====================================================================
 
 @Composable
-fun BirdCard(bird: Bird, bloodlineName: String?, onClick: () -> Unit) {
+fun BirdCard(bird: Bird, lineageName: String?, onClick: () -> Unit) {
     val photo = rememberBirdPhoto(bird.id)
 
     Card(
@@ -472,7 +472,7 @@ fun BirdCard(bird: Bird, bloodlineName: String?, onClick: () -> Unit) {
                 Spacer(Modifier.height(4.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(formatSex(bird.sex), style = MaterialTheme.typography.bodyMedium)
-                    if (bloodlineName != null) Text(bloodlineName, style = MaterialTheme.typography.bodyMedium, color = SageGreen)
+                    if (lineageName != null) Text(lineageName, style = MaterialTheme.typography.bodyMedium, color = SageGreen)
                 }
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
                     if (bird.hatchDate != null) Text("Hatched ${bird.hatchDate}", style = MaterialTheme.typography.bodyMedium)
@@ -497,7 +497,7 @@ fun StatusBadge(status: String?) {
 
 @Composable
 fun BirdDetailDialog(
-    bird: Bird, bloodlineName: String?, viewModel: FlockViewModel,
+    bird: Bird, lineageName: String?, viewModel: FlockViewModel,
     onDismiss: () -> Unit, onStatusChanged: () -> Unit = {}, onDeleted: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -566,7 +566,7 @@ fun BirdDetailDialog(
 
                         Spacer(Modifier.height(8.dp))
                         Text(bird.bandId ?: "Bird #${bird.id}", style = MaterialTheme.typography.headlineMedium)
-                        if (bloodlineName != null) Text(bloodlineName, style = MaterialTheme.typography.titleMedium, color = SageGreen)
+                        if (lineageName != null) Text(lineageName, style = MaterialTheme.typography.titleMedium, color = SageGreen)
                         Spacer(Modifier.height(4.dp))
                         StatusBadge(bird.status)
 
@@ -881,8 +881,8 @@ fun DetailRow(label: String, value: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AddBirdDialog(bloodlines: List<Bloodline>, viewModel: FlockViewModel, onDismiss: () -> Unit, onSuccess: (Bird) -> Unit) {
-    var selectedBloodlineId by remember { mutableStateOf<Int?>(null) }
+fun AddBirdDialog(lineages: List<Lineage>, viewModel: FlockViewModel, onDismiss: () -> Unit, onSuccess: (Bird) -> Unit) {
+    var selectedLineageId by remember { mutableStateOf<Int?>(null) }
     var sex by remember { mutableStateOf("Unknown") }
     var bandColor by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
@@ -897,13 +897,13 @@ fun AddBirdDialog(bloodlines: List<Bloodline>, viewModel: FlockViewModel, onDism
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ExposedDropdownMenuBox(blExpanded, { blExpanded = it }) {
                     OutlinedTextField(
-                        value = selectedBloodlineId?.let { id -> bloodlines.find { it.id == id }?.name ?: "" } ?: "",
-                        onValueChange = {}, readOnly = true, label = { Text("Bloodline") },
+                        value = selectedLineageId?.let { id -> lineages.find { it.id == id }?.name ?: "" } ?: "",
+                        onValueChange = {}, readOnly = true, label = { Text("Lineage") },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(blExpanded) },
                         modifier = Modifier.menuAnchor().fillMaxWidth(),
                     )
                     ExposedDropdownMenu(blExpanded, { blExpanded = false }) {
-                        bloodlines.forEach { bl -> DropdownMenuItem(text = { Text(bl.name) }, onClick = { selectedBloodlineId = bl.id; blExpanded = false }) }
+                        lineages.forEach { bl -> DropdownMenuItem(text = { Text(bl.name) }, onClick = { selectedLineageId = bl.id; blExpanded = false }) }
                     }
                 }
                 ExposedDropdownMenuBox(sexExpanded, { sexExpanded = it }) {
@@ -925,11 +925,11 @@ fun AddBirdDialog(bloodlines: List<Bloodline>, viewModel: FlockViewModel, onDism
         confirmButton = {
             Button(
                 onClick = {
-                    val blId = selectedBloodlineId ?: return@Button
+                    val blId = selectedLineageId ?: return@Button
                     saving = true
                     viewModel.createBird(
                         com.quailsync.app.data.CreateBirdRequest(
-                            bloodlineId = blId.toLong(), sex = sex, status = "Active",
+                            lineageIds = listOf(blId.toLong()), sex = sex, status = "Active",
                             hatchDate = java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE),
                             generation = 1,
                             bandColor = bandColor.ifBlank { null },
@@ -940,7 +940,7 @@ fun AddBirdDialog(bloodlines: List<Bloodline>, viewModel: FlockViewModel, onDism
                         if (bird != null) onSuccess(bird)
                     }
                 },
-                enabled = selectedBloodlineId != null && !saving,
+                enabled = selectedLineageId != null && !saving,
                 colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
             ) { Text(if (saving) "Creating..." else "Create Bird") }
         },
