@@ -314,7 +314,13 @@ fun QuailSyncApp(
                         // tag is carried into each new bird.
                         val firstLineageId = group.lineages.firstOrNull()?.id
                         if (firstLineageId != null && group.currentCount > 0) {
-                            nfcViewModel.startBatchTagging(group.currentCount, firstLineageId)
+                            // Bug A: pass group.id so the NFC batch flow can
+                            // flip status='Graduated' when banding finishes.
+                            nfcViewModel.startBatchTagging(
+                                count = group.currentCount,
+                                lineageId = firstLineageId,
+                                chickGroupId = group.id,
+                            )
                         } else {
                             nfcViewModel.openBatchSetup()
                         }

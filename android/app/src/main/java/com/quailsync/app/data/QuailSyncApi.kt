@@ -464,6 +464,15 @@ interface QuailSyncApi {
     @POST("api/chick-groups")
     suspend fun createChickGroup(@Body request: CreateChickGroupRequest): ChickGroupDto
 
+    /** Generic chick-group update — backend accepts a JSON body with any of
+     *  current_count / brooder_id / notes / status. Used after a batch
+     *  finishes graduating to flip status='Graduated'. */
+    @PUT("api/chick-groups/{id}")
+    suspend fun updateChickGroup(
+        @Path("id") id: Int,
+        @Body body: Map<String, @JvmSuppressWildcards Any?>,
+    ): retrofit2.Response<Unit>
+
     @DELETE("api/chick-groups/{id}")
     suspend fun deleteChickGroup(@Path("id") id: Int): retrofit2.Response<Unit>
 

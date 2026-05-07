@@ -2533,13 +2533,18 @@
     _renderList: function(){
       var el = document.getElementById('nursery-list');
       if(!el) return;
-      if(this._groups.length === 0){
+      // Bug A: Hatchery default view shows only Active groups. Graduated /
+      // Lost groups get a separate "Completed" section below so they don't
+      // crowd the active list and can't be re-banded by accident.
+      var activeOnly = this._groups.filter(function(g){ return g.status === 'Active'; });
+      var completedOnly = this._groups.filter(function(g){ return g.status !== 'Active'; });
+      if(activeOnly.length === 0 && completedOnly.length === 0){
         el.innerHTML = emptyState('&#x1F424;','No chick groups yet','+ New Group','Page.Nursery.openCreateModal()');
         return;
       }
       var now = new Date();
       var html = '<div class="clutch-grid">';
-      this._groups.forEach(function(g){
+      activeOnly.forEach(function(g){
         var hatchD = new Date(g.hatch_date+'T00:00:00');
         var ageDays = Math.floor((now - hatchD) / 86400000);
         var mortalityPct = g.initial_count > 0 ? ((g.initial_count - g.current_count) / g.initial_count * 100) : 0;
@@ -2583,6 +2588,23 @@
         html += '</div></div>';
       });
       html += '</div>';
+      // Completed section — minimal cards, no actions, so old groups stay
+      // searchable as history without competing with active ones.
+      if(completedOnly.length > 0){
+        html += '<h3 style="margin:1.5rem 0 .5rem;color:#888;font-weight:500">Completed</h3>';
+        html += '<div class="clutch-grid">';
+        completedOnly.forEach(function(g){
+          var blLabel = formatLineages(g.lineages);
+          var statusCls = g.status === 'Graduated' ? 'sold' : 'deceased';
+          html += '<div class="clutch-card muted"><div class="clutch-card-body">';
+          html += '<h4>Group #'+g.id+(blLabel ? ' &mdash; '+blLabel : '')+
+            ' <span class="status-badge '+statusCls+'">'+g.status+'</span></h4>';
+          html += '<div style="font-size:.85rem;color:#888">'+
+            g.current_count+'/'+g.initial_count+' chicks &bull; Hatched '+g.hatch_date+'</div>';
+          html += '</div></div>';
+        });
+        html += '</div>';
+      }
       el.innerHTML = html;
     },
     openCreateModal: async function(){

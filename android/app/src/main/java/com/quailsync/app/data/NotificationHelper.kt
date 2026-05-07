@@ -49,7 +49,21 @@ object NotificationHelper {
         manager.createNotificationChannels(listOf(alertChannel, hatchChannel, monitorChannel))
     }
 
-    fun buildMonitorNotification(context: Context, brooderCount: Int): NotificationCompat.Builder {
+    /**
+     * Three-state monitoring notification:
+     *  - WebSocket not yet open → "Connecting to server…"
+     *  - WebSocket open but no brooders have reported telemetry yet
+     *    → "Connected — waiting for brooders" (was previously stuck on
+     *    "Connecting to server…" forever because the count-only branch
+     *    couldn't tell the WebSocket-disconnected case from the
+     *    no-brooders-active case).
+     *  - WebSocket open AND ≥1 brooder reporting → "Monitoring N brooder(s)"
+     */
+    fun buildMonitorNotification(
+        context: Context,
+        brooderCount: Int,
+        wsConnected: Boolean,
+    ): NotificationCompat.Builder {
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
@@ -57,10 +71,11 @@ object NotificationHelper {
             context, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
 
-        val text = if (brooderCount > 0) {
-            "Monitoring $brooderCount brooder${if (brooderCount != 1) "s" else ""}"
-        } else {
-            "Connecting to server..."
+        val text = when {
+            !wsConnected -> "Connecting to server…"
+            brooderCount > 0 ->
+                "Monitoring $brooderCount brooder${if (brooderCount != 1) "s" else ""}"
+            else -> "Connected — waiting for brooders"
         }
 
         return NotificationCompat.Builder(context, CHANNEL_MONITOR)

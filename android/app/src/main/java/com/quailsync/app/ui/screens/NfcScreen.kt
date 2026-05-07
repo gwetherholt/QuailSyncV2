@@ -134,6 +134,19 @@ data class OrphanTag(
     val orphanBirdId: Int,
 )
 
+/**
+ * Render an NFC tag ID compactly: first 4 + ellipsis + last 4 chars.
+ *
+ * Bug B fix: NTAG stickers from a sequential batch often share the last
+ * 8 chars (e.g. all `…12031F91`); only the middle bytes vary. Showing
+ * just `takeLast(N)` made every bird in a batch look identical. This
+ * format keeps both ends visible so adjacent IDs are distinguishable.
+ *
+ * Tags shorter than 9 chars are returned as-is (no point shortening).
+ */
+fun shortTag(tagId: String): String =
+    if (tagId.length <= 8) tagId else "${tagId.take(4)}…${tagId.takeLast(4)}"
+
 sealed class BatchState {
     data object Idle : BatchState()
     data object Setup : BatchState()
@@ -159,6 +172,11 @@ sealed class BatchState {
         val draftNotes: String? = null,
         val draftWeightText: String? = null,
         val draftPhotoBitmap: Bitmap? = null,
+        /** Source chick group when the batch was started via "Band Group"
+         *  on the Hatchery card. When non-null, the chick group's status
+         *  is flipped to 'Graduated' on batch completion (Bug A). Null
+         *  when the batch was started ad-hoc from the NFC Setup screen. */
+        val chickGroupId: Int? = null,
     ) : BatchState()
 
     /** API call in progress to create the bird. */
@@ -172,6 +190,7 @@ sealed class BatchState {
         val notes: String,
         val lastMaleBandColor: String,
         val lastFemaleBandColor: String,
+        val chickGroupId: Int? = null,
     ) : BatchState()
 
     /** Bird created, write mode active, waiting for tag tap. */
@@ -183,6 +202,7 @@ sealed class BatchState {
         val pendingBird: Bird,
         val lastMaleBandColor: String,
         val lastFemaleBandColor: String,
+        val chickGroupId: Int? = null,
     ) : BatchState()
 
     /** Tag written — confirmation screen with photo/weight options. */
@@ -197,6 +217,7 @@ sealed class BatchState {
         val lastFemaleBandColor: String,
         val photoSaved: Boolean = false,
         val weightLogged: Boolean = false,
+        val chickGroupId: Int? = null,
     ) : BatchState()
 
     data class Complete(
@@ -372,12 +393,18 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
         _batchState.value = BatchState.Idle
     }
 
-    fun startBatchTagging(count: Int, lineageId: Int) {
+    /** Begin a per-bird tagging batch.
+     *
+     *  When `chickGroupId` is non-null, the source group's status will be
+     *  flipped to 'Graduated' once the batch completes — closes the loop
+     *  on Hatchery cards (Bug A). */
+    fun startBatchTagging(count: Int, lineageId: Int, chickGroupId: Int? = null) {
         _batchState.value = BatchState.PerBirdEntry(
             currentIndex = 0,
             totalCount = count,
             lineageId = lineageId,
             graduated = emptyList(),
+            chickGroupId = chickGroupId,
         )
     }
 
@@ -406,6 +433,7 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
             sex = sex,
             bandColor = bandColor,
             notes = notes,
+            chickGroupId = state.chickGroupId,
             lastMaleBandColor = state.lastMaleBandColor,
             lastFemaleBandColor = state.lastFemaleBandColor,
         )
@@ -463,6 +491,7 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
                     pendingBird = bird,
                     lastMaleBandColor = updatedMale,
                     lastFemaleBandColor = updatedFemale,
+                    chickGroupId = state.chickGroupId,
                 )
             } catch (e: retrofit2.HttpException) {
                 Log.e("QuailSync", "Batch: HTTP ${e.code()} creating bird (raw body logged separately)", e)
@@ -514,6 +543,7 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
             justTaggedTagId = tagId,
             lastMaleBandColor = state.lastMaleBandColor,
             lastFemaleBandColor = state.lastFemaleBandColor,
+            chickGroupId = state.chickGroupId,
         )
     }
 
@@ -578,7 +608,27 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
         if (state.currentIndex >= state.totalCount) {
             val lineageName = _lineages.value.find { it.id == state.lineageId }?.name
             _batchState.value = BatchState.Complete(state.graduated, lineageName)
-            viewModelScope.launch { try { _birds.value = api.getBirds() } catch (_: Exception) {} }
+            viewModelScope.launch {
+                // Bug A: when the batch was started from a chick group's
+                // "Band Group" button, flip the source group's status to
+                // 'Graduated' so it disappears from the Hatchery active
+                // list and can't be double-banded. Best-effort — failure
+                // logs but doesn't block the success summary.
+                state.chickGroupId?.let { groupId ->
+                    try {
+                        val resp = api.updateChickGroup(groupId, mapOf("status" to "Graduated"))
+                        if (!resp.isSuccessful) {
+                            Log.w("QuailSync", "Could not mark chick group $groupId graduated: HTTP ${resp.code()}")
+                        }
+                    } catch (e: Exception) {
+                        Log.e("QuailSync", "Failed to mark chick group $groupId graduated", e)
+                    }
+                }
+                try { _birds.value = api.getBirds() } catch (_: Exception) {}
+                // ClutchViewModel owns the chick-groups cache; it refreshes on
+                // ON_RESUME when the user navigates back to Hatchery, so the
+                // now-graduated group filters out of the Active section then.
+            }
         } else {
             _batchState.value = BatchState.PerBirdEntry(
                 currentIndex = state.currentIndex,
@@ -587,6 +637,7 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
                 graduated = state.graduated,
                 lastMaleBandColor = state.lastMaleBandColor,
                 lastFemaleBandColor = state.lastFemaleBandColor,
+                chickGroupId = state.chickGroupId,
             )
         }
     }
@@ -1286,7 +1337,7 @@ fun BatchCompleteScreen(state: BatchState.Complete, viewModel: NfcViewModel) {
                             ).joinToString(" · ")
                             if (details.isNotEmpty()) Text(details, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        Text(g.tagId.takeLast(8), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(shortTag(g.tagId), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -1316,7 +1367,7 @@ fun GraduatedRow(g: GraduatedBird) {
             Text(g.bird.bandColor, style = MaterialTheme.typography.bodyMedium, color = SageGreen)
         }
         Spacer(Modifier.weight(1f))
-        Text(g.tagId.takeLast(6), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(shortTag(g.tagId), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

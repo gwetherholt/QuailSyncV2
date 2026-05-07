@@ -74,6 +74,7 @@ class MonitoringService : Service() {
 
     private var offlineCheckThread: Thread? = null
     private var running = false
+    @Volatile private var wsConnected = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -83,7 +84,7 @@ class MonitoringService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notification = NotificationHelper.buildMonitorNotification(this, 0).build()
+        val notification = NotificationHelper.buildMonitorNotification(this, 0, wsConnected = false).build()
         startForeground(NotificationHelper.MONITOR_NOTIFICATION_ID, notification)
 
         running = true
@@ -117,6 +118,8 @@ class MonitoringService : Service() {
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
                 Log.d(TAG, "WebSocket connected")
+                wsConnected = true
+                updateMonitorNotification()
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
@@ -126,11 +129,15 @@ class MonitoringService : Service() {
             override fun onClosing(ws: WebSocket, code: Int, reason: String) {
                 ws.close(1000, null)
                 Log.d(TAG, "WebSocket closing: $code $reason")
+                wsConnected = false
+                updateMonitorNotification()
                 scheduleReconnect()
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "WebSocket failure", t)
+                wsConnected = false
+                updateMonitorNotification()
                 scheduleReconnect()
             }
         })
@@ -280,7 +287,7 @@ class MonitoringService : Service() {
 
     private fun updateMonitorNotification() {
         val count = connectedBrooders.values.count { it }
-        val notification = NotificationHelper.buildMonitorNotification(this, count).build()
+        val notification = NotificationHelper.buildMonitorNotification(this, count, wsConnected).build()
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
         manager.notify(NotificationHelper.MONITOR_NOTIFICATION_ID, notification)
     }
