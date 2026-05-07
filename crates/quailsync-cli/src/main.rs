@@ -1058,12 +1058,10 @@ async fn cmd_breeding_suggest(base: &str) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Fetch birds + lineages for display info
+    // Fetch birds for display info. Lineage names come from each Bird's
+    // many-to-many `lineages` field, populated server-side, so a separate
+    // /api/lineages fetch isn't needed here.
     let birds: Vec<Bird> = reqwest::get(format!("{base}/api/birds"))
-        .await?
-        .json()
-        .await?;
-    let lineages: Vec<Lineage> = reqwest::get(format!("{base}/api/lineages"))
         .await?
         .json()
         .await?;
@@ -1534,12 +1532,9 @@ async fn cmd_flock_cull_review(base: &str) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Fetch birds and lineages for display
+    // Fetch birds for display. Lineage names come from `bird.lineages`
+    // populated by the server.
     let birds: Vec<Bird> = reqwest::get(format!("{base}/api/birds"))
-        .await?
-        .json()
-        .await?;
-    let lineages: Vec<Lineage> = reqwest::get(format!("{base}/api/lineages"))
         .await?
         .json()
         .await?;
