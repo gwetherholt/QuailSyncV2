@@ -319,28 +319,51 @@ pub fn init_db(conn: &Connection) {
     )
     .expect("failed to create lineage junction tables");
 
-    let chick_groups_had_bloodline = column_exists(conn, "chick_groups", "bloodline_id");
-    if chick_groups_had_bloodline {
-        conn.execute(
-            "INSERT OR IGNORE INTO chick_group_lineages (chick_group_id, lineage_id)
-             SELECT id, bloodline_id FROM chick_groups WHERE bloodline_id IS NOT NULL",
-            [],
-        )
-        .expect("failed to backfill chick_group_lineages");
+    // Corrective migration. The original drop-column block used `.ok()` to
+    // swallow errors, which hid a SQLite restriction: DROP COLUMN refuses
+    // to run when the column is referenced by a secondary index. The
+    // chick_groups column had no such index so it dropped cleanly, but
+    // birds had `idx_birds_bloodline` from the pre-refactor schema. The
+    // result on every live DB created before commit 479e37f: birds still
+    // has an orphaned NOT NULL `bloodline_id` column, breaking every
+    // INSERT into birds. Fix: drop the blocking index first, then the
+    // column, and never swallow the error.
+    if column_exists(conn, "chick_groups", "bloodline_id") {
+        println!("[migration] chick_groups.bloodline_id column present — backfilling junction + dropping");
+        let backfilled = conn
+            .execute(
+                "INSERT OR IGNORE INTO chick_group_lineages (chick_group_id, lineage_id)
+                 SELECT id, bloodline_id FROM chick_groups WHERE bloodline_id IS NOT NULL",
+                [],
+            )
+            .expect("backfill chick_group_lineages from orphan column failed");
+        println!("[migration]   backfilled {backfilled} chick_group_lineages row(s)");
+        // Defensive: chick_groups didn't ship with a bloodline_id index in
+        // the original schema, but drop one if a fork or older build added it.
+        conn.execute("DROP INDEX IF EXISTS idx_chick_groups_bloodline", [])
+            .expect("drop idx_chick_groups_bloodline failed");
         conn.execute("ALTER TABLE chick_groups DROP COLUMN bloodline_id", [])
-            .ok();
+            .expect("ALTER TABLE chick_groups DROP COLUMN bloodline_id failed — SQLite >= 3.35 required");
+        println!("[migration]   dropped chick_groups.bloodline_id");
     }
 
-    let birds_had_bloodline = column_exists(conn, "birds", "bloodline_id");
-    if birds_had_bloodline {
-        conn.execute(
-            "INSERT OR IGNORE INTO bird_lineages (bird_id, lineage_id)
-             SELECT id, bloodline_id FROM birds WHERE bloodline_id IS NOT NULL",
-            [],
-        )
-        .expect("failed to backfill bird_lineages");
+    if column_exists(conn, "birds", "bloodline_id") {
+        println!("[migration] birds.bloodline_id column present — backfilling junction + dropping");
+        let backfilled = conn
+            .execute(
+                "INSERT OR IGNORE INTO bird_lineages (bird_id, lineage_id)
+                 SELECT id, bloodline_id FROM birds WHERE bloodline_id IS NOT NULL",
+                [],
+            )
+            .expect("backfill bird_lineages from orphan column failed");
+        println!("[migration]   backfilled {backfilled} bird_lineages row(s)");
+        // The blocker — must be dropped before DROP COLUMN can succeed.
+        conn.execute("DROP INDEX IF EXISTS idx_birds_bloodline", [])
+            .expect("drop idx_birds_bloodline failed");
+        println!("[migration]   dropped idx_birds_bloodline (was blocking column drop)");
         conn.execute("ALTER TABLE birds DROP COLUMN bloodline_id", [])
-            .ok();
+            .expect("ALTER TABLE birds DROP COLUMN bloodline_id failed — SQLite >= 3.35 required");
+        println!("[migration]   dropped birds.bloodline_id");
     }
 
     // --- Headcount inference results ---

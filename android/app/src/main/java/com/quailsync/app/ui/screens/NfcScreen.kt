@@ -2,12 +2,16 @@
 
 package com.quailsync.app.ui.screens
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -120,11 +124,29 @@ data class GraduatedBird(
     val photoUri: Uri? = null,
 )
 
+/**
+ * A tag whose payload references a bird id that no longer exists in the DB
+ * (deleted, escaped, etc). The user must explicitly confirm reuse before we
+ * overwrite the tag — never automatic.
+ */
+data class OrphanTag(
+    val tagId: String,
+    val orphanBirdId: Int,
+)
+
 sealed class BatchState {
     data object Idle : BatchState()
     data object Setup : BatchState()
 
-    /** User is filling per-bird details before tapping the tag. */
+    /** User is filling per-bird details before tapping the tag.
+     *
+     *  Bug 3 fix: when a submit fails (e.g. server 500), the per-bird form
+     *  used to reset to defaults because PerBirdEntryScreen leaves
+     *  composition during the CreatingBird transition and `remember` starts
+     *  fresh on return. Persisting unsaved input here keeps the user's
+     *  entry across that failure round-trip. Drafts are reset by the
+     *  success path when the next PerBirdEntry is constructed (default
+     *  null values). */
     data class PerBirdEntry(
         val currentIndex: Int,
         val totalCount: Int,
@@ -132,6 +154,11 @@ sealed class BatchState {
         val graduated: List<GraduatedBird>,
         val lastMaleBandColor: String = "",
         val lastFemaleBandColor: String = "",
+        val draftSex: String? = null,
+        val draftBandColor: String? = null,
+        val draftNotes: String? = null,
+        val draftWeightText: String? = null,
+        val draftPhotoBitmap: Bitmap? = null,
     ) : BatchState()
 
     /** API call in progress to create the bird. */
@@ -182,6 +209,33 @@ sealed class BatchState {
 // ViewModel
 // =====================================================================
 
+/**
+ * Pull a user-safe error message out of a Retrofit HttpException.
+ *
+ * The server now returns `{ "error": "...", "message": "..." }` JSON for
+ * every 500-class error, with the SQL detail logged server-side only.
+ * This helper extracts the `message` field; if the body isn't JSON (older
+ * servers, plain-text 400 validation errors), it falls back to the raw body
+ * for 4xx (those are intentionally human-readable) and a generic apology
+ * for 5xx (whose bodies may contain implementation detail we don't want to
+ * surface).
+ */
+private fun friendlyErrorMessage(e: retrofit2.HttpException): String {
+    val rawBody = try { e.response()?.errorBody()?.string() } catch (_: Exception) { null }
+    if (rawBody != null) {
+        try {
+            val obj = com.google.gson.JsonParser().parse(rawBody).asJsonObject
+            val msg = obj.get("message")?.asString
+            if (!msg.isNullOrBlank()) return msg
+        } catch (_: Exception) { /* not JSON — fall through */ }
+    }
+    return when (e.code()) {
+        in 400..499 -> rawBody?.takeIf { it.isNotBlank() } ?: "Request rejected (${e.code()})"
+        in 500..599 -> "Something went wrong on our end. Please try again."
+        else -> "Request failed (${e.code()})"
+    }
+}
+
 class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() {
     private val api = QuailSyncApi.create(serverUrl)
 
@@ -199,6 +253,10 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
 
     private val _conflictBird = MutableStateFlow<Bird?>(null)
     val conflictBird: StateFlow<Bird?> = _conflictBird.asStateFlow()
+
+    /** Set when a scanned tag references a bird that no longer exists in the DB. */
+    private val _orphanTag = MutableStateFlow<OrphanTag?>(null)
+    val orphanTag: StateFlow<OrphanTag?> = _orphanTag.asStateFlow()
 
     private val _batchPausedForConflict = MutableStateFlow(false)
 
@@ -225,10 +283,35 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
                     val birdId = payload.removePrefix("BIRD-").toIntOrNull()
                     val bird = birdId?.let { id -> _birds.value.find { it.id == id } }
                     if (bird != null) { nfcService.updateScanWithBird(tagId, bird); return@launch }
+                    // Orphan: tag's payload claims BIRD-{id} but no such bird
+                    // exists server-side or in local cache. Surface this so the
+                    // user can explicitly choose to reuse the tag for a new
+                    // bird — never automatic.
+                    if (birdId != null) {
+                        _orphanTag.value = OrphanTag(tagId = tagId, orphanBirdId = birdId)
+                        return@launch
+                    }
                 }
                 Log.d("QuailSync", "NFC lookup: no bird found for $lookupId")
             }
         }
+    }
+
+    /** User dismissed the orphan-tag prompt without reusing. */
+    fun dismissOrphanTag() {
+        _orphanTag.value = null
+    }
+
+    /**
+     * User confirmed they want to reuse the orphan tag for a new bird.
+     * Drops the orphan state and routes the user into the standard create-bird
+     * flow. When they create a bird and tap-to-write, the existing
+     * `lookupConflictBird` path auto-overwrites because the orphan bird id
+     * doesn't exist server-side, so the conflict dialog won't fire spuriously.
+     */
+    fun reuseOrphanTag() {
+        _orphanTag.value = null
+        _batchState.value = BatchState.Setup
     }
 
     fun startWriteMode(birdId: Int) { nfcService.enterWriteMode("BIRD-$birdId") }
@@ -298,16 +381,22 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
         )
     }
 
-    /** Called when user fills per-bird details and taps "Create & Tag". */
+    /** Called when user fills per-bird details and taps "Create & Tag".
+     *
+     *  Takes `weightText` rather than the parsed Double so that, on submit
+     *  failure, we can replay the exact text the user typed back into the
+     *  form (e.g. "180." mid-entry). The Double is parsed locally for the
+     *  weight-record write. */
     fun createAndTagBird(
         sex: String,
         bandColor: String,
         notes: String,
-        weightGrams: Double? = null,
+        weightText: String = "",
         photoBitmap: Bitmap? = null,
         context: Context? = null,
     ) {
         val state = _batchState.value as? BatchState.PerBirdEntry ?: return
+        val weightGrams = weightText.toDoubleOrNull()
 
         _batchState.value = BatchState.CreatingBird(
             currentIndex = state.currentIndex,
@@ -376,15 +465,28 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
                     lastFemaleBandColor = updatedFemale,
                 )
             } catch (e: retrofit2.HttpException) {
-                val errorBody = e.response()?.errorBody()?.string()
-                Log.e("QuailSync", "Batch: HTTP ${e.code()} creating bird. Body: $errorBody", e)
-                nfcService.setWriteResult(NfcService.WriteResult(false, "HTTP ${e.code()}: $errorBody"))
-                // Go back to PerBirdEntry so user can retry
-                _batchState.value = state
+                Log.e("QuailSync", "Batch: HTTP ${e.code()} creating bird (raw body logged separately)", e)
+                nfcService.setWriteResult(NfcService.WriteResult(false, friendlyErrorMessage(e)))
+                // Go back to PerBirdEntry — preserving every field the user
+                // entered, so they don't have to re-pick sex / re-type weight /
+                // re-take the photo just because our server failed.
+                _batchState.value = state.copy(
+                    draftSex = sex,
+                    draftBandColor = bandColor,
+                    draftNotes = notes,
+                    draftWeightText = weightText,
+                    draftPhotoBitmap = photoBitmap,
+                )
             } catch (e: Exception) {
                 Log.e("QuailSync", "Batch: failed to create bird", e)
-                nfcService.setWriteResult(NfcService.WriteResult(false, "Failed: ${e.message}"))
-                _batchState.value = state
+                nfcService.setWriteResult(NfcService.WriteResult(false, "Network error — please try again"))
+                _batchState.value = state.copy(
+                    draftSex = sex,
+                    draftBandColor = bandColor,
+                    draftNotes = notes,
+                    draftWeightText = weightText,
+                    draftPhotoBitmap = photoBitmap,
+                )
             }
         }
     }
@@ -444,12 +546,11 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
                 Log.d("QuailSync", "Weight logged OK for bird $birdId: ${result.weightGrams}g, id=${result.id}")
                 onPostTagWeightLogged()
             } catch (e: retrofit2.HttpException) {
-                val errorBody = e.response()?.errorBody()?.string()
-                Log.e("QuailSync", "Weight HTTP ${e.code()} for bird $birdId. Body: $errorBody", e)
-                _weightError.value = "HTTP ${e.code()}: ${errorBody ?: "Unknown error"}"
+                Log.e("QuailSync", "Weight HTTP ${e.code()} for bird $birdId", e)
+                _weightError.value = friendlyErrorMessage(e)
             } catch (e: Exception) {
                 Log.e("QuailSync", "Weight failed for bird $birdId", e)
-                _weightError.value = "Failed: ${e.message}"
+                _weightError.value = "Network error — please try again"
             }
         }
     }
@@ -524,6 +625,7 @@ fun NfcScreen(nfcService: NfcService, viewModel: NfcViewModel) {
     val batchState by viewModel.batchState.collectAsState()
     val pendingConflict by nfcService.pendingConflict.collectAsState()
     val conflictBird by viewModel.conflictBird.collectAsState()
+    val orphanTag by viewModel.orphanTag.collectAsState()
 
     when (val state = batchState) {
         is BatchState.Setup -> BatchSetupScreen(viewModel)
@@ -537,6 +639,14 @@ fun NfcScreen(nfcService: NfcService, viewModel: NfcViewModel) {
 
     if (pendingConflict != null && conflictBird != null) {
         TagConflictDialog(pendingConflict!!, conflictBird!!, { viewModel.confirmOverwrite() }, { viewModel.cancelOverwrite() })
+    }
+
+    orphanTag?.let { orphan ->
+        OrphanTagDialog(
+            orphan = orphan,
+            onReuse = { viewModel.reuseOrphanTag() },
+            onCancel = { viewModel.dismissOrphanTag() },
+        )
     }
 }
 
@@ -665,18 +775,39 @@ fun BatchSetupScreen(viewModel: NfcViewModel) {
 @Composable
 fun PerBirdEntryScreen(state: BatchState.PerBirdEntry, viewModel: NfcViewModel) {
     val context = LocalContext.current
-    var sex by remember(state.currentIndex) { mutableStateOf("Unknown") }
+    // Form state. On a clean entry to bird N, initial values default to
+    // empty / "Unknown". On re-entry after a failed submit (Bug 3),
+    // `state.draftXxx` carries the user's prior input back through, so they
+    // don't have to re-type / re-pick / re-take a photo.
+    var sex by remember(state.currentIndex) { mutableStateOf(state.draftSex ?: "Unknown") }
     var bandColor by remember(state.currentIndex) {
-        // Auto-fill from last bird of the same sex
-        mutableStateOf("")
+        // Auto-fill from last bird of the same sex unless we have a draft.
+        mutableStateOf(state.draftBandColor ?: "")
     }
-    var notes by remember(state.currentIndex) { mutableStateOf("") }
-    var weightText by remember(state.currentIndex) { mutableStateOf("") }
-    var photoBitmap by remember(state.currentIndex) { mutableStateOf<Bitmap?>(null) }
+    var notes by remember(state.currentIndex) { mutableStateOf(state.draftNotes ?: "") }
+    var weightText by remember(state.currentIndex) { mutableStateOf(state.draftWeightText ?: "") }
+    var photoBitmap by remember(state.currentIndex) { mutableStateOf<Bitmap?>(state.draftPhotoBitmap) }
 
     val photoLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview(),
     ) { bitmap -> if (bitmap != null) photoBitmap = bitmap }
+
+    // Bug A fix: TakePicturePreview requires the runtime CAMERA permission
+    // when the calling app declares CAMERA in its manifest (which we do).
+    // Without this gate, launching the camera on Android 12+ throws
+    // SecurityException and crashes the activity. Request → grant → launch.
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) photoLauncher.launch(null)
+        else Toast.makeText(context, "Camera permission denied", Toast.LENGTH_SHORT).show()
+    }
+    val launchCamera: () -> Unit = launchCamera@{
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) photoLauncher.launch(null)
+        else cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+    }
 
     val writeResult by viewModel.nfcService.writeResult.collectAsState()
 
@@ -777,15 +908,15 @@ fun PerBirdEntryScreen(state: BatchState.PerBirdEntry, viewModel: NfcViewModel) 
                     modifier = Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)),
                 )
                 Spacer(Modifier.width(12.dp))
-                OutlinedButton(onClick = { photoLauncher.launch(null) }) {
+                OutlinedButton(onClick = launchCamera) {
                     Icon(Icons.Default.CameraAlt, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("Retake")
                 }
             } else {
                 OutlinedButton(
-                    onClick = { photoLauncher.launch(null) },
-                    Modifier.fillMaxWidth(),
+                    onClick = launchCamera,
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(Icons.Default.CameraAlt, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
@@ -807,6 +938,16 @@ fun PerBirdEntryScreen(state: BatchState.PerBirdEntry, viewModel: NfcViewModel) 
 
         Spacer(Modifier.height(16.dp))
 
+        // Error feedback — shown ABOVE the Create button so the user sees
+        // why the prior attempt failed before tapping again. Form state is
+        // preserved (Bug 3) so retrying after a fix is one tap.
+        if (writeResult != null && !writeResult!!.success) {
+            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE))) {
+                Text(writeResult!!.message, Modifier.padding(12.dp), color = Color(0xFFC62828), style = MaterialTheme.typography.bodyMedium)
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
         // Create & Tag button — always enabled, optional fields can be skipped.
         Button(
             onClick = {
@@ -814,7 +955,7 @@ fun PerBirdEntryScreen(state: BatchState.PerBirdEntry, viewModel: NfcViewModel) 
                     sex = sex,
                     bandColor = bandColor,
                     notes = notes,
-                    weightGrams = weightText.toDoubleOrNull(),
+                    weightText = weightText,
                     photoBitmap = photoBitmap,
                     context = context,
                 )
@@ -825,14 +966,6 @@ fun PerBirdEntryScreen(state: BatchState.PerBirdEntry, viewModel: NfcViewModel) 
             Icon(Icons.Default.Nfc, null, Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
             Text("Create & Tag Bird", fontSize = 16.sp)
-        }
-
-        // Error feedback
-        if (writeResult != null && !writeResult!!.success) {
-            Spacer(Modifier.height(8.dp))
-            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE))) {
-                Text(writeResult!!.message, Modifier.padding(12.dp), color = Color(0xFFC62828), style = MaterialTheme.typography.bodyMedium)
-            }
         }
 
         // Recent graduates
@@ -933,6 +1066,20 @@ fun PostTagConfirmScreen(state: BatchState.PostTagConfirm, viewModel: NfcViewMod
         }
     }
 
+    // Bug A fix: gate camera launch on runtime CAMERA permission.
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) photoLauncher.launch(null)
+        else Toast.makeText(context, "Camera permission denied", Toast.LENGTH_SHORT).show()
+    }
+    val launchCamera: () -> Unit = launchCamera@{
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) photoLauncher.launch(null)
+        else cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+    }
+
     val maleCount = state.graduated.count { it.bird.sex?.lowercase() == "male" }
     val femaleCount = state.graduated.count { it.bird.sex?.lowercase() == "female" }
     val unknownCount = state.graduated.size - maleCount - femaleCount
@@ -1001,8 +1148,8 @@ fun PostTagConfirmScreen(state: BatchState.PostTagConfirm, viewModel: NfcViewMod
                     }
                 } else {
                     Button(
-                        onClick = { photoLauncher.launch(null) },
-                        Modifier.fillMaxWidth(),
+                        onClick = launchCamera,
+                        modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
                     ) {
                         Icon(Icons.Default.CameraAlt, null, Modifier.size(18.dp))
@@ -1332,6 +1479,49 @@ fun TagConflictDialog(conflict: TagConflict, existingBird: Bird, onConfirm: () -
                     Button(onClick = onConfirm, colors = ButtonDefaults.buttonColors(containerColor = if (isActive) AlertRed else SageGreen)) {
                         Text(if (isActive) "Reassign Tag" else "Reassign")
                     }
+                }
+            }
+        }
+    }
+}
+
+// =====================================================================
+// Orphan-tag dialog (Bug C): tag references a bird that no longer exists.
+// Always requires explicit user confirmation before the tag can be reused.
+// =====================================================================
+
+@Composable
+fun OrphanTagDialog(orphan: OrphanTag, onReuse: () -> Unit, onCancel: () -> Unit) {
+    Dialog(onDismissRequest = onCancel) {
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(Modifier.padding(20.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Warning, null, tint = AlertYellow, modifier = Modifier.size(28.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Text("Orphan tag", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "This tag is registered to bird #${orphan.orphanBirdId} but that bird no longer exists in the database. Reuse this tag for a new bird?",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Tag id: ${orphan.tagId}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(20.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    OutlinedButton(onClick = onCancel) { Text("Cancel") }
+                    Spacer(Modifier.width(8.dp))
+                    Button(
+                        onClick = onReuse,
+                        colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
+                    ) { Text("Reuse Tag") }
                 }
             }
         }

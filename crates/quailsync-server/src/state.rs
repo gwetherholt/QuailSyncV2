@@ -50,10 +50,26 @@ pub fn acquire_db(state: &AppState) -> std::sync::MutexGuard<'_, Connection> {
 }
 
 /// Convert a rusqlite error into a 500 response.
+///
+/// The actual error is logged server-side for debugging; the client receives
+/// a generic `{ "error": "internal_error", "message": "…" }` body so SQL
+/// internals never leak to the UI. (See state.rs and routes/*.rs callers —
+/// raw SQL error messages used to bubble all the way through to the Android
+/// app, e.g. "NOT NULL constraint failed: birds.bloodline_id".)
 pub fn db_error(e: rusqlite::Error) -> Response {
+    eprintln!("[db_error] {e}");
+    internal_error_response()
+}
+
+/// Generic 500 response shared by every internal-error path. Centralised so
+/// callers can't accidentally leak implementation detail.
+pub fn internal_error_response() -> Response {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
-        format!("Database error: {e}"),
+        axum::Json(serde_json::json!({
+            "error": "internal_error",
+            "message": "Something went wrong on our end. Please try again or contact support.",
+        })),
     )
         .into_response()
 }

@@ -33,11 +33,10 @@ pub(crate) async fn create_backup() -> impl IntoResponse {
             )
                 .into_response()
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Backup failed: {e}"),
-        )
-            .into_response(),
+        Err(e) => {
+            eprintln!("[create_backup] {e}");
+            crate::state::internal_error_response()
+        }
     }
 }
 
@@ -98,11 +97,10 @@ pub(crate) async fn restore_backup(Json(body): Json<RestoreRequest>) -> impl Int
             "Database restored. Restart server to apply.",
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Restore failed: {e}"),
-        )
-            .into_response(),
+        Err(e) => {
+            eprintln!("[restore_backup] {e}");
+            crate::state::internal_error_response()
+        }
     }
 }
 

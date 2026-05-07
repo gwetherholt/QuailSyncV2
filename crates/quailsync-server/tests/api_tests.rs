@@ -1069,4 +1069,141 @@ mod lineage_tests {
         assert!(brooder_cols.contains(&"lineage_id".to_string()));
         assert!(!brooder_cols.contains(&"bloodline_id".to_string()));
     }
+
+    /// Regression test for the partially-applied migration on the live Pi.
+    ///
+    /// The earlier `legacy_bloodline_id_rows_migrate_into_junction` test
+    /// seeded the old schema but did not create the `idx_birds_bloodline`
+    /// secondary index that the original schema shipped with. Without that
+    /// index, `ALTER TABLE birds DROP COLUMN bloodline_id` silently
+    /// succeeds; with it, SQLite refuses and the buggy `.ok()` swallowed
+    /// the error — leaving live DBs with an orphaned NOT NULL column that
+    /// breaks every bird insert.
+    ///
+    /// This test seeds the *exact* broken state (column + blocking index +
+    /// existing rows) and asserts that the corrective migration drops both
+    /// the index and the column, preserves the data via the junction, and
+    /// is idempotent across two `init_db` calls.
+    #[tokio::test]
+    async fn corrective_migration_drops_birds_bloodline_index_and_column() {
+        use quailsync_server::init_db;
+        use rusqlite::Connection;
+
+        let conn = Connection::open_in_memory().unwrap();
+        // Seed the original (pre-refactor) schema, complete with the index
+        // that blocks DROP COLUMN.
+        conn.execute_batch(
+            "CREATE TABLE bloodlines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                source TEXT NOT NULL,
+                notes TEXT
+            );
+             CREATE TABLE birds (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                band_color TEXT,
+                sex TEXT NOT NULL,
+                bloodline_id INTEGER NOT NULL REFERENCES bloodlines(id),
+                hatch_date TEXT NOT NULL,
+                mother_id INTEGER,
+                father_id INTEGER,
+                generation INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'Active',
+                notes TEXT,
+                nfc_tag_id TEXT UNIQUE
+            );
+             CREATE INDEX idx_birds_bloodline ON birds(bloodline_id);
+             CREATE TABLE brooders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                bloodline_id INTEGER REFERENCES bloodlines(id),
+                life_stage TEXT NOT NULL DEFAULT 'Chick',
+                qr_code TEXT NOT NULL DEFAULT '',
+                notes TEXT
+            );
+             CREATE TABLE chick_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                clutch_id INTEGER,
+                bloodline_id INTEGER NOT NULL REFERENCES bloodlines(id),
+                brooder_id INTEGER,
+                initial_count INTEGER NOT NULL,
+                current_count INTEGER NOT NULL,
+                hatch_date TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'Active',
+                notes TEXT
+            );",
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO bloodlines (name, source) VALUES ('Fernbank', 'Local')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO birds (sex, bloodline_id, hatch_date) VALUES ('Male', 1, '2026-01-01')",
+            [],
+        ).unwrap();
+
+        // Sanity: the index exists in the seed before migration.
+        let pre_index: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type='index' AND name='idx_birds_bloodline'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pre_index, 1, "seed should include idx_birds_bloodline");
+
+        // Run the migration.
+        init_db(&conn);
+
+        // Column dropped.
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(birds)").unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            !cols.contains(&"bloodline_id".to_string()),
+            "birds.bloodline_id should be dropped, got cols: {cols:?}",
+        );
+
+        // Index dropped.
+        let post_index: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type='index' AND name='idx_birds_bloodline'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(post_index, 0, "idx_birds_bloodline should be dropped");
+
+        // Data preserved in the junction.
+        let bird_lineage_pairs: Vec<(i64, i64)> = conn
+            .prepare("SELECT bird_id, lineage_id FROM bird_lineages ORDER BY bird_id").unwrap()
+            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert_eq!(bird_lineage_pairs, vec![(1, 1)]);
+
+        // Inserting a bird without bloodline_id now succeeds (the symptom we
+        // were getting on the Pi was: NOT NULL constraint failed: birds.bloodline_id).
+        conn.execute(
+            "INSERT INTO birds (sex, hatch_date, status) VALUES ('Female', '2026-02-01', 'Active')",
+            [],
+        ).expect("insert into post-migration birds should succeed without bloodline_id");
+
+        // Idempotency: running init_db a second time on the already-migrated
+        // schema must not panic or change the result.
+        init_db(&conn);
+        let cols2: Vec<String> = conn
+            .prepare("PRAGMA table_info(birds)").unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(!cols2.contains(&"bloodline_id".to_string()));
+    }
 }

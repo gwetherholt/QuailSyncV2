@@ -197,7 +197,10 @@ class ClutchViewModel(application: Application) : AndroidViewModel(application) 
 // =====================================================================
 
 @Composable
-fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
+fun ClutchScreen(
+    viewModel: ClutchViewModel = viewModel(),
+    onBandGroup: (ChickGroupDto) -> Unit = {},
+) {
     val clutches by viewModel.clutches.collectAsState()
     val lineages by viewModel.lineages.collectAsState()
     val chickGroups by viewModel.chickGroups.collectAsState()
@@ -280,7 +283,8 @@ fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
                         items(activeGroups, key = { "group-${it.id}" }) { group ->
                             ChickGroupCard(group, group.brooderId?.let { brooderMap[it]?.name },
                                 onEdit = { editGroup = group }, onDelete = { deleteGroup = group },
-                                onLogMortality = { mortalityGroup = group })
+                                onLogMortality = { mortalityGroup = group },
+                                onBandGroup = { onBandGroup(group) })
                         }
                     }
                     if (graduatedGroups.isNotEmpty()) {
@@ -930,7 +934,7 @@ fun ClutchCard(clutch: Clutch, lineageName: String?, brooderName: String? = null
 // =====================================================================
 
 @Composable
-fun ChickGroupCard(group: ChickGroupDto, brooderName: String?, onEdit: () -> Unit = {}, onDelete: () -> Unit = {}, onLogMortality: () -> Unit = {}) {
+fun ChickGroupCard(group: ChickGroupDto, brooderName: String?, onEdit: () -> Unit = {}, onDelete: () -> Unit = {}, onLogMortality: () -> Unit = {}, onBandGroup: () -> Unit = {}) {
     val today = remember { LocalDate.now() }
     val hatchDate = remember(group.hatchDate) { parseDate(group.hatchDate) }
     val ageDays = remember(hatchDate, today) { hatchDate?.let { ChronoUnit.DAYS.between(it, today).toInt() } ?: 0 }
@@ -992,7 +996,7 @@ fun ChickGroupCard(group: ChickGroupDto, brooderName: String?, onEdit: () -> Uni
             Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onLogMortality, Modifier.weight(1f)) { Text("\uD83D\uDC25", fontSize = 14.sp); Spacer(Modifier.width(4.dp)); Text("Log Mortality") }
                 Button(
-                    onClick = {},
+                    onClick = onBandGroup,
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
                     elevation = ButtonDefaults.buttonElevation(defaultElevation = if (readyToTransition) 6.dp else 2.dp)

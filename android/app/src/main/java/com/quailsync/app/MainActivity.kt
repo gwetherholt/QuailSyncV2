@@ -303,7 +303,28 @@ fun QuailSyncApp(
             composable(Screen.Cameras.route) { CameraScreen() }
             composable(Screen.Flock.route) { FlockScreen() }
             composable(Screen.Nfc.route) { NfcScreen(nfcService = nfcService, viewModel = nfcViewModel) }
-            composable(Screen.Clutches.route) { ClutchScreen() }
+            composable(Screen.Clutches.route) {
+                ClutchScreen(
+                    onBandGroup = { group ->
+                        // Seed the NFC batch with the group's current count and
+                        // (first) lineage so users land directly on the per-bird
+                        // entry screen instead of the empty Setup screen.
+                        // Multi-lineage propagation through the batch flow is a
+                        // separate follow-up — for now only the first lineage
+                        // tag is carried into each new bird.
+                        val firstLineageId = group.lineages.firstOrNull()?.id
+                        if (firstLineageId != null && group.currentCount > 0) {
+                            nfcViewModel.startBatchTagging(group.currentCount, firstLineageId)
+                        } else {
+                            nfcViewModel.openBatchSetup()
+                        }
+                        navController.navigate(Screen.Nfc.route) {
+                            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                            launchSingleTop = true; restoreState = true
+                        }
+                    },
+                )
+            }
             composable(Screen.Settings.route) { SettingsScreen() }
             composable("brooder/{id}") { backStackEntry ->
                 val id = backStackEntry.arguments?.getString("id")?.toIntOrNull() ?: 0

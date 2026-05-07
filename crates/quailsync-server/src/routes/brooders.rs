@@ -44,7 +44,10 @@ pub(crate) async fn create_brooder(
                 qr_code: body.qr_code, notes: body.notes, camera_url: body.camera_url,
             })).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create brooder: {e}")).into_response(),
+        Err(e) => {
+            eprintln!("[create_brooder] {e}");
+            crate::state::internal_error_response()
+        }
     }
 }
 
