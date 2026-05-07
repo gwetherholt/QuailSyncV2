@@ -13,9 +13,7 @@ use crate::state::{acquire_db, db_error, AppState};
 
 // ---------- internal row mapping --------------------------------------------
 
-fn row_to_system_alert(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<SystemAlert> {
+fn row_to_system_alert(row: &rusqlite::Row<'_>) -> rusqlite::Result<SystemAlert> {
     let resolved_at: Option<String> = row.get(7)?;
     let dismissed_at: Option<String> = row.get(8)?;
     let is_active = resolved_at.is_none() && dismissed_at.is_none();
@@ -119,7 +117,11 @@ pub(crate) async fn create_alert(
             }
             match fetch_alert_by_id(&conn, existing.id) {
                 Ok(Some(a)) => (StatusCode::OK, Json(a)).into_response(),
-                Ok(None) => (StatusCode::INTERNAL_SERVER_ERROR, "alert vanished after update").into_response(),
+                Ok(None) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "alert vanished after update",
+                )
+                    .into_response(),
                 Err(e) => db_error(e),
             }
         }
@@ -143,7 +145,11 @@ pub(crate) async fn create_alert(
             let new_id = conn.last_insert_rowid();
             match fetch_alert_by_id(&conn, new_id) {
                 Ok(Some(a)) => (StatusCode::CREATED, Json(a)).into_response(),
-                Ok(None) => (StatusCode::INTERNAL_SERVER_ERROR, "alert vanished after insert").into_response(),
+                Ok(None) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "alert vanished after insert",
+                )
+                    .into_response(),
                 Err(e) => db_error(e),
             }
         }

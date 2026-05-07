@@ -1,8 +1,8 @@
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use quailsync_common::{
-    Bird, BirdStatus, Lineage, ChickGroup, CreateBird, CreateLineage, CreateChickGroup,
-    GraduateBird, GraduateRequest, InbreedingCoefficient, Sex,
+    Bird, BirdStatus, ChickGroup, CreateBird, CreateChickGroup, CreateLineage, GraduateBird,
+    GraduateRequest, InbreedingCoefficient, Lineage, Sex,
 };
 use quailsync_server::{build_app, init_db, AppState};
 use rusqlite::Connection;
@@ -101,9 +101,7 @@ async fn create_and_list_lineages() {
     assert_eq!(resp2.status(), 201);
 
     // GET all lineages
-    let resp = reqwest::get(format!("{base}/api/lineages"))
-        .await
-        .unwrap();
+    let resp = reqwest::get(format!("{base}/api/lineages")).await.unwrap();
     assert_eq!(resp.status(), 200);
 
     let list: Vec<Lineage> = resp.json().await.unwrap();
@@ -590,30 +588,58 @@ async fn graduate_creates_birds_with_unique_ids_and_intake_fields() {
     assert_eq!(tags.len(), 3, "graduated birds must have unique tags");
 
     // Optional fields are reflected on the response.
-    let bird_a = birds.iter().find(|b| b.nfc_tag_id.as_deref() == Some("TAG-A")).unwrap();
+    let bird_a = birds
+        .iter()
+        .find(|b| b.nfc_tag_id.as_deref() == Some("TAG-A"))
+        .unwrap();
     assert_eq!(bird_a.photo_path.as_deref(), Some("bird_photos/grad_a.jpg"));
     assert_eq!(bird_a.sex, Sex::Male);
-    let bird_b = birds.iter().find(|b| b.nfc_tag_id.as_deref() == Some("TAG-B")).unwrap();
+    let bird_b = birds
+        .iter()
+        .find(|b| b.nfc_tag_id.as_deref() == Some("TAG-B"))
+        .unwrap();
     assert!(bird_b.photo_path.is_none());
 
     // Weight history: bird A and bird C should each have one weight_record;
     // bird B should have none.
     let weights_a: Vec<serde_json::Value> = client
         .get(format!("{base}/api/birds/{}/weights", bird_a.id))
-        .send().await.unwrap().json().await.unwrap();
-    assert_eq!(weights_a.len(), 1, "bird A should have its initial weight logged");
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        weights_a.len(),
+        1,
+        "bird A should have its initial weight logged"
+    );
     assert!((weights_a[0]["weight_grams"].as_f64().unwrap() - 142.5).abs() < f64::EPSILON);
 
     let weights_b: Vec<serde_json::Value> = client
         .get(format!("{base}/api/birds/{}/weights", bird_b.id))
-        .send().await.unwrap().json().await.unwrap();
-    assert!(weights_b.is_empty(), "bird B had no weight_grams in payload");
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        weights_b.is_empty(),
+        "bird B had no weight_grams in payload"
+    );
 
     // Status should be Active and group should be flipped to Graduated.
     assert!(birds.iter().all(|b| b.status == BirdStatus::Active));
     let groups: Vec<ChickGroup> = client
         .get(format!("{base}/api/chick-groups"))
-        .send().await.unwrap().json().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let g = groups.iter().find(|g| g.id == group.id).unwrap();
     assert_eq!(format!("{:?}", g.status), "Graduated");
 }
@@ -625,17 +651,34 @@ async fn graduate_accepts_payload_without_new_fields() {
     let base = spawn_test_server().await;
     let client = reqwest::Client::new();
 
-    client.post(format!("{base}/api/lineages"))
-        .json(&CreateLineage { name: "X".into(), source: "L".into(), notes: None })
-        .send().await.unwrap();
+    client
+        .post(format!("{base}/api/lineages"))
+        .json(&CreateLineage {
+            name: "X".into(),
+            source: "L".into(),
+            notes: None,
+        })
+        .send()
+        .await
+        .unwrap();
 
     let today = chrono::Local::now().date_naive();
-    let group: ChickGroup = client.post(format!("{base}/api/chick-groups"))
+    let group: ChickGroup = client
+        .post(format!("{base}/api/chick-groups"))
         .json(&CreateChickGroup {
-            clutch_id: None, lineage_ids: vec![1], brooder_id: None,
-            initial_count: 2, hatch_date: today - chrono::Duration::days(40), notes: None,
+            clutch_id: None,
+            lineage_ids: vec![1],
+            brooder_id: None,
+            initial_count: 2,
+            hatch_date: today - chrono::Duration::days(40),
+            notes: None,
         })
-        .send().await.unwrap().json().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
 
     // Send a raw JSON payload with only the legacy fields (no weight_grams / photo_path).
     let raw_payload = serde_json::json!({
@@ -647,7 +690,9 @@ async fn graduate_accepts_payload_without_new_fields() {
     let resp = client
         .post(format!("{base}/api/chick-groups/{}/graduate", group.id))
         .json(&raw_payload)
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200, "legacy payload must still graduate");
     let birds: Vec<Bird> = resp.json().await.unwrap();
     assert_eq!(birds.len(), 2);
@@ -684,7 +729,9 @@ mod system_alerts_tests {
         let resp1 = client
             .post(format!("{base}/api/alerts"))
             .json(&sample("backup_failed", "first failure"))
-            .send().await.unwrap();
+            .send()
+            .await
+            .unwrap();
         assert_eq!(resp1.status(), 201);
         let first: SystemAlert = resp1.json().await.unwrap();
         assert!(first.is_active);
@@ -693,7 +740,9 @@ mod system_alerts_tests {
         let resp2 = client
             .post(format!("{base}/api/alerts"))
             .json(&sample("backup_failed", "second failure"))
-            .send().await.unwrap();
+            .send()
+            .await
+            .unwrap();
         assert_eq!(resp2.status(), 200);
         let second: SystemAlert = resp2.json().await.unwrap();
         assert_eq!(second.id, first.id, "should reuse the existing row");
@@ -702,13 +751,21 @@ mod system_alerts_tests {
 
         // metadata_json should now contain occurrences=2.
         let meta: serde_json::Value = serde_json::from_str(
-            second.metadata_json.as_deref().expect("metadata populated on collapse"),
-        ).unwrap();
+            second
+                .metadata_json
+                .as_deref()
+                .expect("metadata populated on collapse"),
+        )
+        .unwrap();
         assert_eq!(meta.get("occurrences").and_then(|v| v.as_i64()), Some(2));
 
         // Active list should have exactly one row.
         let active: Vec<SystemAlert> = reqwest::get(format!("{base}/api/alerts/active"))
-            .await.unwrap().json().await.unwrap();
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         assert_eq!(active.len(), 1);
     }
 
@@ -717,23 +774,43 @@ mod system_alerts_tests {
         let base = spawn_test_server().await;
         let client = reqwest::Client::new();
 
-        client.post(format!("{base}/api/alerts"))
-            .json(&sample("backup_failed", "boom")).send().await.unwrap();
+        client
+            .post(format!("{base}/api/alerts"))
+            .json(&sample("backup_failed", "boom"))
+            .send()
+            .await
+            .unwrap();
 
-        let resp = client.post(format!("{base}/api/alerts/resolve"))
-            .json(&ResolveSystemAlertRequest { alert_key: "backup_failed".into() })
-            .send().await.unwrap();
+        let resp = client
+            .post(format!("{base}/api/alerts/resolve"))
+            .json(&ResolveSystemAlertRequest {
+                alert_key: "backup_failed".into(),
+            })
+            .send()
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 200);
         let body: ResolveSystemAlertResponse = resp.json().await.unwrap();
         assert_eq!(body.resolved, 1);
 
         let active: Vec<SystemAlert> = reqwest::get(format!("{base}/api/alerts/active"))
-            .await.unwrap().json().await.unwrap();
-        assert!(active.is_empty(), "resolved alert should not appear in active list");
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(
+            active.is_empty(),
+            "resolved alert should not appear in active list"
+        );
 
         // The row is still in the recent list, just with resolved_at set.
         let recent: Vec<SystemAlert> = reqwest::get(format!("{base}/api/alerts/recent"))
-            .await.unwrap().json().await.unwrap();
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         assert_eq!(recent.len(), 1);
         assert!(recent[0].resolved_at.is_some());
         assert!(!recent[0].is_active);
@@ -744,21 +821,36 @@ mod system_alerts_tests {
         let base = spawn_test_server().await;
         let client = reqwest::Client::new();
 
-        let created: SystemAlert = client.post(format!("{base}/api/alerts"))
+        let created: SystemAlert = client
+            .post(format!("{base}/api/alerts"))
             .json(&sample("cleanup_failed", "disk full"))
-            .send().await.unwrap()
-            .json().await.unwrap();
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
 
-        let resp = client.post(format!("{base}/api/alerts/{}/dismiss", created.id))
-            .send().await.unwrap();
+        let resp = client
+            .post(format!("{base}/api/alerts/{}/dismiss", created.id))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 200);
         let dismissed: SystemAlert = resp.json().await.unwrap();
         assert!(dismissed.dismissed_at.is_some());
-        assert!(dismissed.resolved_at.is_none(), "dismiss is independent of resolve");
+        assert!(
+            dismissed.resolved_at.is_none(),
+            "dismiss is independent of resolve"
+        );
         assert!(!dismissed.is_active);
 
         let active: Vec<SystemAlert> = reqwest::get(format!("{base}/api/alerts/active"))
-            .await.unwrap().json().await.unwrap();
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         assert!(active.is_empty());
     }
 
@@ -768,27 +860,65 @@ mod system_alerts_tests {
         let client = reqwest::Client::new();
 
         // Three independent alert keys.
-        let a: SystemAlert = client.post(format!("{base}/api/alerts"))
-            .json(&sample("backup_failed", "a")).send().await.unwrap().json().await.unwrap();
-        let _b: SystemAlert = client.post(format!("{base}/api/alerts"))
-            .json(&sample("deadman_no_recent_backup", "b")).send().await.unwrap().json().await.unwrap();
-        let c: SystemAlert = client.post(format!("{base}/api/alerts"))
-            .json(&sample("cleanup_failed", "c")).send().await.unwrap().json().await.unwrap();
+        let a: SystemAlert = client
+            .post(format!("{base}/api/alerts"))
+            .json(&sample("backup_failed", "a"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let _b: SystemAlert = client
+            .post(format!("{base}/api/alerts"))
+            .json(&sample("deadman_no_recent_backup", "b"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let c: SystemAlert = client
+            .post(format!("{base}/api/alerts"))
+            .json(&sample("cleanup_failed", "c"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
 
         // Resolve "a", dismiss "c". "b" remains active.
-        client.post(format!("{base}/api/alerts/resolve"))
-            .json(&ResolveSystemAlertRequest { alert_key: a.alert_key.clone() })
-            .send().await.unwrap();
-        client.post(format!("{base}/api/alerts/{}/dismiss", c.id)).send().await.unwrap();
+        client
+            .post(format!("{base}/api/alerts/resolve"))
+            .json(&ResolveSystemAlertRequest {
+                alert_key: a.alert_key.clone(),
+            })
+            .send()
+            .await
+            .unwrap();
+        client
+            .post(format!("{base}/api/alerts/{}/dismiss", c.id))
+            .send()
+            .await
+            .unwrap();
 
         let active: Vec<SystemAlert> = reqwest::get(format!("{base}/api/alerts/active"))
-            .await.unwrap().json().await.unwrap();
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].alert_key, "deadman_no_recent_backup");
 
         // Recent should still surface all three.
         let recent: Vec<SystemAlert> = reqwest::get(format!("{base}/api/alerts/recent?limit=10"))
-            .await.unwrap().json().await.unwrap();
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         assert_eq!(recent.len(), 3);
     }
 
@@ -796,7 +926,11 @@ mod system_alerts_tests {
     async fn dismiss_unknown_id_returns_404() {
         let base = spawn_test_server().await;
         let client = reqwest::Client::new();
-        let resp = client.post(format!("{base}/api/alerts/9999/dismiss")).send().await.unwrap();
+        let resp = client
+            .post(format!("{base}/api/alerts/9999/dismiss"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 404);
     }
 }
@@ -812,12 +946,30 @@ mod lineage_tests {
     async fn seed_two_lineages(base: &str, client: &reqwest::Client) -> (Lineage, Lineage) {
         let a: Lineage = client
             .post(format!("{base}/api/lineages"))
-            .json(&CreateLineage { name: "A".into(), source: "S".into(), notes: None })
-            .send().await.unwrap().json().await.unwrap();
+            .json(&CreateLineage {
+                name: "A".into(),
+                source: "S".into(),
+                notes: None,
+            })
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         let b: Lineage = client
             .post(format!("{base}/api/lineages"))
-            .json(&CreateLineage { name: "B".into(), source: "S".into(), notes: None })
-            .send().await.unwrap().json().await.unwrap();
+            .json(&CreateLineage {
+                name: "B".into(),
+                source: "S".into(),
+                notes: None,
+            })
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         (a, b)
     }
 
@@ -832,7 +984,9 @@ mod lineage_tests {
                 "initial_count": 5,
                 "hatch_date": "2026-03-01",
             }))
-            .send().await.unwrap();
+            .send()
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 400);
     }
 
@@ -851,7 +1005,9 @@ mod lineage_tests {
                 notes: None,
                 lineage_ids: vec![a.id],
             })
-            .send().await.unwrap();
+            .send()
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 201);
         let g: ChickGroup = resp.json().await.unwrap();
         assert_eq!(g.lineages.len(), 1);
@@ -874,7 +1030,9 @@ mod lineage_tests {
                 notes: None,
                 lineage_ids: vec![a.id, b.id],
             })
-            .send().await.unwrap();
+            .send()
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 201);
         let g: ChickGroup = resp.json().await.unwrap();
         let mut names: Vec<String> = g.lineages.iter().map(|l| l.name.clone()).collect();
@@ -897,14 +1055,23 @@ mod lineage_tests {
                 notes: None,
                 lineage_ids: vec![a.id],
             })
-            .send().await.unwrap().json().await.unwrap();
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         assert_eq!(g.lineages.len(), 1);
 
         // Replace [a] with [a, b].
         let resp = client
             .put(format!("{base}/api/chick-groups/{}/lineages", g.id))
-            .json(&ReplaceLineagesRequest { lineage_ids: vec![a.id, b.id] })
-            .send().await.unwrap();
+            .json(&ReplaceLineagesRequest {
+                lineage_ids: vec![a.id, b.id],
+            })
+            .send()
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 200);
         let updated: ChickGroup = resp.json().await.unwrap();
         assert_eq!(updated.lineages.len(), 2);
@@ -912,8 +1079,12 @@ mod lineage_tests {
         // Replace with [b] only — should remove a.
         let resp = client
             .put(format!("{base}/api/chick-groups/{}/lineages", g.id))
-            .json(&ReplaceLineagesRequest { lineage_ids: vec![b.id] })
-            .send().await.unwrap();
+            .json(&ReplaceLineagesRequest {
+                lineage_ids: vec![b.id],
+            })
+            .send()
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 200);
         let updated: ChickGroup = resp.json().await.unwrap();
         assert_eq!(updated.lineages.len(), 1);
@@ -928,17 +1099,27 @@ mod lineage_tests {
         let g: ChickGroup = client
             .post(format!("{base}/api/chick-groups"))
             .json(&CreateChickGroup {
-                clutch_id: None, brooder_id: None,
+                clutch_id: None,
+                brooder_id: None,
                 initial_count: 5,
                 hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
                 notes: None,
                 lineage_ids: vec![a.id],
             })
-            .send().await.unwrap().json().await.unwrap();
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         let resp = client
             .put(format!("{base}/api/chick-groups/{}/lineages", g.id))
-            .json(&ReplaceLineagesRequest { lineage_ids: vec![] })
-            .send().await.unwrap();
+            .json(&ReplaceLineagesRequest {
+                lineage_ids: vec![],
+            })
+            .send()
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 400);
     }
 
@@ -955,7 +1136,9 @@ mod lineage_tests {
                 "generation": 1,
                 "status": "Active",
             }))
-            .send().await.unwrap();
+            .send()
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 400);
     }
 
@@ -1007,22 +1190,34 @@ mod lineage_tests {
                 status TEXT NOT NULL DEFAULT 'Active',
                 notes TEXT
             );",
-        ).unwrap();
-        conn.execute("INSERT INTO bloodlines (name, source) VALUES ('Fernbank', 'Local')", []).unwrap();
-        conn.execute("INSERT INTO bloodlines (name, source) VALUES ('NWQuail', 'NW')", []).unwrap();
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO bloodlines (name, source) VALUES ('Fernbank', 'Local')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO bloodlines (name, source) VALUES ('NWQuail', 'NW')",
+            [],
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO birds (sex, bloodline_id, hatch_date) VALUES ('Male', 1, '2026-01-01')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO birds (sex, bloodline_id, hatch_date) VALUES ('Female', 2, '2026-01-01')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO chick_groups (bloodline_id, initial_count, current_count, hatch_date)
              VALUES (1, 10, 10, '2026-03-01')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         // Run the migration.
         init_db(&conn);
@@ -1035,7 +1230,8 @@ mod lineage_tests {
 
         // Old bloodline_id columns are dropped.
         let cols: Vec<String> = conn
-            .prepare("PRAGMA table_info(birds)").unwrap()
+            .prepare("PRAGMA table_info(birds)")
+            .unwrap()
             .query_map([], |row| row.get::<_, String>(1))
             .unwrap()
             .filter_map(|r| r.ok())
@@ -1044,7 +1240,8 @@ mod lineage_tests {
 
         // Junction rows match the legacy assignments.
         let bird_lineage_pairs: Vec<(i64, i64)> = conn
-            .prepare("SELECT bird_id, lineage_id FROM bird_lineages ORDER BY bird_id").unwrap()
+            .prepare("SELECT bird_id, lineage_id FROM bird_lineages ORDER BY bird_id")
+            .unwrap()
             .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
             .unwrap()
             .filter_map(|r| r.ok())
@@ -1052,7 +1249,8 @@ mod lineage_tests {
         assert_eq!(bird_lineage_pairs, vec![(1, 1), (2, 2)]);
 
         let group_lineage_pairs: Vec<(i64, i64)> = conn
-            .prepare("SELECT chick_group_id, lineage_id FROM chick_group_lineages").unwrap()
+            .prepare("SELECT chick_group_id, lineage_id FROM chick_group_lineages")
+            .unwrap()
             .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
             .unwrap()
             .filter_map(|r| r.ok())
@@ -1061,7 +1259,8 @@ mod lineage_tests {
 
         // Brooders renamed in place — column is now lineage_id.
         let brooder_cols: Vec<String> = conn
-            .prepare("PRAGMA table_info(brooders)").unwrap()
+            .prepare("PRAGMA table_info(brooders)")
+            .unwrap()
             .query_map([], |row| row.get::<_, String>(1))
             .unwrap()
             .filter_map(|r| r.ok())
@@ -1132,15 +1331,18 @@ mod lineage_tests {
                 status TEXT NOT NULL DEFAULT 'Active',
                 notes TEXT
             );",
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO bloodlines (name, source) VALUES ('Fernbank', 'Local')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO birds (sex, bloodline_id, hatch_date) VALUES ('Male', 1, '2026-01-01')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         // Sanity: the index exists in the seed before migration.
         let pre_index: i64 = conn
@@ -1158,7 +1360,8 @@ mod lineage_tests {
 
         // Column dropped.
         let cols: Vec<String> = conn
-            .prepare("PRAGMA table_info(birds)").unwrap()
+            .prepare("PRAGMA table_info(birds)")
+            .unwrap()
             .query_map([], |row| row.get::<_, String>(1))
             .unwrap()
             .filter_map(|r| r.ok())
@@ -1181,7 +1384,8 @@ mod lineage_tests {
 
         // Data preserved in the junction.
         let bird_lineage_pairs: Vec<(i64, i64)> = conn
-            .prepare("SELECT bird_id, lineage_id FROM bird_lineages ORDER BY bird_id").unwrap()
+            .prepare("SELECT bird_id, lineage_id FROM bird_lineages ORDER BY bird_id")
+            .unwrap()
             .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
             .unwrap()
             .filter_map(|r| r.ok())
@@ -1193,13 +1397,15 @@ mod lineage_tests {
         conn.execute(
             "INSERT INTO birds (sex, hatch_date, status) VALUES ('Female', '2026-02-01', 'Active')",
             [],
-        ).expect("insert into post-migration birds should succeed without bloodline_id");
+        )
+        .expect("insert into post-migration birds should succeed without bloodline_id");
 
         // Idempotency: running init_db a second time on the already-migrated
         // schema must not panic or change the result.
         init_db(&conn);
         let cols2: Vec<String> = conn
-            .prepare("PRAGMA table_info(birds)").unwrap()
+            .prepare("PRAGMA table_info(birds)")
+            .unwrap()
             .query_map([], |row| row.get::<_, String>(1))
             .unwrap()
             .filter_map(|r| r.ok())

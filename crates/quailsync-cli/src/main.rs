@@ -3,13 +3,13 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 use qrcode::QrCode;
 use quailsync_common::{
-    Alert, Bird, BirdStatus, Lineage, BreedingGroup, Brooder, BrooderReading, CameraFeed,
-    CameraStatus, ChickGroup, ChickMortalityLog, Clutch, ClutchStatus, CreateBird, CreateLineage,
-    CreateBreedingGroup, CreateBrooder, CreateCameraFeed, CreateChickGroup, CreateClutch,
+    Alert, Bird, BirdStatus, BreedingGroup, Brooder, BrooderReading, CameraFeed, CameraStatus,
+    ChickGroup, ChickMortalityLog, Clutch, ClutchStatus, CreateBird, CreateBreedingGroup,
+    CreateBrooder, CreateCameraFeed, CreateChickGroup, CreateClutch, CreateLineage,
     CreateProcessingRecord, CreateWeightRecord, CullReason, CullRecommendation, FrameCapture,
-    InbreedingCoefficient, LifeStage, MortalityRequest, ProcessingReason, ProcessingRecord,
-    ProcessingStatus, Severity, Sex, SystemMetrics, UpdateClutch, UpdateProcessingRecord,
-    WeightRecord, COTURNIX_BUTCHER_WEIGHT_GRAMS,
+    InbreedingCoefficient, LifeStage, Lineage, MortalityRequest, ProcessingReason,
+    ProcessingRecord, ProcessingStatus, Severity, Sex, SystemMetrics, UpdateClutch,
+    UpdateProcessingRecord, WeightRecord, COTURNIX_BUTCHER_WEIGHT_GRAMS,
 };
 use serde::Deserialize;
 
@@ -682,7 +682,11 @@ async fn cmd_bird_add(
         "Created".green().bold(),
         bird.id,
         bird.sex,
-        bird.lineages.iter().map(|l| l.name.as_str()).collect::<Vec<_>>().join(", "),
+        bird.lineages
+            .iter()
+            .map(|l| l.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
     );
     Ok(())
 }
@@ -1546,11 +1550,7 @@ async fn cmd_flock_cull_review(base: &str) -> anyhow::Result<()> {
             .find(|b| b.id == id)
             .map(|b| {
                 let band = b.band_color.as_deref().unwrap_or("-");
-                let bl_name = b
-                    .lineages
-                    .first()
-                    .map(|bl| bl.name.as_str())
-                    .unwrap_or("?");
+                let bl_name = b.lineages.first().map(|bl| bl.name.as_str()).unwrap_or("?");
                 format!("#{} ({}, {})", b.id, band, bl_name)
             })
             .unwrap_or_else(|| format!("#{id}"))
@@ -1885,7 +1885,12 @@ async fn cmd_chick_group_create(
         "Created".green().bold(),
         group.id,
         group.initial_count,
-        group.lineages.iter().map(|l| l.name.as_str()).collect::<Vec<_>>().join(", "),
+        group
+            .lineages
+            .iter()
+            .map(|l| l.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
         group.hatch_date,
     );
     Ok(())
@@ -1927,7 +1932,12 @@ async fn cmd_chick_group_list(base: &str) -> anyhow::Result<()> {
         } else {
             0.0
         };
-        let lineage_str = g.lineages.iter().map(|l| l.name.as_str()).collect::<Vec<_>>().join(",");
+        let lineage_str = g
+            .lineages
+            .iter()
+            .map(|l| l.name.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
         println!(
             "  {:<5} {:<10} {:<10} {:<10} {:<12} {:<12} {:.0}%",
             g.id,
