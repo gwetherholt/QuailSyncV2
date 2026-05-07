@@ -1235,7 +1235,9 @@ fun NfcBirdInfo(bird: Bird) {
                 Text(bird.bandId ?: "Bird #${bird.id}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     bird.sex?.let { Text(it.replaceFirstChar { c -> c.uppercase() }, style = MaterialTheme.typography.bodyMedium) }
-                    bird.lineageName?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = SageGreen) }
+                    if (bird.lineages.isNotEmpty()) {
+                        Text(com.quailsync.app.data.formatLineages(bird.lineages), style = MaterialTheme.typography.bodyMedium, color = SageGreen)
+                    }
                     bird.status?.let { Text(it.replaceFirstChar { c -> c.uppercase() }, style = MaterialTheme.typography.bodyMedium) }
                 }
             }
@@ -1257,14 +1259,14 @@ fun WriteTagSection(birds: List<Bird>, writeMode: Boolean, onStartWrite: (Int) -
         } else {
             ExposedDropdownMenuBox(expanded, { expanded = it }) {
                 OutlinedTextField(
-                    value = selectedBirdId?.let { id -> birds.find { it.id == id }?.let { "${it.bandId ?: "Bird #${it.id}"} — ${it.lineageName ?: it.sex ?: ""}" } ?: "Bird #$id" } ?: "",
+                    value = selectedBirdId?.let { id -> birds.find { it.id == id }?.let { b -> "${b.bandId ?: "Bird #${b.id}"} — ${com.quailsync.app.data.formatLineages(b.lineages, emptyText = "").ifEmpty { b.sex ?: "" }}" } ?: "Bird #$id" } ?: "",
                     onValueChange = {}, readOnly = true, label = { Text("Select bird to write") },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
                     modifier = Modifier.menuAnchor().fillMaxWidth(),
                 )
                 ExposedDropdownMenu(expanded, { expanded = false }) {
                     birds.forEach { bird ->
-                        DropdownMenuItem(text = { Text("${bird.bandId ?: "Bird #${bird.id}"} — ${bird.lineageName ?: ""}") }, onClick = { selectedBirdId = bird.id; expanded = false })
+                        DropdownMenuItem(text = { Text("${bird.bandId ?: "Bird #${bird.id}"} — ${com.quailsync.app.data.formatLineages(bird.lineages, emptyText = "")}") }, onClick = { selectedBirdId = bird.id; expanded = false })
                     }
                 }
             }
@@ -1284,7 +1286,7 @@ fun NfcHistoryItem(scan: NfcScanResult) {
                 Text(scan.tagId, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                 scan.payload?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = SageGreen) }
             }
-            scan.bird?.let { Text("${it.bandId ?: "Bird #${it.id}"} — ${it.lineageName ?: ""}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            scan.bird?.let { b -> Text("${b.bandId ?: "Bird #${b.id}"} — ${com.quailsync.app.data.formatLineages(b.lineages, emptyText = "")}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         Text(scan.timestamp.format(DateTimeFormatter.ofPattern("HH:mm")), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
@@ -1311,7 +1313,8 @@ fun TagConflictDialog(conflict: TagConflict, existingBird: Bird, onConfirm: () -
                         Spacer(Modifier.width(12.dp))
                         Column {
                             Text(existingBird.bandId ?: "Bird #${existingBird.id}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                            val details = listOfNotNull(existingBird.sex?.replaceFirstChar { it.uppercase() }, existingBird.lineageName, existingBird.status?.uppercase()).joinToString(" · ")
+                            val lineageStr = com.quailsync.app.data.formatLineages(existingBird.lineages, emptyText = "").ifEmpty { null }
+                            val details = listOfNotNull(existingBird.sex?.replaceFirstChar { it.uppercase() }, lineageStr, existingBird.status?.uppercase()).joinToString(" · ")
                             if (details.isNotEmpty()) Text(details, style = MaterialTheme.typography.bodyMedium)
                         }
                     }

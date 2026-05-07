@@ -278,14 +278,14 @@ fun ClutchScreen(viewModel: ClutchViewModel = viewModel()) {
                     if (activeGroups.isNotEmpty()) {
                         item { Spacer(Modifier.height(4.dp)); HorizontalDivider(); Spacer(Modifier.height(4.dp)); Text("Chick Groups", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                         items(activeGroups, key = { "group-${it.id}" }) { group ->
-                            ChickGroupCard(group, lineageMap[group.lineageId]?.name, group.brooderId?.let { brooderMap[it]?.name },
+                            ChickGroupCard(group, group.brooderId?.let { brooderMap[it]?.name },
                                 onEdit = { editGroup = group }, onDelete = { deleteGroup = group },
                                 onLogMortality = { mortalityGroup = group })
                         }
                     }
                     if (graduatedGroups.isNotEmpty()) {
                         item { Spacer(Modifier.height(4.dp)); HorizontalDivider(); Spacer(Modifier.height(4.dp)); Text("Completed", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                        items(graduatedGroups, key = { "done-${it.id}" }) { group -> GraduatedGroupCard(group, lineageMap[group.lineageId]?.name) }
+                        items(graduatedGroups, key = { "done-${it.id}" }) { group -> GraduatedGroupCard(group) }
                     }
                     item { Spacer(Modifier.height(8.dp)) }
                 }
@@ -930,7 +930,7 @@ fun ClutchCard(clutch: Clutch, lineageName: String?, brooderName: String? = null
 // =====================================================================
 
 @Composable
-fun ChickGroupCard(group: ChickGroupDto, lineageName: String?, brooderName: String?, onEdit: () -> Unit = {}, onDelete: () -> Unit = {}, onLogMortality: () -> Unit = {}) {
+fun ChickGroupCard(group: ChickGroupDto, brooderName: String?, onEdit: () -> Unit = {}, onDelete: () -> Unit = {}, onLogMortality: () -> Unit = {}) {
     val today = remember { LocalDate.now() }
     val hatchDate = remember(group.hatchDate) { parseDate(group.hatchDate) }
     val ageDays = remember(hatchDate, today) { hatchDate?.let { ChronoUnit.DAYS.between(it, today).toInt() } ?: 0 }
@@ -941,7 +941,14 @@ fun ChickGroupCard(group: ChickGroupDto, lineageName: String?, brooderName: Stri
         Column(Modifier.padding(16.dp)) {
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(lineageName ?: "Group #${group.id}", style = MaterialTheme.typography.titleLarge)
+                    // Title: comma-separated lineages, truncated to 3 + "+N" beyond.
+                    // Falls back to the group id when no lineages are tagged.
+                    val title = if (group.lineages.isNotEmpty()) {
+                        com.quailsync.app.data.formatLineages(group.lineages)
+                    } else {
+                        "Group #${group.id}"
+                    }
+                    Text(title, style = MaterialTheme.typography.titleLarge)
                     Text("Group #${group.id}", style = MaterialTheme.typography.bodyMedium)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1002,12 +1009,17 @@ fun ChickGroupCard(group: ChickGroupDto, lineageName: String?, brooderName: Stri
 // =====================================================================
 
 @Composable
-fun GraduatedGroupCard(group: ChickGroupDto, lineageName: String?) {
+fun GraduatedGroupCard(group: ChickGroupDto) {
     val mortalityPct = if (group.initialCount > 0) ((group.initialCount - group.currentCount).toFloat() / group.initialCount * 100) else 0f
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)), elevation = CardDefaults.cardElevation(0.dp)) {
         Row(Modifier.fillMaxWidth().padding(14.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(lineageName ?: "Group #${group.id}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val title = if (group.lineages.isNotEmpty()) {
+                    com.quailsync.app.data.formatLineages(group.lineages)
+                } else {
+                    "Group #${group.id}"
+                }
+                Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("${group.currentCount}/${group.initialCount} chicks · ${group.status} · Hatched ${group.hatchDate}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (mortalityPct > 0) Text("%.0f%% loss".format(mortalityPct), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1235,6 +1247,7 @@ fun AddStandaloneChickGroupDialog(
     var newBlSource by remember { mutableStateOf("") }
     val liveLineages by viewModel.lineages.collectAsState()
     val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1309,7 +1322,11 @@ fun AddStandaloneChickGroupDialog(
                     }
                 }
 
-                // Inline new lineage fields
+                // Inline new lineage fields. Tap "Add lineage" to POST to
+                // /api/lineages, which auto-toggles the new chip as selected and
+                // clears the form so another can be added. The button label is
+                // intentionally distinct from the dialog's "Create Group" so users
+                // can tell the actions apart.
                 if (showNewLineage) {
                     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1321,16 +1338,18 @@ fun AddStandaloneChickGroupDialog(
                                 Button(
                                     onClick = {
                                         scope.launch {
-                                            val bl = viewModel.createLineage(CreateLineageRequest(name = newBlName, source = newBlSource))
+                                            val bl = viewModel.createLineage(CreateLineageRequest(name = newBlName.trim(), source = newBlSource.trim()))
                                             if (bl != null) {
                                                 selectedLineageIds.add(bl.id)
                                                 showNewLineage = false; newBlName = ""; newBlSource = ""
+                                            } else {
+                                                Toast.makeText(context, "Failed to create lineage", Toast.LENGTH_SHORT).show()
                                             }
                                         }
                                     },
                                     enabled = newBlName.isNotBlank(),
                                     colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
-                                ) { Text("Create") }
+                                ) { Text("Add lineage") }
                             }
                         }
                     }
@@ -1345,31 +1364,56 @@ fun AddStandaloneChickGroupDialog(
             }
         },
         confirmButton = {
+            // Tolerant enabled rule: any existing chip selected OR a valid
+            // inline lineage being typed but not yet "Add lineage"-d.
+            val inlineFormValid = showNewLineage && newBlName.isNotBlank()
+            val canCreate = (count.toIntOrNull() ?: 0) > 0 && !saving &&
+                (selectedLineageIds.isNotEmpty() || inlineFormValid)
             Button(
                 onClick = {
                     val n = count.toIntOrNull() ?: 0
-                    if (n > 0) {
-                        saving = true
-                        scope.launch {
-                            val fullNotes = buildString {
-                                if (source.isNotBlank()) append("Source: $source")
-                                if (notes.isNotBlank()) { if (isNotEmpty()) append(". "); append(notes) }
-                            }.ifBlank { null }
-                            val ok = viewModel.createChickGroup(
-                                CreateChickGroupRequest(
-                                    clutchId = null,
-                                    lineageIds = selectedLineageIds.toList(),
-                                    brooderId = selectedBrooderId,
-                                    initialCount = n,
-                                    hatchDate = hatchDate,
-                                    notes = fullNotes,
+                    if (n <= 0) return@Button
+                    saving = true
+                    scope.launch {
+                        // If the user typed a new lineage in the inline form but
+                        // didn't tap "Add lineage", create it now so we don't
+                        // silently drop their input. On failure, surface the
+                        // error and abort — never proceed with a chick group
+                        // that's missing the lineage they just typed.
+                        if (selectedLineageIds.isEmpty() && inlineFormValid) {
+                            val bl = viewModel.createLineage(
+                                CreateLineageRequest(
+                                    name = newBlName.trim(),
+                                    source = newBlSource.trim(),
                                 )
                             )
-                            if (ok) onSuccess() else saving = false
+                            if (bl == null) {
+                                Toast.makeText(context, "Failed to create lineage — chick group not created", Toast.LENGTH_LONG).show()
+                                saving = false
+                                return@launch
+                            }
+                            selectedLineageIds.add(bl.id)
+                            showNewLineage = false; newBlName = ""; newBlSource = ""
                         }
+
+                        val fullNotes = buildString {
+                            if (source.isNotBlank()) append("Source: $source")
+                            if (notes.isNotBlank()) { if (isNotEmpty()) append(". "); append(notes) }
+                        }.ifBlank { null }
+                        val ok = viewModel.createChickGroup(
+                            CreateChickGroupRequest(
+                                clutchId = null,
+                                lineageIds = selectedLineageIds.toList(),
+                                brooderId = selectedBrooderId,
+                                initialCount = n,
+                                hatchDate = hatchDate,
+                                notes = fullNotes,
+                            )
+                        )
+                        if (ok) onSuccess() else saving = false
                     }
                 },
-                enabled = (count.toIntOrNull() ?: 0) > 0 && !saving && selectedLineageIds.isNotEmpty(),
+                enabled = canCreate,
                 colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
             ) { Text(if (saving) "Creating..." else "Create Group") }
         },

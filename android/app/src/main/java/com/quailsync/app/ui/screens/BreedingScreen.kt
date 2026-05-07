@@ -225,7 +225,7 @@ private fun CullListTab(viewModel: BreedingViewModel) {
             ) {
                 items(cullRecs, key = { it.birdId }) { rec ->
                     val bird = birdMap[rec.birdId]
-                    val lineage = bird?.lineageId?.let { lineageMap[it] }
+                    val lineage = bird?.lineages?.firstOrNull()
                     val age = bird?.hatchDate?.let {
                         try {
                             ChronoUnit.DAYS.between(LocalDate.parse(it.take(10)), today).toInt()
@@ -457,10 +457,8 @@ private fun BreedingGroupsTab(viewModel: BreedingViewModel) {
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            male?.lineageId?.let { bid ->
-                                lineageMap[bid]?.let { bl ->
-                                    Text(" (${bl.name})", style = MaterialTheme.typography.labelSmall, color = SageGreen)
-                                }
+                            if (male != null && male.lineages.isNotEmpty()) {
+                                Text(" (${com.quailsync.app.data.formatLineages(male.lineages)})", style = MaterialTheme.typography.labelSmall, color = SageGreen)
                             }
                         }
                         // Females
@@ -472,10 +470,8 @@ private fun BreedingGroupsTab(viewModel: BreedingViewModel) {
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                f.lineageId?.let { bid ->
-                                    lineageMap[bid]?.let { bl ->
-                                        Text(" (${bl.name})", style = MaterialTheme.typography.labelSmall, color = SageGreen)
-                                    }
+                                if (f.lineages.isNotEmpty()) {
+                                    Text(" (${com.quailsync.app.data.formatLineages(f.lineages)})", style = MaterialTheme.typography.labelSmall, color = SageGreen)
                                 }
                             }
                         }
@@ -554,7 +550,7 @@ private fun CreateBreedingGroupDialog(
                     )
                     ExposedDropdownMenu(maleExpanded, { maleExpanded = false }) {
                         males.forEach { m ->
-                            val bl = m.lineageId?.let { lineageMap[it]?.name } ?: ""
+                            val bl = com.quailsync.app.data.formatLineages(m.lineages, emptyText = "")
                             DropdownMenuItem(
                                 text = { Text("${m.bandColor ?: "Bird"} #${m.id} $bl") },
                                 onClick = { selectedMaleId = m.id; maleExpanded = false },
@@ -568,7 +564,7 @@ private fun CreateBreedingGroupDialog(
                 Column {
                     females.take(20).forEach { f ->
                         val checked = f.id in selectedFemaleIds
-                        val bl = f.lineageId?.let { lineageMap[it]?.name } ?: ""
+                        val bl = com.quailsync.app.data.formatLineages(f.lineages, emptyText = "")
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(
                                 checked = checked,
@@ -632,7 +628,7 @@ private fun PairCheckTab(viewModel: BreedingViewModel) {
             OutlinedTextField(
                 value = selectedMaleId?.let { id ->
                     males.find { it.id == id }?.let { b ->
-                        val bl = b.lineageId?.let { lineageMap[it]?.name } ?: ""
+                        val bl = com.quailsync.app.data.formatLineages(b.lineages, emptyText = "")
                         "${b.bandColor ?: "Bird"} #${b.id} $bl"
                     }
                 } ?: "",
@@ -643,7 +639,7 @@ private fun PairCheckTab(viewModel: BreedingViewModel) {
             )
             ExposedDropdownMenu(maleExpanded, { maleExpanded = false }) {
                 males.forEach { m ->
-                    val bl = m.lineageId?.let { lineageMap[it]?.name } ?: ""
+                    val bl = com.quailsync.app.data.formatLineages(m.lineages, emptyText = "")
                     DropdownMenuItem(
                         text = { Text("${m.bandColor ?: "Bird"} #${m.id} $bl") },
                         onClick = { selectedMaleId = m.id; maleExpanded = false; result = null },
@@ -657,7 +653,7 @@ private fun PairCheckTab(viewModel: BreedingViewModel) {
             OutlinedTextField(
                 value = selectedFemaleId?.let { id ->
                     females.find { it.id == id }?.let { b ->
-                        val bl = b.lineageId?.let { lineageMap[it]?.name } ?: ""
+                        val bl = com.quailsync.app.data.formatLineages(b.lineages, emptyText = "")
                         "${b.bandColor ?: "Bird"} #${b.id} $bl"
                     }
                 } ?: "",
@@ -668,7 +664,7 @@ private fun PairCheckTab(viewModel: BreedingViewModel) {
             )
             ExposedDropdownMenu(femaleExpanded, { femaleExpanded = false }) {
                 females.forEach { f ->
-                    val bl = f.lineageId?.let { lineageMap[it]?.name } ?: ""
+                    val bl = com.quailsync.app.data.formatLineages(f.lineages, emptyText = "")
                     DropdownMenuItem(
                         text = { Text("${f.bandColor ?: "Bird"} #${f.id} $bl") },
                         onClick = { selectedFemaleId = f.id; femaleExpanded = false; result = null },

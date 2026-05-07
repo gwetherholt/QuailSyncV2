@@ -777,6 +777,24 @@
     return escapeHtml(name);
   }
 
+  // Many-to-many helpers. Birds and chick groups now carry a `lineages` array.
+  // Clutches and brooders still expose a single `lineage_id`.
+  function firstLineageId(o){
+    if(!o) return null;
+    if(o.lineages && o.lineages.length > 0) return o.lineages[0].id;
+    if(o.lineage_id != null) return o.lineage_id;
+    return null;
+  }
+  // Truncates 4+ lineages to "A, B, C +N". Returns '' when empty so callers
+  // can decide between rendering nothing and rendering "(no lineage)".
+  function formatLineages(arr, maxShown){
+    var n = (maxShown == null) ? 3 : maxShown;
+    if(!arr || arr.length === 0) return '';
+    if(arr.length <= n) return arr.map(function(l){ return escapeHtml(l.name); }).join(', ');
+    var head = arr.slice(0, n).map(function(l){ return escapeHtml(l.name); }).join(', ');
+    return head + ' +' + (arr.length - n);
+  }
+
   function findBird(id){
     var found = null;
     _birds.forEach(function(b){ if(b.id===id) found=b; });
@@ -1221,9 +1239,12 @@
       var malesByBl = {};
       var femalesByBl = {};
       var totalM = 0, totalF = 0;
+      // Bucket each bird by its primary (first) lineage. Birds with multiple
+      // lineages count once toward the dashboard chart — the per-lineage
+      // /api/flock/summary endpoint gives the multi-lineage breakdown.
       _birds.forEach(function(b){
         if(b.status !== 'Active') return;
-        var blId = b.lineage_id || 0;
+        var blId = firstLineageId(b) || 0;
         if(b.sex === 'Male'){ malesByBl[blId] = (malesByBl[blId]||0) + 1; totalM++; }
         else if(b.sex === 'Female'){ femalesByBl[blId] = (femalesByBl[blId]||0) + 1; totalF++; }
       });
@@ -1232,9 +1253,10 @@
       var blIds = [];
       var seen = {};
       _birds.forEach(function(b){
-        if(b.status==='Active' && !seen[b.lineage_id]){
-          seen[b.lineage_id] = true;
-          blIds.push(b.lineage_id);
+        var blId = firstLineageId(b);
+        if(b.status==='Active' && blId != null && !seen[blId]){
+          seen[blId] = true;
+          blIds.push(blId);
         }
       });
 
@@ -1338,7 +1360,12 @@
       if(!tbody) return;
       var self = this;
       var filtered = _birds.filter(function(b){
-        if(self.lineageFilter) return b.lineage_id === self.lineageFilter;
+        // Match birds with ANY lineage equal to the filter target — under
+        // many-to-many a bird with [Fernbank, NWQuail] should appear under
+        // both filters.
+        if(self.lineageFilter) {
+          return (b.lineages || []).some(function(l){ return l.id === self.lineageFilter; });
+        }
         if(self.filter==='active') return b.status==='Active';
         if(self.filter==='males') return b.sex==='Male';
         if(self.filter==='females') return b.sex==='Female';
@@ -1352,7 +1379,7 @@
 
       var html='';
       filtered.forEach(function(b){
-        var blName = lineageName(b.lineage_id);
+        var blName = formatLineages(b.lineages);
         var bandHtml = b.band_color ? bandDot(b.band_color) : '&mdash;';
         var parents = '';
         if(b.mother_id || b.father_id){
@@ -1462,7 +1489,7 @@
         return;
       }
 
-      var blName = lineageName(b.lineage_id);
+      var blName = formatLineages(b.lineages);
       var statusCls = b.status.toLowerCase();
       var bandColor = b.band_color || '#ccc';
 
@@ -2093,7 +2120,7 @@
         html += '<div style="font-size:.78rem;color:#888;margin-bottom:.3rem">MALE</div>';
         html += '<div class="breed-birds">';
         if(male){
-          html += '<span class="breed-bird-chip">'+bandDot(male.band_color, 10)+' '+birdLink(male.id)+' <span style="color:#888;font-size:.72rem">'+lineageName(male.lineage_id)+'</span></span>';
+          html += '<span class="breed-bird-chip">'+bandDot(male.band_color, 10)+' '+birdLink(male.id)+' <span style="color:#888;font-size:.72rem">'+formatLineages(male.lineages)+'</span></span>';
         } else {
           html += '<span class="breed-bird-chip">'+birdLink(g.male_id)+'</span>';
         }
@@ -2106,7 +2133,7 @@
           g.female_ids.forEach(function(fid){
             var fb = findBird(fid);
             if(fb){
-              html += '<span class="breed-bird-chip">'+bandDot(fb.band_color, 10)+' '+birdLink(fb.id)+' <span style="color:#888;font-size:.72rem">'+lineageName(fb.lineage_id)+'</span></span>';
+              html += '<span class="breed-bird-chip">'+bandDot(fb.band_color, 10)+' '+birdLink(fb.id)+' <span style="color:#888;font-size:.72rem">'+formatLineages(fb.lineages)+'</span></span>';
             } else {
               html += '<span class="breed-bird-chip">'+birdLink(fid)+'</span>';
             }
@@ -2139,11 +2166,11 @@
           html += '<div class="pair-info">';
           if(mBird) html += bandDot(mBird.band_color, 12)+' ';
           html += birdLink(p.male_id, 'Male #'+p.male_id);
-          if(mBird) html += ' <span style="font-size:.75rem;color:#888">'+lineageName(mBird.lineage_id)+'</span>';
+          if(mBird) html += ' <span style="font-size:.75rem;color:#888">'+formatLineages(mBird.lineages)+'</span>';
           html += ' &times; ';
           if(fBird) html += bandDot(fBird.band_color, 12)+' ';
           html += birdLink(p.female_id, 'Female #'+p.female_id);
-          if(fBird) html += ' <span style="font-size:.75rem;color:#888">'+lineageName(fBird.lineage_id)+'</span>';
+          if(fBird) html += ' <span style="font-size:.75rem;color:#888">'+formatLineages(fBird.lineages)+'</span>';
           html += '</div>';
           html += '<span class="coeff safe">'+p.coefficient.toFixed(3)+'</span>';
           html += '</div>';
@@ -2159,11 +2186,11 @@
           html += '<div class="pair-info">';
           if(mBird) html += bandDot(mBird.band_color, 12)+' ';
           html += birdLink(p.male_id, 'Male #'+p.male_id);
-          if(mBird) html += ' <span style="font-size:.75rem;color:#888">'+lineageName(mBird.lineage_id)+'</span>';
+          if(mBird) html += ' <span style="font-size:.75rem;color:#888">'+formatLineages(mBird.lineages)+'</span>';
           html += ' &times; ';
           if(fBird) html += bandDot(fBird.band_color, 12)+' ';
           html += birdLink(p.female_id, 'Female #'+p.female_id);
-          if(fBird) html += ' <span style="font-size:.75rem;color:#888">'+lineageName(fBird.lineage_id)+'</span>';
+          if(fBird) html += ' <span style="font-size:.75rem;color:#888">'+formatLineages(fBird.lineages)+'</span>';
           html += '</div>';
           html += '<span class="coeff risky">'+p.coefficient.toFixed(3)+'</span>';
           html += '</div>';
@@ -2228,7 +2255,7 @@
         html += '<div class="kanban-card-header">';
         if(bird) html += bandDot(bird.band_color, 12)+' ';
         html += birdLink(r.bird_id);
-        if(bird) html += ' <span style="font-size:.72rem;color:#888">'+lineageName(bird.lineage_id)+'</span>';
+        if(bird) html += ' <span style="font-size:.72rem;color:#888">'+formatLineages(bird.lineages)+'</span>';
         html += '</div>';
         html += '<div class="kanban-card-reason">'+escapeHtml(reason)+'</div>';
         html += '<div class="kanban-card-actions"><button class="btn-primary" style="font-size:.72rem;padding:.2rem .5rem" onclick="Page.Processing.scheduleFromRec('+r.bird_id+',\''+escapeHtml(reason).replace(/'/g,"\\'")+'\')">Schedule</button></div>';
@@ -2248,7 +2275,7 @@
         html += '<div class="kanban-card-header">';
         if(bird) html += bandDot(bird.band_color, 12)+' ';
         html += birdLink(p.bird_id);
-        if(bird) html += ' <span style="font-size:.72rem;color:#888">'+lineageName(bird.lineage_id)+'</span>';
+        if(bird) html += ' <span style="font-size:.72rem;color:#888">'+formatLineages(bird.lineages)+'</span>';
         html += '</div>';
         html += '<div class="kanban-card-reason">'+escapeHtml(p.reason||'—')+'</div>';
         html += '<div class="kanban-card-date">Scheduled: '+(p.scheduled_date||'&mdash;')+'</div>';
@@ -2516,13 +2543,19 @@
         var hatchD = new Date(g.hatch_date+'T00:00:00');
         var ageDays = Math.floor((now - hatchD) / 86400000);
         var mortalityPct = g.initial_count > 0 ? ((g.initial_count - g.current_count) / g.initial_count * 100) : 0;
-        var blName = lineageName(g.lineage_id);
+        var blLabel = formatLineages(g.lineages);
+        var blTitle = (g.lineages && g.lineages.length > 0)
+          ? g.lineages.map(function(l){ return l.name; }).join(', ')
+          : '';
         var statusCls = g.status === 'Active' ? 'active' : g.status === 'Graduated' ? 'sold' : 'deceased';
 
         html += '<div class="clutch-card'+(g.status !== 'Active' ? ' muted' : '')+'">';
         html += '<div class="clutch-card-body">';
         var readyBadge = g.is_ready_to_transition ? '<span class="ready-badge" title="Fully feathered — ready to band">&check; Ready to band</span>' : '';
-        html += '<h4>Group #'+g.id+(blName ? ' &mdash; '+blName : '')+' <span class="status-badge '+statusCls+'">'+g.status+'</span>'+readyBadge+'</h4>';
+        // Title shows truncated lineage list (3 + "+N"); the title attribute
+        // exposes the full list for hover tooltips so users can see the rest.
+        var blHtml = blLabel ? ' &mdash; <span title="'+escapeHtml(blTitle)+'">'+blLabel+'</span>' : '';
+        html += '<h4>Group #'+g.id+blHtml+' <span class="status-badge '+statusCls+'">'+g.status+'</span>'+readyBadge+'</h4>';
 
         html += '<div class="clutch-egg-counts">';
         html += '<span><span class="egg-num">'+g.current_count+'/'+g.initial_count+'</span><span class="egg-lbl">Chicks</span></span>';

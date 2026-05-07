@@ -76,9 +76,16 @@ data class Bird(
     /** Many-to-many lineages, populated by the server from the junction table. */
     @SerializedName("lineages") val lineages: List<Lineage> = emptyList(),
 ) {
-    /** Compatibility shim — first lineage's id, for screens that haven't been migrated to display the full list yet. */
+    @Deprecated(
+        "Birds now have many-to-many lineages — use `bird.lineages` and `formatLineages(bird.lineages)` instead. This shim returns only the first lineage's id and hides multi-lineage data from the UI.",
+        ReplaceWith("lineages.firstOrNull()?.id"),
+    )
     val lineageId: Int? get() = lineages.firstOrNull()?.id
-    /** Compatibility shim — first lineage's name. */
+
+    @Deprecated(
+        "Birds now have many-to-many lineages — use `formatLineages(bird.lineages)` for display.",
+        ReplaceWith("lineages.firstOrNull()?.name"),
+    )
     val lineageName: String? get() = lineages.firstOrNull()?.name
 }
 
@@ -102,6 +109,28 @@ data class Lineage(
     @SerializedName("source") val source: String? = null,
     @SerializedName("notes") val notes: String? = null,
 )
+
+/**
+ * Single-line label for a list of lineages, with truncation at [maxShown].
+ *
+ * Rules:
+ *  - 0 lineages → [emptyText] (default `(no lineage)`).
+ *  - 1..maxShown → comma-separated names, e.g. "Fernbank, NWQuail".
+ *  - >maxShown   → first maxShown names, then " +N", e.g. "A, B, C +2".
+ *
+ * Cards that need the *full* list (long-press, detail screen) should iterate
+ * over `lineages` directly rather than calling this.
+ */
+fun formatLineages(
+    lineages: List<Lineage>,
+    maxShown: Int = 3,
+    emptyText: String = "(no lineage)",
+): String {
+    if (lineages.isEmpty()) return emptyText
+    if (lineages.size <= maxShown) return lineages.joinToString(", ") { it.name }
+    val head = lineages.take(maxShown).joinToString(", ") { it.name }
+    return "$head +${lineages.size - maxShown}"
+}
 
 data class CreateLineageRequest(
     @SerializedName("name") val name: String,
@@ -238,9 +267,16 @@ data class ChickGroupDto(
     /** Many-to-many lineages, populated by the server from the junction table. */
     @SerializedName("lineages") val lineages: List<Lineage> = emptyList(),
 ) {
-    /** Compatibility shim — first lineage's id, for screens that haven't been migrated to display the full list yet. */
+    @Deprecated(
+        "Chick groups now have many-to-many lineages — use `group.lineages` and `formatLineages(group.lineages)` instead.",
+        ReplaceWith("lineages.firstOrNull()?.id"),
+    )
     val lineageId: Int? get() = lineages.firstOrNull()?.id
-    /** Compatibility shim — comma-separated lineage names, suitable for single-line card displays. */
+
+    @Deprecated(
+        "Use `formatLineages(group.lineages)` which handles truncation for 4+ lineages.",
+        ReplaceWith("formatLineages(lineages)", "com.quailsync.app.data.formatLineages"),
+    )
     val lineageNames: String get() = lineages.joinToString(", ") { it.name }
 }
 

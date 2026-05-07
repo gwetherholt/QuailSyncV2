@@ -332,7 +332,12 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
             FlockFilter.Records -> birds.filter { it.status?.lowercase() in listOf("culled", "deceased", "sold") }
             FlockFilter.Males -> birds.filter { it.sex?.lowercase() == "male" && it.status?.lowercase() == "active" }
             FlockFilter.Females -> birds.filter { it.sex?.lowercase() == "female" && it.status?.lowercase() == "active" }
-            is FlockFilter.ByLineage -> birds.filter { it.lineageId == (selectedFilter as FlockFilter.ByLineage).lineageId }
+            is FlockFilter.ByLineage -> {
+                // Match any of the bird's lineages — under many-to-many a bird
+                // with [Fernbank, NWQuail] should appear under both filters.
+                val targetId = (selectedFilter as FlockFilter.ByLineage).lineageId
+                birds.filter { b -> b.lineages.any { it.id == targetId } }
+            }
         }
     }
 
@@ -375,7 +380,7 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
             else -> {
                 LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(filteredBirds, key = { it.id }) { bird ->
-                        BirdCard(bird, bird.lineageName ?: lineageMap[bird.lineageId]?.name) { selectedBird = bird }
+                        BirdCard(bird, com.quailsync.app.data.formatLineages(bird.lineages, emptyText = "").ifEmpty { null }) { selectedBird = bird }
                     }
                     item { Spacer(Modifier.height(8.dp)) }
                 }
@@ -386,7 +391,7 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
     if (selectedBird != null) {
         BirdDetailDialog(
             selectedBird!!,
-            selectedBird!!.lineageName ?: lineageMap[selectedBird!!.lineageId]?.name,
+            com.quailsync.app.data.formatLineages(selectedBird!!.lineages, emptyText = "").ifEmpty { null },
             viewModel,
             onDismiss = { selectedBird = null },
             onStatusChanged = { selectedBird = null; viewModel.refresh() },
