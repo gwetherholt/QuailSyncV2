@@ -614,7 +614,8 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
                 // 'Graduated' so it disappears from the Hatchery active
                 // list and can't be double-banded. Best-effort — failure
                 // logs but doesn't block the success summary.
-                state.chickGroupId?.let { groupId ->
+                val groupId = state.chickGroupId
+                if (groupId != null) {
                     try {
                         val resp = api.updateChickGroup(groupId, mapOf("status" to "Graduated"))
                         if (!resp.isSuccessful) {
