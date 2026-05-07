@@ -848,7 +848,12 @@ fun EditBirdDialog(bird: Bird, viewModel: FlockViewModel, onDismiss: () -> Unit,
                         listOf("Male", "Female", "Unknown").forEach { s -> DropdownMenuItem(text = { Text(s) }, onClick = { sex = s; sexExpanded = false }) }
                     }
                 }
-                OutlinedTextField(value = bandColor, onValueChange = { bandColor = it }, label = { Text("Band color") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                com.quailsync.app.ui.components.BandColorPicker(
+                    value = bandColor,
+                    onValueChange = { bandColor = it },
+                    label = "Band color",
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 OutlinedTextField(value = hatchDate, onValueChange = { hatchDate = it }, label = { Text("Hatch date (YYYY-MM-DD)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 ExposedDropdownMenuBox(statusExpanded, { statusExpanded = it }) {
                     OutlinedTextField(value = status, onValueChange = {}, readOnly = true, label = { Text("Status") },
@@ -923,7 +928,12 @@ fun AddBirdDialog(lineages: List<Lineage>, viewModel: FlockViewModel, onDismiss:
                         }
                     }
                 }
-                OutlinedTextField(value = bandColor, onValueChange = { bandColor = it }, label = { Text("Band color (optional)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                com.quailsync.app.ui.components.BandColorPicker(
+                    value = bandColor,
+                    onValueChange = { bandColor = it },
+                    label = "Band color (optional)",
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 OutlinedTextField(value = notes, onValueChange = { notes = it }, label = { Text("Notes (optional)") }, modifier = Modifier.fillMaxWidth())
             }
         },

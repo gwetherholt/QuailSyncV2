@@ -134,19 +134,6 @@ data class OrphanTag(
     val orphanBirdId: Int,
 )
 
-/**
- * Render an NFC tag ID compactly: first 4 + ellipsis + last 4 chars.
- *
- * Bug B fix: NTAG stickers from a sequential batch often share the last
- * 8 chars (e.g. all `…12031F91`); only the middle bytes vary. Showing
- * just `takeLast(N)` made every bird in a batch look identical. This
- * format keeps both ends visible so adjacent IDs are distinguishable.
- *
- * Tags shorter than 9 chars are returned as-is (no point shortening).
- */
-fun shortTag(tagId: String): String =
-    if (tagId.length <= 8) tagId else "${tagId.take(4)}…${tagId.takeLast(4)}"
-
 sealed class BatchState {
     data object Idle : BatchState()
     data object Setup : BatchState()
@@ -920,13 +907,13 @@ fun PerBirdEntryScreen(state: BatchState.PerBirdEntry, viewModel: NfcViewModel) 
 
         Spacer(Modifier.height(12.dp))
 
-        // Band color
-        OutlinedTextField(
+        // Band color — preset dropdown with swatches, "Other" reveals a
+        // free-text field for any color outside the preset palette.
+        com.quailsync.app.ui.components.BandColorPicker(
             value = bandColor,
             onValueChange = { bandColor = it },
-            label = { Text("Band color (optional)") },
+            label = "Band color (optional)",
             modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
         )
 
         Spacer(Modifier.height(8.dp))
@@ -1338,7 +1325,7 @@ fun BatchCompleteScreen(state: BatchState.Complete, viewModel: NfcViewModel) {
                             ).joinToString(" · ")
                             if (details.isNotEmpty()) Text(details, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        Text(shortTag(g.tagId), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(g.tagId, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -1368,7 +1355,7 @@ fun GraduatedRow(g: GraduatedBird) {
             Text(g.bird.bandColor, style = MaterialTheme.typography.bodyMedium, color = SageGreen)
         }
         Spacer(Modifier.weight(1f))
-        Text(shortTag(g.tagId), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(g.tagId, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
