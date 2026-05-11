@@ -1,102 +1,95 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# morning-backup-verify.sh — Verify last night's QuailSync backup landed on Windows
+# Cron: 0 7 * * * /home/gwetherholt/QuailSyncV2/scripts/morning-backup-verify.sh
 #
-# morning-backup-verify.sh — deadman switch for nightly-backup.sh.
-#
-# Cron: 0 8 * * *  (run as gwetherholt)
-#
-# Confirms that:
-#   1. A file named quailsync-<today-utc>.db.gz exists in BACKUP_DIR.
-#   2. The most recent quailsync-*.db.gz was created within the last
-#      MAX_AGE_HOURS hours.
-#
-# On failure: POST a system alert to the QuailSync server (surfaced
-# via the Android app's bell icon). On success: POST a resolve so any
-# previous failure auto-clears.
-#
+# SSHes into Ironman and confirms today's (or yesterday's, if run before midnight)
+# backup file exists and is non-empty.
 
 set -euo pipefail
 
-# ---------- configuration -----------------------------------------------------
-BACKUP_DIR="/mnt/pc-snapshots/quailsync-nightly"
-LOG_FILE="/var/log/quailsync-backup.log"
-MAX_AGE_HOURS=12
-SERVER_URL="http://localhost:3000"
-ALERT_KEY="deadman_no_recent_backup"
-ALERT_SOURCE="morning-verify"
-ALERT_SEVERITY="critical"
-# ------------------------------------------------------------------------------
+# ─── Configuration ────────────────────────────────────────────────────
+LOGFILE="/var/log/quailsync-backup.log"
+ALERT_URL="http://localhost:3000/api/alerts"
 
-DATE_STAMP="$(date -u +%Y-%m-%d)"
-EXPECTED="${BACKUP_DIR}/quailsync-${DATE_STAMP}.db.gz"
+SSH_USER="Georgia"
+SSH_HOST="192.168.0.228"
+SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new"
+REMOTE_DIR="/cygdrive/c/QuailSyncSnapshots/quailsync-nightly"
+# NOTE: Adjust REMOTE_DIR path format to match nightly-backup.sh
+# (see the note there about Cygwin vs Windows OpenSSH paths)
 
-log_event() {
-    local status="$1"
-    shift
-    local ts
-    ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    printf '%s %s %s\n' "$ts" "$status" "$*" >> "$LOG_FILE" 2>/dev/null || true
-    printf '%s %s %s\n' "$ts" "$status" "$*"
+LOCAL_BACKUP_DIR="$HOME/quailsync-local-backups"
+
+# ─── Helpers ──────────────────────────────────────────────────────────
+DATE=$(date +%Y-%m-%d)
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+EXPECTED_FILE="quailsync-${DATE}.db.gz"
+
+log() {
+    echo "${TIMESTAMP} [VERIFY] $1" | tee -a "$LOGFILE"
 }
 
-json_escape() {
-    python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1" 2>/dev/null \
-        || printf '"%s"' "${1//\"/\\\"}"
-}
-
-notify_failure() {
-    local title="$1"
+alert() {
+    local level="$1"
     local message="$2"
-    local payload
-    payload=$(printf '{"alert_key":%s,"severity":%s,"title":%s,"message":%s,"source":%s,"metadata_json":%s}' \
-        "$(json_escape "$ALERT_KEY")" \
-        "$(json_escape "$ALERT_SEVERITY")" \
-        "$(json_escape "$title")" \
-        "$(json_escape "$message")" \
-        "$(json_escape "$ALERT_SOURCE")" \
-        "$(json_escape "{\"host\":\"$(hostname)\",\"date\":\"${DATE_STAMP}\"}")"
-    )
-    if ! curl --max-time 10 -fsS -H 'Content-Type: application/json' \
-              -X POST -d "$payload" "${SERVER_URL}/api/alerts" >/dev/null 2>&1; then
-        log_event INFO "alert POST failed (server unreachable?), continuing"
-    fi
+    local alert_key="$3"
+    curl -sf -X POST "$ALERT_URL" \
+        -H "Content-Type: application/json" \
+        -d "{\"level\":\"${level}\",\"message\":\"${message}\",\"alert_key\":\"${alert_key}\"}" \
+        >> "$LOGFILE" 2>&1 || true
 }
 
-notify_resolve() {
-    local payload
-    payload=$(printf '{"alert_key":%s}' "$(json_escape "$ALERT_KEY")")
-    if ! curl --max-time 10 -fsS -H 'Content-Type: application/json' \
-              -X POST -d "$payload" "${SERVER_URL}/api/alerts/resolve" >/dev/null 2>&1; then
-        log_event INFO "resolve POST failed (server unreachable?), continuing"
-    fi
-}
+ERRORS=0
 
-# ---------- check 1: today's file exists --------------------------------------
-if [[ ! -f "$EXPECTED" ]]; then
-    msg="Backup verification failed: expected ${EXPECTED} not found"
-    log_event FAIL "$msg"
-    notify_failure "Backup verification failed" "$msg"
+# ─── Check 1: SSH reachability ────────────────────────────────────────
+log "Verifying SSH connectivity to ${SSH_HOST}..."
+if ! ssh $SSH_OPTS "${SSH_USER}@${SSH_HOST}" "echo ok" > /dev/null 2>&1; then
+    log "ERROR: Cannot reach ${SSH_HOST} via SSH"
+    alert "error" "Backup verify failed: SSH to Ironman unreachable" "verify_ssh_unreachable"
     exit 1
 fi
 
-# ---------- check 2: most recent backup younger than MAX_AGE_HOURS ------------
-WINDOW_MIN=$(( MAX_AGE_HOURS * 60 ))
-RECENT="$(find "$BACKUP_DIR" -maxdepth 1 -type f -name 'quailsync-*.db.gz' -mmin "-${WINDOW_MIN}" -print -quit 2>/dev/null || true)"
+# ─── Check 2: Remote file exists and is non-empty ─────────────────────
+log "Checking remote file: ${REMOTE_DIR}/${EXPECTED_FILE}"
+REMOTE_SIZE=$(ssh $SSH_OPTS "${SSH_USER}@${SSH_HOST}" \
+    "stat -c%s '${REMOTE_DIR}/${EXPECTED_FILE}' 2>/dev/null || echo 0")
 
-if [[ -z "$RECENT" ]]; then
-    age_h=""
-    if [[ -f "$EXPECTED" ]]; then
-        mtime_epoch="$(stat -c%Y "$EXPECTED" 2>/dev/null || echo 0)"
-        now_epoch="$(date -u +%s)"
-        age_h=$(( (now_epoch - mtime_epoch) / 3600 ))
-    fi
-    msg="Backup verification failed: no backup within last ${MAX_AGE_HOURS}h (today's file age=${age_h:-?}h) in ${BACKUP_DIR}"
-    log_event FAIL "$msg"
-    notify_failure "Backup verification failed" "$msg"
-    exit 1
+if [[ "$REMOTE_SIZE" -eq 0 ]]; then
+    log "ERROR: Remote backup missing or empty: ${EXPECTED_FILE}"
+    alert "error" "Backup verify failed: ${EXPECTED_FILE} missing on Ironman" "verify_remote_missing"
+    ERRORS=$((ERRORS + 1))
+else
+    log "Remote backup confirmed: ${EXPECTED_FILE} (${REMOTE_SIZE} bytes)"
 fi
 
-# ---------- success -----------------------------------------------------------
-size_human="$(du -h "$EXPECTED" | awk '{print $1}')"
-log_event OK "verify backup_size=${size_human} location=${EXPECTED}"
-notify_resolve
-exit 0
+# ─── Check 3: Local copy exists ───────────────────────────────────────
+LOCAL_FILE="${LOCAL_BACKUP_DIR}/${EXPECTED_FILE}"
+if [[ -s "$LOCAL_FILE" ]]; then
+    LOCAL_SIZE=$(stat -c%s "$LOCAL_FILE" 2>/dev/null || stat -f%z "$LOCAL_FILE")
+    log "Local backup confirmed: ${LOCAL_FILE} (${LOCAL_SIZE} bytes)"
+else
+    log "WARNING: Local backup missing or empty: ${LOCAL_FILE}"
+    alert "warning" "Local backup copy missing: ${EXPECTED_FILE}" "verify_local_missing"
+    ERRORS=$((ERRORS + 1))
+fi
+
+# ─── Check 4: Size sanity (remote vs local should match) ─────────────
+if [[ "$REMOTE_SIZE" -gt 0 ]] && [[ -s "$LOCAL_FILE" ]]; then
+    if [[ "$REMOTE_SIZE" -ne "$LOCAL_SIZE" ]]; then
+        log "WARNING: Size mismatch — remote=${REMOTE_SIZE} local=${LOCAL_SIZE}"
+        alert "warning" "Backup size mismatch: remote=${REMOTE_SIZE} vs local=${LOCAL_SIZE}" "verify_size_mismatch"
+        ERRORS=$((ERRORS + 1))
+    else
+        log "Size match confirmed: ${REMOTE_SIZE} bytes"
+    fi
+fi
+
+# ─── Summary ──────────────────────────────────────────────────────────
+if [[ "$ERRORS" -eq 0 ]]; then
+    log "Morning verification passed."
+    alert "info" "Backup verification passed: ${EXPECTED_FILE}" "verify_success"
+else
+    log "Morning verification completed with ${ERRORS} issue(s)."
+fi
+
+exit "$ERRORS"

@@ -1,173 +1,124 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# nightly-backup.sh — QuailSync nightly SQLite backup via rsync-over-SSH
+# Cron: 0 2 * * * /home/gwetherholt/QuailSyncV2/scripts/nightly-backup.sh
 #
-# nightly-backup.sh — hot SQLite backup of the QuailSync database to SMB.
-#
-# Cron: 0 2 * * *  (run as gwetherholt)
-#
-# Uses sqlite3's .backup command (safe while the server writes), gzips
-# the result to /mnt/pc-snapshots/quailsync-nightly/, verifies integrity,
-# prunes files older than RETAIN_DAYS, logs every run, and posts to the
-# QuailSync server's /api/alerts endpoint on failure (the bell icon in
-# the Android app surfaces it). A successful run posts to
-# /api/alerts/resolve so a recovered run auto-clears yesterday's failure.
-#
-# Usage:
-#   ./nightly-backup.sh           # normal run
-#   ./nightly-backup.sh --dry-run # walk through every step, skip writes/deletes
-#
+# Replaces the previous SMB/CIFS-based backup. SSH key auth eliminates
+# Windows password-rotation breakage.
 
 set -euo pipefail
 
-# ---------- configuration (edit these) ----------------------------------------
-DB_PATH="/home/gwetherholt/QuailSyncV2/data/quailsync.db"
-BACKUP_DIR="/mnt/pc-snapshots/quailsync-nightly"
-LOG_FILE="/var/log/quailsync-backup.log"
-RETAIN_DAYS=7
-MIN_BYTES=$((1 * 1024 * 1024))            # 1 MB sanity threshold
-SERVER_URL="http://localhost:3000"        # script runs on the server itself
-ALERT_KEY="backup_failed"
-ALERT_SOURCE="nightly-backup"
-ALERT_SEVERITY="critical"
-# ------------------------------------------------------------------------------
+# ─── Configuration ────────────────────────────────────────────────────
+QUAILSYNC_DIR="$HOME/QuailSyncV2"
+DB_PATH="$QUAILSYNC_DIR/data/quailsync.db"
+LOGFILE="/var/log/quailsync-backup.log"
+ALERT_URL="http://localhost:3000/api/alerts"
 
-DRY_RUN=0
-if [[ "${1:-}" == "--dry-run" ]]; then
-    DRY_RUN=1
-fi
+# SSH target (Windows machine "Ironman")
+SSH_USER="Georgia"
+SSH_HOST="192.168.0.228"
+SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new"
+REMOTE_DIR="/cygdrive/c/QuailSyncSnapshots/quailsync-nightly"
+# NOTE: If using Windows OpenSSH (not Cygwin), the path format is:
+# REMOTE_DIR="C:/QuailSyncSnapshots/quailsync-nightly"
+# Test with: ssh Georgia@192.168.0.228 "ls C:/QuailSyncSnapshots/"
+# and adjust REMOTE_DIR to whichever format works.
 
-DATE_STAMP="$(date -u +%Y-%m-%d)"
-DEST_GZ="${BACKUP_DIR}/quailsync-${DATE_STAMP}.db.gz"
-TMP_DB=""
+# Local backup (cheap insurance against SSH/network failures)
+LOCAL_BACKUP_DIR="$HOME/quailsync-local-backups"
+LOCAL_RETENTION_DAYS=3
 
-# Log format: ISO-8601-UTC <STATUS> <reason...>   (grep-friendly, single line)
-log_event() {
-    local status="$1"
-    shift
-    local ts
-    ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    printf '%s %s %s\n' "$ts" "$status" "$*" >> "$LOG_FILE" 2>/dev/null || true
-    printf '%s %s %s\n' "$ts" "$status" "$*"
+# Remote retention
+REMOTE_RETENTION_DAYS=7
+
+# ─── Helpers ──────────────────────────────────────────────────────────
+DATE=$(date +%Y-%m-%d)
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+BACKUP_FILENAME="quailsync-${DATE}.db.gz"
+
+log() {
+    echo "${TIMESTAMP} [BACKUP] $1" | tee -a "$LOGFILE"
 }
 
-# Escape a string for safe inclusion as a JSON string value.
-json_escape() {
-    python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1" 2>/dev/null \
-        || printf '"%s"' "${1//\"/\\\"}"
-}
-
-# POST a failure alert. Best-effort: never re-fails the script.
-notify_failure() {
-    local title="$1"
+alert() {
+    local level="$1"
     local message="$2"
-    local payload
-    payload=$(printf '{"alert_key":%s,"severity":%s,"title":%s,"message":%s,"source":%s,"metadata_json":%s}' \
-        "$(json_escape "$ALERT_KEY")" \
-        "$(json_escape "$ALERT_SEVERITY")" \
-        "$(json_escape "$title")" \
-        "$(json_escape "$message")" \
-        "$(json_escape "$ALERT_SOURCE")" \
-        "$(json_escape "{\"host\":\"$(hostname)\",\"date\":\"${DATE_STAMP}\"}")"
-    )
-    if ! curl --max-time 10 -fsS -H 'Content-Type: application/json' \
-              -X POST -d "$payload" "${SERVER_URL}/api/alerts" >/dev/null 2>&1; then
-        log_event INFO "alert POST failed (server unreachable?), continuing"
-    fi
+    local alert_key="$3"
+    curl -sf -X POST "$ALERT_URL" \
+        -H "Content-Type: application/json" \
+        -d "{\"level\":\"${level}\",\"message\":\"${message}\",\"alert_key\":\"${alert_key}\"}" \
+        >> "$LOGFILE" 2>&1 || true
 }
 
-# POST a resolve. Best-effort.
-notify_resolve() {
-    local payload
-    payload=$(printf '{"alert_key":%s}' "$(json_escape "$ALERT_KEY")")
-    if ! curl --max-time 10 -fsS -H 'Content-Type: application/json' \
-              -X POST -d "$payload" "${SERVER_URL}/api/alerts/resolve" >/dev/null 2>&1; then
-        log_event INFO "resolve POST failed (server unreachable?), continuing"
-    fi
+cleanup_local() {
+    log "Pruning local backups older than ${LOCAL_RETENTION_DAYS} days..."
+    find "$LOCAL_BACKUP_DIR" -name "quailsync-*.db.gz" -mtime +${LOCAL_RETENTION_DAYS} -delete 2>/dev/null || true
 }
 
-cleanup() {
-    if [[ -n "$TMP_DB" && -f "$TMP_DB" ]]; then
-        rm -f "$TMP_DB"
-    fi
+cleanup_remote() {
+    log "Pruning remote backups older than ${REMOTE_RETENTION_DAYS} days..."
+    # List remote .gz files, parse dates, delete old ones
+    ssh $SSH_OPTS "${SSH_USER}@${SSH_HOST}" "cd \"${REMOTE_DIR}\" && find . -name 'quailsync-*.db.gz' -mtime +${REMOTE_RETENTION_DAYS} -delete" 2>/dev/null || {
+        log "WARNING: Remote cleanup failed (non-critical)"
+    }
 }
-trap cleanup EXIT
 
-on_error() {
-    local line="$1"
-    local msg="nightly-backup.sh failed at line ${line} (host=$(hostname) date=${DATE_STAMP})"
-    log_event FAIL "$msg"
-    notify_failure "Backup failed" "$msg"
-}
-trap 'on_error $LINENO' ERR
-
-# ---------- preflight ---------------------------------------------------------
-if [[ ! -r "$DB_PATH" ]]; then
-    log_event FAIL "source DB not readable: $DB_PATH"
-    notify_failure "Backup failed" "Source DB missing or unreadable: $DB_PATH"
+# ─── Pre-flight checks ───────────────────────────────────────────────
+if [[ ! -f "$DB_PATH" ]]; then
+    log "ERROR: Database not found at ${DB_PATH}"
+    alert "error" "Nightly backup failed: database file missing" "backup_db_missing"
     exit 1
 fi
 
-if (( DRY_RUN )); then
-    log_event INFO "DRY RUN start: would write $DEST_GZ"
-else
-    mkdir -p "$BACKUP_DIR"
+mkdir -p "$LOCAL_BACKUP_DIR"
+
+# SSH reachability check (replaces old `mountpoint -q` SMB check)
+log "Checking SSH connectivity to ${SSH_HOST}..."
+if ! ssh $SSH_OPTS "${SSH_USER}@${SSH_HOST}" "echo ok" > /dev/null 2>&1; then
+    log "ERROR: Cannot reach ${SSH_HOST} via SSH"
+    alert "error" "Nightly backup failed: SSH connection to Ironman refused" "backup_ssh_unreachable"
+    exit 1
+fi
+log "SSH connectivity confirmed."
+
+# ─── Step 1: SQLite safe backup ──────────────────────────────────────
+STAGING_DIR=$(mktemp -d)
+STAGING_DB="${STAGING_DIR}/quailsync-${DATE}.db"
+STAGING_GZ="${STAGING_DIR}/${BACKUP_FILENAME}"
+
+log "Starting SQLite backup..."
+sqlite3 "$DB_PATH" ".backup '${STAGING_DB}'"
+
+if [[ ! -s "$STAGING_DB" ]]; then
+    log "ERROR: SQLite .backup produced empty file"
+    alert "error" "Nightly backup failed: sqlite3 .backup produced empty output" "backup_sqlite_empty"
+    rm -rf "$STAGING_DIR"
+    exit 1
 fi
 
-# ---------- backup ------------------------------------------------------------
-TMP_DB="$(mktemp --suffix=.db /tmp/quailsync-backup.XXXXXX)"
+gzip -9 "$STAGING_DB"
+FILESIZE=$(stat -c%s "$STAGING_GZ" 2>/dev/null || stat -f%z "$STAGING_GZ")
+log "Backup compressed: ${BACKUP_FILENAME} (${FILESIZE} bytes)"
 
-if (( DRY_RUN )); then
-    log_event INFO "would run: sqlite3 $DB_PATH .backup $TMP_DB"
-    : > "$TMP_DB"
+# ─── Step 2: Local copy ──────────────────────────────────────────────
+cp "$STAGING_GZ" "$LOCAL_BACKUP_DIR/"
+log "Local copy saved to ${LOCAL_BACKUP_DIR}/${BACKUP_FILENAME}"
+
+# ─── Step 3: rsync to Windows via SSH ────────────────────────────────
+log "Syncing to ${SSH_HOST}:${REMOTE_DIR}/ ..."
+if rsync -avz -e "ssh ${SSH_OPTS}" "$STAGING_GZ" "${SSH_USER}@${SSH_HOST}:${REMOTE_DIR}/"; then
+    log "Remote sync complete."
+    alert "info" "Nightly backup succeeded: ${BACKUP_FILENAME} (${FILESIZE} bytes)" "backup_success"
 else
-    sqlite3 "$DB_PATH" ".backup '${TMP_DB}'"
+    log "ERROR: rsync to ${SSH_HOST} failed (exit code $?)"
+    alert "error" "Nightly backup failed: rsync to Ironman failed" "backup_rsync_failed"
+    rm -rf "$STAGING_DIR"
+    exit 1
 fi
 
-# ---------- compress ----------------------------------------------------------
-if (( DRY_RUN )); then
-    log_event INFO "would gzip $TMP_DB -> $DEST_GZ"
-else
-    gzip -c "$TMP_DB" > "$DEST_GZ"
-fi
+# ─── Step 4: Retention cleanup ────────────────────────────────────────
+cleanup_local
+cleanup_remote
 
-# ---------- verify ------------------------------------------------------------
-if (( DRY_RUN )); then
-    log_event INFO "would verify file existence, size>${MIN_BYTES}B, gunzip -t"
-else
-    if [[ ! -f "$DEST_GZ" ]]; then
-        log_event FAIL "verify: destination missing $DEST_GZ"
-        notify_failure "Backup failed" "Backup file missing after write: $DEST_GZ"
-        exit 1
-    fi
-
-    actual_bytes="$(stat -c%s "$DEST_GZ")"
-    if (( actual_bytes < MIN_BYTES )); then
-        log_event FAIL "verify: backup too small (${actual_bytes}B < ${MIN_BYTES}B) at $DEST_GZ"
-        notify_failure "Backup failed" "Backup suspiciously small: ${actual_bytes} bytes at $DEST_GZ"
-        exit 1
-    fi
-
-    if ! gunzip -t "$DEST_GZ" >/dev/null 2>&1; then
-        log_event FAIL "verify: gunzip -t failed for $DEST_GZ"
-        notify_failure "Backup failed" "Backup gzip integrity check failed: $DEST_GZ"
-        exit 1
-    fi
-fi
-
-# ---------- prune -------------------------------------------------------------
-if (( DRY_RUN )); then
-    log_event INFO "would prune files older than ${RETAIN_DAYS} days in $BACKUP_DIR"
-    find "$BACKUP_DIR" -maxdepth 1 -type f -name 'quailsync-*.db.gz' -mtime "+${RETAIN_DAYS}" -print 2>/dev/null || true
-else
-    find "$BACKUP_DIR" -maxdepth 1 -type f -name 'quailsync-*.db.gz' -mtime "+${RETAIN_DAYS}" -delete
-fi
-
-# ---------- success -----------------------------------------------------------
-if (( DRY_RUN )); then
-    log_event OK "dry-run complete (no files written or deleted, no API call)"
-else
-    size_human="$(du -h "$DEST_GZ" | awk '{print $1}')"
-    log_event OK "backup_size=${size_human} location=${DEST_GZ}"
-    notify_resolve
-fi
-
-exit 0
+# ─── Cleanup staging ─────────────────────────────────────────────────
+rm -rf "$STAGING_DIR"
+log "Nightly backup complete."
