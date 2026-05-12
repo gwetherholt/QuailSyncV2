@@ -208,6 +208,19 @@ pub(crate) struct BirdRecord {
     father_id: Option<i64>,
 }
 
+/// Estimated inbreeding coefficient for a potential pair.
+///
+/// Parent-based checks are authoritative and binary:
+///   - share both parents → 0.5 (full siblings)
+///   - share one parent → 0.25 (half siblings)
+///
+/// When no parent overlap can be proven, fall back to a proportional
+/// lineage-overlap score: `(|A ∩ B| / |A ∪ B|) * 0.25` (Jaccard × 0.25
+/// ceiling). This lets a bird tagged `[Fernbank, NWQuail]` paired with
+/// one tagged `[Fernbank]` score 0.125 — riskier than unrelated stock
+/// (0.0) but safer than a same-single-bloodline pair (0.25). Closes #5.
+///
+/// If either bird has zero lineage tags, lineage overlap contributes 0.0.
 pub(crate) fn compute_relatedness(m: &BirdRecord, f: &BirdRecord) -> f64 {
     let share_mother = matches!((m.mother_id, f.mother_id), (Some(a), Some(b)) if a == b);
     let share_father = matches!((m.father_id, f.father_id), (Some(a), Some(b)) if a == b);
@@ -217,12 +230,18 @@ pub(crate) fn compute_relatedness(m: &BirdRecord, f: &BirdRecord) -> f64 {
     if share_mother || share_father {
         return 0.25;
     }
-    // Two birds are loosely related if they share ANY lineage tag — preserves
-    // the intent of the old single-bloodline check under the many-to-many model.
-    if m.lineage_ids.iter().any(|x| f.lineage_ids.contains(x)) {
-        return 0.25;
+
+    if m.lineage_ids.is_empty() || f.lineage_ids.is_empty() {
+        return 0.0;
     }
-    0.0
+    let m_set: std::collections::HashSet<i64> = m.lineage_ids.iter().copied().collect();
+    let f_set: std::collections::HashSet<i64> = f.lineage_ids.iter().copied().collect();
+    let intersection = m_set.intersection(&f_set).count();
+    let union = m_set.union(&f_set).count();
+    if union == 0 {
+        return 0.0;
+    }
+    (intersection as f64 / union as f64) * 0.25
 }
 
 fn fetch_lineage_ids(conn: &rusqlite::Connection, bird_id: i64) -> Vec<i64> {
@@ -507,4 +526,109 @@ pub(crate) async fn flock_summary(State(state): State<AppState>) -> Json<FlockSu
         females,
         lineages,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec(id: i64, lineages: Vec<i64>, mother: Option<i64>, father: Option<i64>) -> BirdRecord {
+        BirdRecord {
+            id,
+            sex: Sex::Unknown,
+            lineage_ids: lineages,
+            mother_id: mother,
+            father_id: father,
+        }
+    }
+
+    #[test]
+    fn full_siblings_score_half() {
+        // Both parents shared trumps any lineage analysis.
+        let a = rec(1, vec![1], Some(10), Some(20));
+        let b = rec(2, vec![2], Some(10), Some(20));
+        assert!((compute_relatedness(&a, &b) - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn half_siblings_score_quarter() {
+        let a = rec(1, vec![1], Some(10), Some(20));
+        let b = rec(2, vec![2], Some(10), Some(99));
+        assert!((compute_relatedness(&a, &b) - 0.25).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn identical_single_lineage_no_parents_scores_quarter() {
+        // 1 ∩ 1 / 1 ∪ 1 = 1.0 × 0.25 = 0.25 — preserves the old
+        // single-bloodline behavior as the upper bound of the new rule.
+        let a = rec(1, vec![1], None, None);
+        let b = rec(2, vec![1], None, None);
+        assert!((compute_relatedness(&a, &b) - 0.25).abs() < f64::EPSILON);
+    }
+
+    /// Partial lineage overlap with no parental link should produce a
+    /// fractional score between the old single-lineage "same" (0.25) and
+    /// "different" (0.0). Concretely: [Fernbank, NWQuail] vs [Fernbank]
+    /// is |{Fernbank}| / |{Fernbank, NWQuail}| × 0.25 = 0.5 × 0.25 = 0.125.
+    #[test]
+    fn partial_lineage_overlap_scores_proportionally() {
+        let a = rec(1, vec![1, 2], None, None);
+        let b = rec(2, vec![1], None, None);
+        assert!((compute_relatedness(&a, &b) - 0.125).abs() < f64::EPSILON);
+    }
+
+    /// One-third overlap: [A, B, C] vs [A] → 1/3 × 0.25 ≈ 0.0833.
+    /// Still unsafe (> 0.0625 threshold). Sanity-checks the rule on a
+    /// three-way mix.
+    #[test]
+    fn one_third_lineage_overlap_scores_below_quarter() {
+        let a = rec(1, vec![1, 2, 3], None, None);
+        let b = rec(2, vec![1], None, None);
+        let r = compute_relatedness(&a, &b);
+        assert!((r - (1.0 / 3.0) * 0.25).abs() < f64::EPSILON);
+        assert!(r > 0.0625, "1/3 × 0.25 ≈ 0.0833 is still flagged unsafe");
+    }
+
+    /// Identical multi-lineage sets behave like the single-lineage match:
+    /// [A, B] vs [A, B] = 2/2 = 1.0 × 0.25 = 0.25.
+    #[test]
+    fn identical_multi_lineage_sets_score_quarter() {
+        let a = rec(1, vec![1, 2], None, None);
+        let b = rec(2, vec![1, 2], None, None);
+        assert!((compute_relatedness(&a, &b) - 0.25).abs() < f64::EPSILON);
+    }
+
+    /// No lineage overlap, no parents known → 0.0 (safe).
+    #[test]
+    fn disjoint_lineage_sets_score_zero() {
+        let a = rec(1, vec![1, 2], None, None);
+        let b = rec(2, vec![3], None, None);
+        assert!((compute_relatedness(&a, &b) - 0.0).abs() < f64::EPSILON);
+        // Confirms the safety threshold logic: 0.0 < 0.0625 → safe.
+        assert!(compute_relatedness(&a, &b) < 0.0625);
+    }
+
+    /// Empty lineage list on either side → no lineage contribution; with
+    /// no parental link, total relatedness is 0.0. (We can't measure what
+    /// we don't know — don't penalise the pair.)
+    #[test]
+    fn empty_lineage_list_treated_as_zero_overlap() {
+        let a = rec(1, vec![], None, None);
+        let b = rec(2, vec![1, 2], None, None);
+        assert!((compute_relatedness(&a, &b) - 0.0).abs() < f64::EPSILON);
+
+        let c = rec(3, vec![], None, None);
+        let d = rec(4, vec![], None, None);
+        assert!((compute_relatedness(&c, &d) - 0.0).abs() < f64::EPSILON);
+    }
+
+    /// Parental link beats lineage analysis even when lineages disagree.
+    /// Half-siblings with disjoint lineage tags still score 0.25 from
+    /// the parent rule (not 0.0 from the disjoint-lineage rule).
+    #[test]
+    fn parent_overlap_overrides_lineage_disjoint() {
+        let a = rec(1, vec![1], Some(10), None);
+        let b = rec(2, vec![2], Some(10), None);
+        assert!((compute_relatedness(&a, &b) - 0.25).abs() < f64::EPSILON);
+    }
 }
