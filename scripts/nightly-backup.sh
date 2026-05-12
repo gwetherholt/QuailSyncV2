@@ -56,8 +56,11 @@ cleanup_local() {
 
 cleanup_remote() {
     log "Pruning remote backups older than ${REMOTE_RETENTION_DAYS} days..."
-    # List remote .gz files, parse dates, delete old ones
-    ssh $SSH_OPTS "${SSH_USER}@${SSH_HOST}" "cd \"${REMOTE_DIR}\" && find . -name 'quailsync-*.db.gz' -mtime +${REMOTE_RETENTION_DAYS} -delete" 2>/dev/null || {
+    # Run prune via PowerShell on Windows OpenSSH — `find -mtime -delete`
+    # doesn't exist on the Windows side (no GNU coreutils, no Cygwin in this
+    # path). `$_` is escaped so bash doesn't expand it locally; the inner
+    # double quotes around the -Command argument are also escaped.
+    ssh $SSH_OPTS "${SSH_USER}@${SSH_HOST}" "powershell -Command \"Get-ChildItem 'C:\\QuailSyncSnapshots\\quailsync-nightly\\quailsync-*.db.gz' | Where-Object { \$_.LastWriteTime -lt (Get-Date).AddDays(-${REMOTE_RETENTION_DAYS}) } | Remove-Item -Force\"" 2>/dev/null || {
         log "WARNING: Remote cleanup failed (non-critical)"
     }
 }
