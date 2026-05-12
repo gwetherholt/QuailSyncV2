@@ -52,7 +52,8 @@ fi
 # ─── Check 2: Remote file exists and is non-empty ─────────────────────
 log "Checking remote file: ${REMOTE_DIR}/${EXPECTED_FILE}"
 REMOTE_SIZE=$(ssh $SSH_OPTS "${SSH_USER}@${SSH_HOST}" \
-    "stat -c%s '${REMOTE_DIR}/${EXPECTED_FILE}' 2>/dev/null || echo 0")
+    "powershell -Command \"if (Test-Path 'C:\\QuailSyncSnapshots\\quailsync-nightly\\${EXPECTED_FILE}') { (Get-Item 'C:\\QuailSyncSnapshots\\quailsync-nightly\\${EXPECTED_FILE}').Length } else { Write-Output 0 }\"" \
+    2>/dev/null | tr -d '\r')
 
 if [[ "$REMOTE_SIZE" -eq 0 ]]; then
     log "ERROR: Remote backup missing or empty: ${EXPECTED_FILE}"
