@@ -75,7 +75,7 @@ except ImportError:
 
 # === Global State ===
 current_brooder_id = None       # last QR-detected brooder ID (raw detection)
-current_bloodline_name = None
+current_lineage_name = None
 active_brooder_id = None        # the brooder this camera is currently assigned to
 last_qr_scan_time = 0
 qr_scan_interval = 2.0  # scan every 2 seconds (not every frame)
@@ -223,7 +223,7 @@ def _capture_loop():
 
 def _scan_array_for_qr(array):
     """Scan a numpy RGB array for QR codes. Returns list of bounding rects."""
-    global current_brooder_id, current_bloodline_name, last_qr_scan_time
+    global current_brooder_id, current_lineage_name, last_qr_scan_time
     global qr_detections, last_qr_raw, last_qr_rects
 
     if not QR_AVAILABLE:
@@ -241,18 +241,18 @@ def _scan_array_for_qr(array):
             rect = obj.rect
             rects.append((rect.left, rect.top, rect.width, rect.height))
 
-            # Match 'brooder-N' or 'brooder-N-bloodline' format
+            # Match 'brooder-N' or 'brooder-N-lineage' format
             match = re.match(r"^brooder-(\d+)(?:-(.+))?$", data, re.IGNORECASE)
             if match:
                 brooder_id = int(match.group(1))
-                bloodline_name = match.group(2)  # None for simple 'brooder-N' format
+                lineage_name = match.group(2)  # None for simple 'brooder-N' format
                 last_qr_raw = data
 
                 if current_brooder_id != brooder_id:
                     old = current_brooder_id
                     current_brooder_id = brooder_id
-                    current_bloodline_name = bloodline_name
-                    bl_str = f" (bloodline: {bloodline_name})" if bloodline_name else ""
+                    current_lineage_name = lineage_name
+                    bl_str = f" (lineage: {lineage_name})" if lineage_name else ""
                     print(f"\033[36m[qr] Detected: {old} → {brooder_id}{bl_str}\033[0m")
                 # Update active assignment immediately on first detection
                 if active_brooder_id != brooder_id:
@@ -458,7 +458,7 @@ def _announce_to_server(new_brooder_id, old_brooder_id=None):
                         payload = json.dumps({
                             "QrDetected": {
                                 "brooder_id": new_brooder_id,
-                                "bloodline": current_bloodline_name or "",
+                                "lineage": current_lineage_name or "",
                                 "qr_code": last_qr_raw
                             }
                         })
@@ -563,7 +563,7 @@ class StreamHandler(BaseHTTPRequestHandler):
         status = {
             "active_brooder_id": active_brooder_id,
             "brooder_id": current_brooder_id,
-            "bloodline_name": current_bloodline_name,
+            "lineage_name": current_lineage_name,
             "qr_scanning": QR_AVAILABLE,
             "last_scan": last_qr_scan_time,
             "last_raw": last_qr_raw,
@@ -575,7 +575,7 @@ class StreamHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(status).encode())
 
     def _handle_index(self):
-        safe_name = html_mod.escape(str(current_bloodline_name)) if current_bloodline_name else ""
+        safe_name = html_mod.escape(str(current_lineage_name)) if current_lineage_name else ""
         brooder_label = f"Brooder {current_brooder_id} ({safe_name})" if current_brooder_id else "No QR detected"
         qr_status = "enabled" if QR_AVAILABLE else "disabled (install pyzbar)"
         html = f"""<!DOCTYPE html>
@@ -604,7 +604,7 @@ class StreamHandler(BaseHTTPRequestHandler):
       fetch('/qr-status')
         .then(r => r.json())
         .then(d => {{
-          const label = d.brooder_id ? 'Brooder ' + d.brooder_id + (d.bloodline_name ? ' (' + d.bloodline_name + ')' : '') : 'No QR detected';
+          const label = d.brooder_id ? 'Brooder ' + d.brooder_id + (d.lineage_name ? ' (' + d.lineage_name + ')' : '') : 'No QR detected';
           document.querySelector('.brooder').textContent = label;
         }});
     }}, 5000);
