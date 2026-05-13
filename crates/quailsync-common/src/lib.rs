@@ -286,6 +286,15 @@ pub struct UpdateBird {
     pub status: Option<BirdStatus>,
     pub notes: Option<String>,
     pub nfc_tag_id: Option<String>,
+    /// Newly-editable post-banding fields. Each field is independently
+    /// optional — missing means "leave unchanged"; `Some("")` is treated
+    /// as the literal empty value (caller decides whether that's allowed).
+    #[serde(default)]
+    pub band_color: Option<String>,
+    #[serde(default)]
+    pub sex: Option<Sex>,
+    #[serde(default)]
+    pub hatch_date: Option<NaiveDate>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -214,6 +214,10 @@ data class UpdateBirdRequest(
     @SerializedName("status") val status: String? = null,
     @SerializedName("notes") val notes: String? = null,
     @SerializedName("nfc_tag_id") val nfcTagId: String? = null,
+    /** Newly-editable post-banding fields. `null` means "leave unchanged". */
+    @SerializedName("band_color") val bandColor: String? = null,
+    @SerializedName("sex") val sex: String? = null,
+    @SerializedName("hatch_date") val hatchDate: String? = null,
 )
 
 data class CreateBirdRequest(

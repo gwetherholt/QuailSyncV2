@@ -869,7 +869,11 @@ fun EditBirdDialog(bird: Bird, viewModel: FlockViewModel, onDismiss: () -> Unit,
             Button(onClick = {
                 saving = true
                 viewModel.updateBird(bird.id, com.quailsync.app.data.UpdateBirdRequest(
-                    status = status, notes = notes.ifBlank { null },
+                    status = status,
+                    notes = notes.ifBlank { null },
+                    bandColor = bandColor.ifBlank { null },
+                    sex = sex.ifBlank { null },
+                    hatchDate = hatchDate.ifBlank { null },
                 )) { ok -> saving = false; if (ok) onSuccess() }
             }, enabled = !saving, colors = ButtonDefaults.buttonColors(containerColor = SageGreen)) { Text(if (saving) "Saving..." else "Save") }
         },

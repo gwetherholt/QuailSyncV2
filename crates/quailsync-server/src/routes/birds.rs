@@ -118,6 +118,30 @@ pub(crate) async fn update_bird(
             return db_error(e);
         }
     }
+    if let Some(ref bc) = body.band_color {
+        if let Err(e) = conn.execute(
+            "UPDATE birds SET band_color = ?1 WHERE id = ?2",
+            params![bc, id],
+        ) {
+            return db_error(e);
+        }
+    }
+    if let Some(ref sex) = body.sex {
+        if let Err(e) = conn.execute(
+            "UPDATE birds SET sex = ?1 WHERE id = ?2",
+            params![sex_to_str(sex), id],
+        ) {
+            return db_error(e);
+        }
+    }
+    if let Some(hd) = body.hatch_date {
+        if let Err(e) = conn.execute(
+            "UPDATE birds SET hatch_date = ?1 WHERE id = ?2",
+            params![hd.to_string(), id],
+        ) {
+            return db_error(e);
+        }
+    }
 
     match conn.query_row(
         &format!("{BIRD_SELECT} WHERE id = ?1"),

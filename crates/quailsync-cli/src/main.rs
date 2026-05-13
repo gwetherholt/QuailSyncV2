@@ -1320,6 +1320,9 @@ async fn cmd_processing_complete(
             status: Some(BirdStatus::Culled),
             notes: None,
             nfc_tag_id: None,
+            band_color: None,
+            sex: None,
+            hatch_date: None,
         })
         .send()
         .await;
