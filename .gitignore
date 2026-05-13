@@ -7,3 +7,9 @@ __pycache__/
 # Training data and outputs
 training/
 *.pt
+
+# Runtime data + SQLite sidecars + Pi-agent crash dumps
+data/
+pi-agent/core.*
+*.db-journal
+*.db-wal
