@@ -21,7 +21,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Delete
@@ -44,7 +44,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -160,7 +159,11 @@ fun TelemetryScreen(
     val liveReadings by viewModel.webSocketService.readings.collectAsState()
     val chickGroups by viewModel.chickGroups.collectAsState()
 
-    var deleteTargetId by remember { mutableStateOf<Int?>(null) }
+    // Explicit MutableState — see BreedingScreen for rationale: with the `by`
+    // delegate, lambda writes (`deleteTargetId = null`) get flagged by the
+    // Kotlin flow-analyser as `UNUSED_VALUE` because it can't see Compose's
+    // recomposition-time reads.
+    val deleteTargetId = remember { mutableStateOf<Int?>(null) }
 
     val lifecycleOwner = androidx.compose.ui.platform.LocalContext.current as LifecycleOwner
     DisposableEffect(lifecycleOwner) {
@@ -176,7 +179,7 @@ fun TelemetryScreen(
             Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
             Arrangement.Start, Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
             Text("Telemetry", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
             if (isRefreshing) {
                 CircularProgressIndicator(Modifier.size(24.dp).padding(end = 16.dp), strokeWidth = 2.dp, color = SageGreen)
@@ -205,7 +208,7 @@ fun TelemetryScreen(
                         onClick = { onBrooderClick(state.brooder.id) },
                         onDelete = if (canDelete) ({
                             Log.d("QuailSync", "Delete icon tapped for brooder ${state.brooder.id}")
-                            deleteTargetId = state.brooder.id
+                            deleteTargetId.value = state.brooder.id
                         }) else null,
                     )
                 }
@@ -214,25 +217,25 @@ fun TelemetryScreen(
         }
     }
 
-    if (deleteTargetId != null) {
-        val idToDelete = deleteTargetId!!
+    if (deleteTargetId.value != null) {
+        val idToDelete = deleteTargetId.value!!
         AlertDialog(
-            onDismissRequest = { deleteTargetId = null },
+            onDismissRequest = { deleteTargetId.value = null },
             title = { Text("Delete Brooder?") },
             text = { Text("This will remove brooder #$idToDelete and all its sensor readings. This cannot be undone.") },
             confirmButton = {
                 Button(
                     onClick = {
-                        val id = deleteTargetId!!
+                        val id = deleteTargetId.value!!
                         Log.d("QuailSync", "Delete confirmed for brooder $id")
-                        deleteTargetId = null
+                        deleteTargetId.value = null
                         viewModel.deleteBrooderAsync(id)
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AlertRed),
                 ) { Text("Delete") }
             },
             dismissButton = {
-                OutlinedButton(onClick = { deleteTargetId = null }) { Text("Cancel") }
+                OutlinedButton(onClick = { deleteTargetId.value = null }) { Text("Cancel") }
             },
         )
     }
@@ -367,7 +370,7 @@ fun DetailedBrooderCard(state: BrooderState, liveReading: LiveReading?, onClick:
             if (state.targetTemp != null) {
                 Spacer(Modifier.height(10.dp))
                 val tt = state.targetTemp
-                val tempInRange = currentTemp != null && currentTemp >= tt.minTempF && currentTemp <= tt.maxTempF
+                val tempInRange = currentTemp != null && currentTemp in tt.minTempF..tt.maxTempF
                 val tempColor = when {
                     currentTemp == null -> MaterialTheme.colorScheme.onSurfaceVariant
                     tempInRange -> AlertGreen

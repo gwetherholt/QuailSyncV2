@@ -21,7 +21,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Groups
@@ -38,7 +38,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -47,7 +46,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -63,13 +61,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.quailsync.app.data.Bird
-import com.quailsync.app.data.Lineage
 import com.quailsync.app.data.BreedingGroupDto
 import com.quailsync.app.data.CreateBreedingGroupRequest
 import com.quailsync.app.data.CullBatchRequest
@@ -86,7 +82,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.time.LocalDate
-import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 
 // =====================================================================
@@ -98,9 +93,6 @@ class BreedingViewModel(application: Application) : AndroidViewModel(application
 
     private val _birds = MutableStateFlow<List<Bird>>(emptyList())
     val birds: StateFlow<List<Bird>> = _birds.asStateFlow()
-
-    private val _lineages = MutableStateFlow<List<Lineage>>(emptyList())
-    val lineages: StateFlow<List<Lineage>> = _lineages.asStateFlow()
 
     private val _groups = MutableStateFlow<List<BreedingGroupDto>>(emptyList())
     val groups: StateFlow<List<BreedingGroupDto>> = _groups.asStateFlow()
@@ -119,7 +111,6 @@ class BreedingViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             _isLoading.value = true
             _birds.value = try { api.getBirds() } catch (_: Exception) { emptyList() }
-            _lineages.value = try { api.getLineages() } catch (_: Exception) { emptyList() }
             _groups.value = try { api.getBreedingGroups() } catch (_: Exception) { emptyList() }
             _cullRecs.value = try { api.getCullRecommendations() } catch (e: Exception) {
                 Log.e("QuailSync", "Failed to load cull recs", e); emptyList()
@@ -163,7 +154,7 @@ fun BreedingScreen(viewModel: BreedingViewModel = viewModel(), onBack: () -> Uni
             Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
             Arrangement.Start, Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
             Text("Breeding & Culling", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
             IconButton(onClick = { viewModel.refresh() }) { Icon(Icons.Default.Refresh, "Refresh") }
         }
@@ -196,15 +187,16 @@ fun BreedingScreen(viewModel: BreedingViewModel = viewModel(), onBack: () -> Uni
 private fun CullListTab(viewModel: BreedingViewModel) {
     val cullRecs by viewModel.cullRecs.collectAsState()
     val birds by viewModel.birds.collectAsState()
-    val lineages by viewModel.lineages.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
     val selectedIds = remember { mutableStateListOf<Int>() }
-    var showCullDialog by remember { mutableStateOf(false) }
+    // Explicit MutableState (not `by` delegate) so writes are setter calls;
+    // the Kotlin flow-analyser otherwise flags the lambda assignments below
+    // as `UNUSED_VALUE` (it can't see Compose's recomposition-time reads).
+    val showCullDialog = remember { mutableStateOf(false) }
 
     val birdMap = birds.associateBy { it.id }
-    val lineageMap = lineages.associateBy { it.id }
     val today = LocalDate.now()
 
     Column(Modifier.fillMaxSize()) {
@@ -313,7 +305,7 @@ private fun CullListTab(viewModel: BreedingViewModel) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(onClick = { selectedIds.clear() }) { Text("Clear") }
                             Button(
-                                onClick = { showCullDialog = true },
+                                onClick = { showCullDialog.value = true },
                                 colors = ButtonDefaults.buttonColors(containerColor = AlertRed),
                             ) {
                                 Icon(Icons.Default.Delete, null, Modifier.size(18.dp))
@@ -327,11 +319,11 @@ private fun CullListTab(viewModel: BreedingViewModel) {
         }
     }
 
-    if (showCullDialog) {
+    if (showCullDialog.value) {
         CullDialog(
             count = selectedIds.size,
             onConfirm = { method, notes ->
-                showCullDialog = false
+                showCullDialog.value = false
                 val ids = selectedIds.toList()
                 val reason = cullRecs.find { it.birdId == ids.firstOrNull() }?.reasonKey ?: "excess_male"
                 scope.launch {
@@ -344,7 +336,7 @@ private fun CullListTab(viewModel: BreedingViewModel) {
                     }
                 }
             },
-            onDismiss = { showCullDialog = false },
+            onDismiss = { showCullDialog.value = false },
         )
     }
 }
@@ -397,15 +389,14 @@ private fun CullDialog(count: Int, onConfirm: (method: String, notes: String) ->
 private fun BreedingGroupsTab(viewModel: BreedingViewModel) {
     val groups by viewModel.groups.collectAsState()
     val birds by viewModel.birds.collectAsState()
-    val lineages by viewModel.lineages.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    var showCreateDialog by remember { mutableStateOf(false) }
+    // Explicit MutableState — see comment on showCullDialog above.
+    val showCreateDialog = remember { mutableStateOf(false) }
 
     val activeBirds = birds.filter { it.status?.lowercase() == "active" }
     val birdMap = birds.associateBy { it.id }
-    val lineageMap = lineages.associateBy { it.id }
 
     // Birds already assigned to a group
     val assignedBirdIds = groups.flatMap { listOf(it.maleId) + it.femaleIds }.toSet()
@@ -487,19 +478,18 @@ private fun BreedingGroupsTab(viewModel: BreedingViewModel) {
 
         // Create button
         Button(
-            onClick = { showCreateDialog = true },
+            onClick = { showCreateDialog.value = true },
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
         ) { Text("Create Breeding Group") }
     }
 
-    if (showCreateDialog) {
+    if (showCreateDialog.value) {
         CreateBreedingGroupDialog(
             males = activeBirds.filter { it.sex?.lowercase() == "male" && it.id !in assignedBirdIds },
             females = activeBirds.filter { it.sex?.lowercase() == "female" && it.id !in assignedBirdIds },
-            lineageMap = lineageMap,
             onConfirm = { name, maleId, femaleIds, notes ->
-                showCreateDialog = false
+                showCreateDialog.value = false
                 scope.launch {
                     try {
                         viewModel.createGroup(name, maleId, femaleIds, notes.ifBlank { null })
@@ -509,7 +499,7 @@ private fun BreedingGroupsTab(viewModel: BreedingViewModel) {
                     }
                 }
             },
-            onDismiss = { showCreateDialog = false },
+            onDismiss = { showCreateDialog.value = false },
         )
     }
 }
@@ -519,7 +509,6 @@ private fun BreedingGroupsTab(viewModel: BreedingViewModel) {
 private fun CreateBreedingGroupDialog(
     males: List<Bird>,
     females: List<Bird>,
-    lineageMap: Map<Int, Lineage>,
     onConfirm: (name: String, maleId: Int, femaleIds: List<Int>, notes: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -601,13 +590,11 @@ private fun CreateBreedingGroupDialog(
 @Composable
 private fun PairCheckTab(viewModel: BreedingViewModel) {
     val birds by viewModel.birds.collectAsState()
-    val lineages by viewModel.lineages.collectAsState()
     val scope = rememberCoroutineScope()
 
     val activeBirds = birds.filter { it.status?.lowercase() == "active" }
     val males = activeBirds.filter { it.sex?.lowercase() == "male" }
     val females = activeBirds.filter { it.sex?.lowercase() == "female" }
-    val lineageMap = lineages.associateBy { it.id }
 
     var selectedMaleId by remember { mutableStateOf<Int?>(null) }
     var selectedFemaleId by remember { mutableStateOf<Int?>(null) }
