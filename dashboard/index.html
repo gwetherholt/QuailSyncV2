@@ -971,7 +971,7 @@
   Page.Dashboard = {
     render: function(app){
       app.innerHTML = '<div class="dash-grid">' +
-        '<div class="panel" style="grid-column:1/-1"><div class="panel-header"><span class="panel-header-left">&#x1F321;&#xFE0F; Brooders</span></div><div class="panel-body" id="d-brooder">'+loadingHTML()+'</div></div>' +
+        '<div class="panel" style="grid-column:1/-1"><div class="panel-header"><span class="panel-header-left">&#x1F3E0; Housing</span></div><div class="panel-body" id="d-brooder">'+loadingHTML()+'</div></div>' +
         '<div class="dash-row-2">' +
           '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F6A8; Alerts</span><a class="view-all-link" id="d-alerts-viewall" style="display:none">View all</a></div><div class="panel-body"><div class="alerts-scroll" id="d-alerts">'+loadingHTML()+'</div></div></div>' +
           '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F4CA; Quick Stats</span></div><div class="panel-body" id="d-stats">'+loadingHTML()+'</div></div>' +
@@ -1141,7 +1141,12 @@
             humStr = status && status.latest_humidity!=null ? status.latest_humidity.toFixed(1)+'%' : '--';
           }
         }
-        var alertHtml = isHutch ? '' : (isOffline ? '<span style="color:#999">No signal</span>' : (status && status.has_alert) ? status.alert_message : '');
+        // Two paths: offline → render trusted markup; alert message → render
+        // *escaped* server-supplied text. The single combined `alertHtml`
+        // path was being run through escapeHtml() which double-escaped the
+        // offline `<span>` and rendered it as literal text.
+        var alertOfflineMarkup = (!isHutch && isOffline) ? '<span style="color:#999">No signal</span>' : '';
+        var alertMessage = (!isHutch && !isOffline && status && status.has_alert) ? status.alert_message : '';
         // Seed sparkline cache from REST data (no-op for hutches)
         var sparkTemps = [];
         if(!isHutch && readings && readings.length>0){
@@ -1166,8 +1171,19 @@
           card+='</div>';
           card+='<div class="sparkline" data-field="spark">'+self._buildSparkBars(sparkTemps,20,28)+'</div>';
         }
-        card+='<div data-field="headcount" data-brooder-hc="'+b.id+'" style="display:flex;align-items:center;gap:.4rem;font-size:.78rem;margin-top:.3rem;padding:4px 8px;background:var(--beige);border-radius:6px"><span style="font-size:1rem">&#x1F425;</span><span class="reading-value" style="font-weight:600;color:#7d8b6a">--</span><span style="color:#999"> chicks</span></div>';
-        if (alertHtml) card+='<div data-field="alert" style="font-size:.7rem;color:var(--danger);margin-top:.3rem">'+escapeHtml(alertHtml)+'</div>';
+        // Residents label is housing-type aware: eggs for incubators, chicks
+        // for brooders, birds for hutches. `data-housing-type` carries the
+        // value through so the headcount poll (_pollHeadcount) can pick the
+        // right plural when it updates the count later.
+        var housing = (b.housing_type || 'brooder').toLowerCase();
+        var residentsPlural = housing === 'incubator' ? 'eggs' : housing === 'hutch' ? 'birds' : 'chicks';
+        var housingIcon = housing === 'incubator' ? '&#x1F95A;' : housing === 'hutch' ? '&#x1F426;' : '&#x1F425;';
+        card+='<div data-field="headcount" data-brooder-hc="'+b.id+'" data-housing-type="'+housing+'" style="display:flex;align-items:center;gap:.4rem;font-size:.78rem;margin-top:.3rem;padding:4px 8px;background:var(--beige);border-radius:6px"><span style="font-size:1rem">'+housingIcon+'</span><span class="reading-value" style="font-weight:600;color:#7d8b6a">--</span><span style="color:#999"> '+residentsPlural+'</span></div>';
+        if (alertOfflineMarkup) {
+          card+='<div data-field="alert" style="font-size:.7rem;color:var(--danger);margin-top:.3rem">'+alertOfflineMarkup+'</div>';
+        } else if (alertMessage) {
+          card+='<div data-field="alert" style="font-size:.7rem;color:var(--danger);margin-top:.3rem">'+escapeHtml(alertMessage)+'</div>';
+        }
         card+='</div>';
         return card;
       }
@@ -1199,7 +1215,12 @@
             var ts=new Date(hc.timestamp);
             var ago=Math.round((Date.now()-ts.getTime())/60000);
             var agoStr=ago<1?'just now':ago<60?ago+'m ago':Math.round(ago/60)+'h ago';
-            hcEl.innerHTML='<span style="font-size:1rem">&#x1F425;</span><span class="reading-value" style="font-weight:600;color:#7d8b6a">'+hc.count+'</span><span style="color:#7d8b6a"> chick'+(hc.count!==1?'s':'')+'</span><span style="color:#999;margin-left:auto">'+agoStr+'</span>';
+            // Pluralise + pick icon by housing type (carried via data-attr).
+            var housing = (hcEl.getAttribute('data-housing-type') || 'brooder').toLowerCase();
+            var singular = housing === 'incubator' ? 'egg' : housing === 'hutch' ? 'bird' : 'chick';
+            var icon = housing === 'incubator' ? '&#x1F95A;' : housing === 'hutch' ? '&#x1F426;' : '&#x1F425;';
+            var label = singular + (hc.count !== 1 ? 's' : '');
+            hcEl.innerHTML='<span style="font-size:1rem">'+icon+'</span><span class="reading-value" style="font-weight:600;color:#7d8b6a">'+hc.count+'</span><span style="color:#7d8b6a"> '+label+'</span><span style="color:#999;margin-left:auto">'+agoStr+'</span>';
           }
         }catch(e){ console.log('[headcount] error for brooder '+bid+': '+e); hcEl.innerHTML=''; }
       }
@@ -2423,7 +2444,12 @@
         html+='<div class="camera-feed" id="cam-feed-'+b.id+'"><img src="'+escapeHtml(streamUrl)+'" alt="'+escapeHtml(b.name)+' feed" style="width:100%;max-height:400px;object-fit:contain;min-height:200px"></div>';
         html+='<div class="camera-actions"><button onclick="window.open(\''+escapeHtml(snapUrl)+'\',\'_blank\')">&#x1F4F8; Snapshot</button><button onclick="Page.Cameras.fullscreen(\'cam-feed-'+b.id+'\')">&#x26F6; Full Screen</button></div>';
         html+='<div id="qr-badge-'+b.id+'" style="margin-top:.3rem"><span class="qr-status-badge none">No QR</span></div>';
-        html+='<div data-field="headcount" data-brooder-hc="'+b.id+'" style="display:flex;align-items:center;gap:.4rem;font-size:.78rem;margin-top:.3rem;padding:4px 8px;background:var(--beige);border-radius:6px"><span style="font-size:1rem">&#x1F425;</span><span class="reading-value" style="font-weight:600;color:#7d8b6a">--</span><span style="color:#999"> chicks</span></div>';
+        // Housing-type-aware headcount (eggs / chicks / birds), matching the
+        // Dashboard page so `_pollHeadcount` reads consistent data-attrs.
+        var camHousing = (b.housing_type || 'brooder').toLowerCase();
+        var camPlural = camHousing === 'incubator' ? 'eggs' : camHousing === 'hutch' ? 'birds' : 'chicks';
+        var camIcon = camHousing === 'incubator' ? '&#x1F95A;' : camHousing === 'hutch' ? '&#x1F426;' : '&#x1F425;';
+        html+='<div data-field="headcount" data-brooder-hc="'+b.id+'" data-housing-type="'+camHousing+'" style="display:flex;align-items:center;gap:.4rem;font-size:.78rem;margin-top:.3rem;padding:4px 8px;background:var(--beige);border-radius:6px"><span style="font-size:1rem">'+camIcon+'</span><span class="reading-value" style="font-weight:600;color:#7d8b6a">--</span><span style="color:#999"> '+camPlural+'</span></div>';
         html+='<div class="camera-meta"><span>'+escapeHtml(streamUrl)+'</span></div>';
         html+='</div>';
       });
