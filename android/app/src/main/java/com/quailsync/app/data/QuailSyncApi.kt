@@ -30,10 +30,14 @@ data class Brooder(
     @SerializedName("qr_code") val qrCode: String? = null,
     @SerializedName("lineage_id") val lineageId: Int? = null,
     @SerializedName("life_stage") val lifeStage: String? = null,
+    /** Housing axis (issue #11): "incubator" / "brooder" / "hutch". Default
+     *  "brooder" for rows created before the migration. */
+    @SerializedName("housing_type") val housingType: String? = "brooder",
 )
 
 data class UpdateBrooderRequest(
     @SerializedName("camera_url") val cameraUrl: String? = null,
+    @SerializedName("housing_type") val housingType: String? = null,
 )
 
 data class CreateCameraRequest(
@@ -76,12 +80,18 @@ data class Bird(
     /** Many-to-many lineages, populated by the server from the junction table. */
     @SerializedName("lineages") val lineages: List<Lineage> = emptyList(),
 ) {
+    // The two shims below are deliberately kept around for any out-of-tree
+    // callers that might still read them. `@Suppress("unused")` silences the
+    // compiler's "property never used" warning — the `@Deprecated` marker
+    // still surfaces in the IDE for any caller that reaches for them.
+    @Suppress("unused")
     @Deprecated(
         "Birds now have many-to-many lineages — use `bird.lineages` and `formatLineages(bird.lineages)` instead. This shim returns only the first lineage's id and hides multi-lineage data from the UI.",
         ReplaceWith("lineages.firstOrNull()?.id"),
     )
     val lineageId: Int? get() = lineages.firstOrNull()?.id
 
+    @Suppress("unused")
     @Deprecated(
         "Birds now have many-to-many lineages — use `formatLineages(bird.lineages)` for display.",
         ReplaceWith("lineages.firstOrNull()?.name"),
@@ -271,12 +281,16 @@ data class ChickGroupDto(
     /** Many-to-many lineages, populated by the server from the junction table. */
     @SerializedName("lineages") val lineages: List<Lineage> = emptyList(),
 ) {
+    // Kept as a back-compat shim; `@Suppress("unused")` silences the compiler
+    // since every in-tree caller was migrated off these.
+    @Suppress("unused")
     @Deprecated(
         "Chick groups now have many-to-many lineages — use `group.lineages` and `formatLineages(group.lineages)` instead.",
         ReplaceWith("lineages.firstOrNull()?.id"),
     )
     val lineageId: Int? get() = lineages.firstOrNull()?.id
 
+    @Suppress("unused")
     @Deprecated(
         "Use `formatLineages(group.lineages)` which handles truncation for 4+ lineages.",
         ReplaceWith("formatLineages(lineages)", "com.quailsync.app.data.formatLineages"),

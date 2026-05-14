@@ -122,6 +122,22 @@ pub fn str_to_life_stage(s: &str) -> LifeStage {
     }
 }
 
+pub fn housing_type_to_str(h: &HousingType) -> &'static str {
+    match h {
+        HousingType::Incubator => "incubator",
+        HousingType::Brooder => "brooder",
+        HousingType::Hutch => "hutch",
+    }
+}
+
+pub fn str_to_housing_type(s: &str) -> HousingType {
+    match s {
+        "incubator" => HousingType::Incubator,
+        "hutch" => HousingType::Hutch,
+        _ => HousingType::Brooder,
+    }
+}
+
 pub fn str_to_chick_group_status(s: &str) -> ChickGroupStatus {
     match s {
         "Graduated" => ChickGroupStatus::Graduated,
@@ -205,8 +221,12 @@ pub fn row_to_chick_group(row: &rusqlite::Row) -> rusqlite::Result<ChickGroup> {
     Ok(group)
 }
 
+/// Maps a `brooders` row produced by `BROODER_SELECT` (id, name, lineage_id,
+/// life_stage, qr_code, notes, camera_url, housing_type). The 8th column is
+/// always present after the housing-type migration.
 pub fn row_to_brooder(row: &rusqlite::Row) -> rusqlite::Result<Brooder> {
     let stage_str: String = row.get(3)?;
+    let housing_str: String = row.get(7)?;
     Ok(Brooder {
         id: row.get(0)?,
         name: row.get(1)?,
@@ -215,6 +235,7 @@ pub fn row_to_brooder(row: &rusqlite::Row) -> rusqlite::Result<Brooder> {
         qr_code: row.get(4)?,
         notes: row.get(5)?,
         camera_url: row.get(6)?,
+        housing_type: str_to_housing_type(&housing_str),
     })
 }
 

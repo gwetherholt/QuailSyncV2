@@ -227,8 +227,8 @@ fun DashboardScreen(
     var alertCount by remember { mutableIntStateOf(0) }
     val context = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(Unit) {
-        val api = com.quailsync.app.data.QuailSyncApi.create(
-            com.quailsync.app.data.ServerConfig.getServerUrl(context),
+        val api = QuailSyncApi.create(
+            ServerConfig.getServerUrl(context),
         )
         while (true) {
             try {
@@ -523,9 +523,17 @@ private fun CompactBrooderCard(
             Box(Modifier.size(10.dp).clip(CircleShape).background(statusDotColor))
             Spacer(Modifier.width(10.dp))
 
+            // Housing-type emoji prefix (issue #11): egg → incubator,
+            // chick → brooder (default), bird → hutch. Single glyph kept
+            // tight so the brooder name still has room.
+            val typeEmoji = when (state.brooder.housingType?.lowercase()) {
+                "incubator" -> "🥚 " // 🥚
+                "hutch"     -> "🐦 " // 🐦
+                else        -> "🐥 " // 🐥 (brooder)
+            }
             // Brooder name
             Text(
-                state.brooder.name,
+                "$typeEmoji${state.brooder.name}",
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.weight(1f),
                 maxLines = 1,

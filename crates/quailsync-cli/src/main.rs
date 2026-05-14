@@ -1754,6 +1754,9 @@ async fn cmd_brooder_add(
         qr_code: qr.unwrap_or_default(),
         notes,
         camera_url: None,
+        // CLI doesn't expose a housing-type flag yet; server defaults to Brooder
+        // when this is None.
+        housing_type: None,
     };
     let client = reqwest::Client::new();
     let resp: Brooder = client

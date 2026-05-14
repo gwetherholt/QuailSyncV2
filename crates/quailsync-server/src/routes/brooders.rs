@@ -33,15 +33,23 @@ pub(crate) async fn create_brooder(
                 .into_response();
         }
     }
+    // Default housing_type to Brooder when the caller doesn't specify one —
+    // keeps older clients (pre-issue-#11) writing valid rows.
+    let housing = body.housing_type.unwrap_or_default();
     match conn.execute(
-        "INSERT INTO brooders (name, lineage_id, life_stage, qr_code, notes, camera_url) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![body.name, body.lineage_id, life_stage_to_str(&body.life_stage), body.qr_code, body.notes, body.camera_url],
+        "INSERT INTO brooders (name, lineage_id, life_stage, qr_code, notes, camera_url, housing_type)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            body.name, body.lineage_id, life_stage_to_str(&body.life_stage),
+            body.qr_code, body.notes, body.camera_url, housing_type_to_str(&housing),
+        ],
     ) {
         Ok(_) => {
             let id = conn.last_insert_rowid();
             (StatusCode::CREATED, Json(Brooder {
                 id, name: body.name, lineage_id: body.lineage_id, life_stage: body.life_stage,
                 qr_code: body.qr_code, notes: body.notes, camera_url: body.camera_url,
+                housing_type: housing,
             })).into_response()
         }
         Err(e) => {
@@ -119,6 +127,22 @@ pub(crate) async fn update_brooder(
             )
             .ok();
         }
+    }
+    if let Some(ht) = body.get("housing_type").and_then(|v| v.as_str()) {
+        // Only accept the three recognised values; anything else is a 400.
+        let normalized = ht.to_lowercase();
+        if !matches!(normalized.as_str(), "incubator" | "brooder" | "hutch") {
+            return (
+                StatusCode::BAD_REQUEST,
+                "housing_type must be one of: incubator, brooder, hutch",
+            )
+                .into_response();
+        }
+        conn.execute(
+            "UPDATE brooders SET housing_type = ?1 WHERE id = ?2",
+            params![normalized, id],
+        )
+        .ok();
     }
     StatusCode::OK.into_response()
 }
@@ -248,14 +272,42 @@ pub(crate) async fn get_headcount_latest(
     }
 }
 
-pub(crate) async fn list_brooders(State(state): State<AppState>) -> Json<Vec<Brooder>> {
+#[derive(serde::Deserialize)]
+pub(crate) struct ListBroodersQuery {
+    /// Optional housing-type filter — `incubator`, `brooder`, or `hutch`.
+    /// Unknown values fall through and the filter is ignored (safer than 400
+    /// for a list endpoint).
+    pub(crate) r#type: Option<String>,
+}
+
+pub(crate) async fn list_brooders(
+    State(state): State<AppState>,
+    Query(q): Query<ListBroodersQuery>,
+) -> Json<Vec<Brooder>> {
     let conn = acquire_db(&state);
-    let mut stmt = conn.prepare("SELECT id, name, lineage_id, life_stage, qr_code, notes, camera_url FROM brooders ORDER BY id").expect("prepare failed");
-    let rows: Vec<Brooder> = stmt
-        .query_map([], row_to_brooder)
-        .unwrap()
-        .filter_map(|r| r.ok())
-        .collect();
+    let filter = q.r#type.as_deref().map(|s| s.to_lowercase()).filter(|s| {
+        matches!(s.as_str(), "incubator" | "brooder" | "hutch")
+    });
+
+    const COLS: &str = "id, name, lineage_id, life_stage, qr_code, notes, camera_url, housing_type";
+    let rows: Vec<Brooder> = match filter {
+        Some(ref t) => {
+            let sql = format!("SELECT {COLS} FROM brooders WHERE housing_type = ?1 ORDER BY id");
+            let mut stmt = conn.prepare(&sql).expect("prepare failed");
+            stmt.query_map(params![t], row_to_brooder)
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        }
+        None => {
+            let sql = format!("SELECT {COLS} FROM brooders ORDER BY id");
+            let mut stmt = conn.prepare(&sql).expect("prepare failed");
+            stmt.query_map([], row_to_brooder)
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        }
+    };
     Json(rows)
 }
 
@@ -305,7 +357,7 @@ pub(crate) async fn brooder_status(
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
     let brooder = match conn.query_row(
-        "SELECT id, name, lineage_id, life_stage, qr_code, notes, camera_url FROM brooders WHERE id = ?1",
+        "SELECT id, name, lineage_id, life_stage, qr_code, notes, camera_url, housing_type FROM brooders WHERE id = ?1",
         params![id], row_to_brooder,
     ) {
         Ok(b) => b,

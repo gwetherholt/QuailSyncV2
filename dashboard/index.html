@@ -1108,48 +1108,80 @@
         return Promise.all([API.get('/api/brooders/'+b.id+'/status'), API.get('/api/brooders/'+b.id+'/readings?minutes=60')]);
       });
       var results = await Promise.all(fetches);
-      var html='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:.75rem">';
-      for(var i=0;i<brooders.length;i++){
-        var b=brooders[i];
-        var status = results[i][0];
-        var readings = results[i][1];
+
+      // Issue #11: group by housing_type. Hutches don't have sensors, so
+      // their cards skip the temp/humidity/sparkline block.
+      var SECTIONS = [
+        { type: 'incubator', label: 'Incubators', icon: '&#x1F95A;' },  // egg
+        { type: 'brooder',   label: 'Brooders',   icon: '&#x1F425;' },  // chick
+        { type: 'hutch',     label: 'Hutches',    icon: '&#x1F426;' },  // bird
+      ];
+      var byType = { incubator: [], brooder: [], hutch: [] };
+      for (var i = 0; i < brooders.length; i++) {
+        var t = (brooders[i].housing_type || 'brooder').toLowerCase();
+        if (!byType[t]) t = 'brooder';
+        byType[t].push({ b: brooders[i], status: results[i][0], readings: results[i][1] });
+      }
+
+      function renderCard(entry) {
+        var b = entry.b, status = entry.status, readings = entry.readings;
+        var isHutch = (b.housing_type || 'brooder').toLowerCase() === 'hutch';
         var stageCls = b.life_stage==='Chick'?'background:#e8c8c8;color:#8b4513' : b.life_stage==='Adolescent'?'background:#d2dcc3;color:#2e5c1e' : 'background:#c8d8e8;color:#2e4a5c';
-        var isOffline = status && status.sensor_status === 'offline';
-        var alertBorder = isOffline ? 'border-left:4px solid #aaa' : (status && status.has_alert) ? 'border-left:4px solid var(--danger)' : 'border-left:4px solid var(--safe)';
-        var tempStr, humStr;
-        if(isOffline){
-          tempStr = '<span style="color:#999">Offline</span>';
-          humStr = '<span style="color:#999">--</span>';
-        } else {
-          tempStr = status && status.latest_temp!=null ? status.latest_temp.toFixed(1)+'&deg;F' : '--';
-          humStr = status && status.latest_humidity!=null ? status.latest_humidity.toFixed(1)+'%' : '--';
+        var isOffline = !isHutch && status && status.sensor_status === 'offline';
+        var alertBorder = isHutch ? 'border-left:4px solid #d4c5a0' :
+          isOffline ? 'border-left:4px solid #aaa' :
+          (status && status.has_alert) ? 'border-left:4px solid var(--danger)' : 'border-left:4px solid var(--safe)';
+        var tempStr = '--', humStr = '--';
+        if (!isHutch) {
+          if (isOffline) {
+            tempStr = '<span style="color:#999">Offline</span>';
+            humStr = '<span style="color:#999">--</span>';
+          } else {
+            tempStr = status && status.latest_temp!=null ? status.latest_temp.toFixed(1)+'&deg;F' : '--';
+            humStr = status && status.latest_humidity!=null ? status.latest_humidity.toFixed(1)+'%' : '--';
+          }
         }
-        var alertHtml = isOffline ? '<span style="color:#999">No signal</span>' : (status && status.has_alert) ? status.alert_message : '';
-        // Seed sparkline cache from REST data
+        var alertHtml = isHutch ? '' : (isOffline ? '<span style="color:#999">No signal</span>' : (status && status.has_alert) ? status.alert_message : '');
+        // Seed sparkline cache from REST data (no-op for hutches)
         var sparkTemps = [];
-        if(readings && readings.length>0){
+        if(!isHutch && readings && readings.length>0){
           var pts=readings.slice().reverse().slice(-20);
           sparkTemps=pts.map(function(p){return p.temperature_f});
         }
         self._sparkCache[String(b.id)] = sparkTemps.slice();
         var offlineStyle = isOffline ? 'opacity:0.55;' : '';
-        html+='<div data-brooder-id="'+b.id+'" data-sensor-status="'+(isOffline?'offline':'online')+'" style="background:var(--cream);border-radius:var(--radius);padding:.75rem;'+offlineStyle+alertBorder+'">';
-        html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem"><strong style="font-size:.88rem">'+escapeHtml(b.name)+'</strong><span style="font-size:.62rem;padding:2px 6px;border-radius:8px;'+stageCls+'">'+escapeHtml(b.life_stage)+'</span></div>';
+        var card = '<div data-brooder-id="'+b.id+'" data-sensor-status="'+(isOffline?'offline':'online')+'" style="background:var(--cream);border-radius:var(--radius);padding:.75rem;'+offlineStyle+alertBorder+'">';
+        card+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem"><strong style="font-size:.88rem">'+escapeHtml(b.name)+'</strong><span style="font-size:.62rem;padding:2px 6px;border-radius:8px;'+stageCls+'">'+escapeHtml(b.life_stage)+'</span></div>';
         var hasCam = !!b.camera_url;
-        html+='<div style="font-size:.65rem;margin-bottom:.25rem" data-field="cam-status">';
-        if(hasCam){ html+='<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--safe);margin-right:4px"></span><span style="color:var(--safe)">Cam</span>'; }
-        html+='</div>';
-        html+='<div style="display:flex;gap:.5rem;align-items:flex-start;margin-bottom:.2rem">';
-        html+='<div style="flex:1"><div class="reading-row"><div><span class="reading-label">Temp</span><br><span class="reading-value" data-field="temp">'+tempStr+'</span></div><div style="text-align:right"><span class="reading-label">Hum</span><br><span class="reading-value" data-field="hum">'+humStr+'</span></div></div></div>';
-        if(hasCam){ html+='<a onclick="Router.navigate(\'#/cameras\')" title="View camera"><img class="camera-thumb" src="'+escapeHtml(b.camera_url)+'" width="100" height="75" onerror="this.style.display=\'none\'"></a>'; }
-        html+='</div>';
-        html+='<div class="sparkline" data-field="spark">'+self._buildSparkBars(sparkTemps,20,28)+'</div>';
-        html+='<div data-field="headcount" data-brooder-hc="'+b.id+'" style="display:flex;align-items:center;gap:.4rem;font-size:.78rem;margin-top:.3rem;padding:4px 8px;background:var(--beige);border-radius:6px"><span style="font-size:1rem">&#x1F425;</span><span class="reading-value" style="font-weight:600;color:#7d8b6a">--</span><span style="color:#999"> chicks</span></div>';
-        html+='<div data-field="alert" style="font-size:.7rem;color:var(--danger);margin-top:.3rem">'+escapeHtml(alertHtml)+'</div>';
-        html+='</div>';
+        card+='<div style="font-size:.65rem;margin-bottom:.25rem" data-field="cam-status">';
+        if(hasCam){ card+='<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--safe);margin-right:4px"></span><span style="color:var(--safe)">Cam</span>'; }
+        card+='</div>';
+        if (isHutch) {
+          // No temp/humidity sensors expected; show a simple residents row.
+          card+='<div style="font-size:.78rem;color:#888;padding:6px 8px;background:var(--beige);border-radius:6px;margin-bottom:.3rem">No environmental sensors</div>';
+        } else {
+          card+='<div style="display:flex;gap:.5rem;align-items:flex-start;margin-bottom:.2rem">';
+          card+='<div style="flex:1"><div class="reading-row"><div><span class="reading-label">Temp</span><br><span class="reading-value" data-field="temp">'+tempStr+'</span></div><div style="text-align:right"><span class="reading-label">Hum</span><br><span class="reading-value" data-field="hum">'+humStr+'</span></div></div></div>';
+          if(hasCam){ card+='<a onclick="Router.navigate(\'#/cameras\')" title="View camera"><img class="camera-thumb" src="'+escapeHtml(b.camera_url)+'" width="100" height="75" onerror="this.style.display=\'none\'"></a>'; }
+          card+='</div>';
+          card+='<div class="sparkline" data-field="spark">'+self._buildSparkBars(sparkTemps,20,28)+'</div>';
+        }
+        card+='<div data-field="headcount" data-brooder-hc="'+b.id+'" style="display:flex;align-items:center;gap:.4rem;font-size:.78rem;margin-top:.3rem;padding:4px 8px;background:var(--beige);border-radius:6px"><span style="font-size:1rem">&#x1F425;</span><span class="reading-value" style="font-weight:600;color:#7d8b6a">--</span><span style="color:#999"> chicks</span></div>';
+        if (alertHtml) card+='<div data-field="alert" style="font-size:.7rem;color:var(--danger);margin-top:.3rem">'+escapeHtml(alertHtml)+'</div>';
+        card+='</div>';
+        return card;
       }
-      html+='</div>';
-      el.innerHTML=html;
+
+      var html = '';
+      SECTIONS.forEach(function(section){
+        var entries = byType[section.type];
+        if (!entries.length) return;
+        html += '<h4 style="margin:.75rem 0 .4rem;font-size:.85rem;color:#666;font-weight:600">'+section.icon+' '+section.label+' ('+entries.length+')</h4>';
+        html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:.75rem;margin-bottom:.75rem">';
+        entries.forEach(function(e){ html += renderCard(e); });
+        html += '</div>';
+      });
+      el.innerHTML = html;
     },
 
     _pollHeadcount: async function(){

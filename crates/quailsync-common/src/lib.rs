@@ -508,6 +508,21 @@ pub struct CreateDetectionResult {
 // Brooder management
 // =========================================================================
 
+/// What the housing unit is used for. Separate axis from `LifeStage` (which
+/// describes the residents). A single physical pen can change role across
+/// its lifetime (e.g. an incubator becoming a brooder for a hatched clutch).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HousingType {
+    Incubator,
+    Brooder,
+    Hutch,
+}
+
+impl Default for HousingType {
+    fn default() -> Self { Self::Brooder }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Brooder {
     pub id: i64,
@@ -518,6 +533,9 @@ pub struct Brooder {
     pub notes: Option<String>,
     #[serde(default)]
     pub camera_url: Option<String>,
+    /// Defaults to Brooder for back-compat with rows created before issue #11.
+    #[serde(default)]
+    pub housing_type: HousingType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -529,6 +547,9 @@ pub struct CreateBrooder {
     pub notes: Option<String>,
     #[serde(default)]
     pub camera_url: Option<String>,
+    /// Optional on create — server falls back to "brooder" if omitted.
+    #[serde(default)]
+    pub housing_type: Option<HousingType>,
 }
 
 // =========================================================================

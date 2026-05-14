@@ -72,7 +72,8 @@ pub fn init_db(conn: &Connection) {
             lineage_id   INTEGER REFERENCES lineages(id),
             life_stage   TEXT NOT NULL DEFAULT 'Chick',
             qr_code      TEXT NOT NULL DEFAULT '',
-            notes        TEXT
+            notes        TEXT,
+            housing_type TEXT NOT NULL DEFAULT 'brooder'
         );
 
         CREATE TABLE IF NOT EXISTS brooder_readings (
@@ -237,6 +238,16 @@ pub fn init_db(conn: &Connection) {
         .ok();
     conn.execute("ALTER TABLE brooders ADD COLUMN camera_url TEXT", [])
         .ok();
+    // Housing-type axis (issue #11). Existing rows get 'brooder' so behaviour
+    // is unchanged until the user explicitly changes a unit's type.
+    if !column_exists(conn, "brooders", "housing_type") {
+        conn.execute(
+            "ALTER TABLE brooders ADD COLUMN housing_type TEXT NOT NULL DEFAULT 'brooder'",
+            [],
+        )
+        .expect("ALTER TABLE brooders ADD COLUMN housing_type failed");
+        println!("[migration] added brooders.housing_type (default 'brooder')");
+    }
     conn.execute(
         "ALTER TABLE birds ADD COLUMN current_brooder_id INTEGER REFERENCES brooders(id)",
         [],
