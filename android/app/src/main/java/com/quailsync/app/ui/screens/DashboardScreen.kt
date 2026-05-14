@@ -285,10 +285,10 @@ fun DashboardScreen(
                     )
                 }
 
-                // === 3. Compact Brooder Cards ===
+                // === 3. Compact Housing Cards (incubators, brooders, hutches) ===
                 item(key = "brooders-header") {
                     Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                        Text("Brooders", style = MaterialTheme.typography.titleMedium)
+                        Text("Housing", style = MaterialTheme.typography.titleMedium)
                         TextButton(onClick = onTelemetryClick) {
                             Icon(Icons.Default.Sensors, null, Modifier.size(16.dp), tint = SageGreen)
                             Spacer(Modifier.width(4.dp))
@@ -567,12 +567,21 @@ private fun CompactBrooderCard(
                 )
             }
 
-            // Chick info
+            // Chick info — label is housing-type aware (eggs for incubators,
+            // chicks for brooders, birds for hutches). Mirrors the dashboard
+            // pluralisation logic.
             if (chickGroup != null) {
                 Spacer(Modifier.width(12.dp))
                 Column(horizontalAlignment = Alignment.End) {
+                    val plural = when (state.brooder.housingType?.lowercase()) {
+                        "incubator" -> "eggs"
+                        "hutch" -> "birds"
+                        else -> "chicks"
+                    }
+                    val singular = plural.dropLast(1)
+                    val countLabel = if (chickGroup.currentCount == 1) singular else plural
                     Text(
-                        "${chickGroup.currentCount} chicks",
+                        "${chickGroup.currentCount} $countLabel",
                         style = MaterialTheme.typography.labelMedium,
                         color = SageGreen,
                         maxLines = 1,
