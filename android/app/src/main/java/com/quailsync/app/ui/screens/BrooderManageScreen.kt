@@ -53,6 +53,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.quailsync.app.data.Bird
+import com.quailsync.app.data.Brooder
 import com.quailsync.app.data.ChickGroupDto
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.ServerConfig
@@ -74,6 +75,9 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
     val api = remember { QuailSyncApi.create(serverUrl) }
     val scope = rememberCoroutineScope()
     var targetTemp by remember { mutableStateOf<TargetTempResponse?>(null) }
+    // The Brooder DTO itself, so we know housing_type / name for the header
+    // and conditional rendering (issue #11).
+    var brooder by remember { mutableStateOf<Brooder?>(null) }
     var headcount by remember { mutableStateOf<com.quailsync.app.data.HeadcountResponse?>(null) }
     var allGroups by remember { mutableStateOf<List<ChickGroupDto>>(emptyList()) }
     var residentBirds by remember { mutableStateOf<List<Bird>>(emptyList()) }
@@ -94,6 +98,9 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
         error = null
         Log.d("QuailSync", "BrooderManage: loading data for brooder $brooderId (refresh=$refreshKey)")
         try {
+            brooder = try { api.getBrooders().find { it.id == brooderId } } catch (e: Exception) {
+                Log.e("QuailSync", "brooder lookup failed", e); null
+            }
             targetTemp = try { api.getBrooderTargetTemp(brooderId) } catch (e: Exception) { Log.e("QuailSync", "targetTemp failed", e); null }
             headcount = try {
                 val hc = api.getHeadcountLatest(brooderId)
@@ -145,12 +152,28 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
         isLoading = false
     }
 
+    // Housing type pulled from the Brooder DTO once loaded — drives the
+    // header label (issue #11), the temp-schedule visibility (no sensors on
+    // hutches), and the residents-pluralisation (eggs/chicks/birds).
+    val housingType = brooder?.housingType?.lowercase() ?: "brooder"
+    val isHutch = housingType == "hutch"
+
     Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
-        // Header
+        // Header — "Incubator: Nurture Right 360" / "Hutch: Outdoor Hutch" etc.
+        // when the brooder DTO has loaded; falls back to the legacy framing
+        // while the fetch is in flight.
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
             Spacer(Modifier.width(8.dp))
-            Text("Manage Brooder #$brooderId", style = MaterialTheme.typography.headlineMedium)
+            val headerText = brooder?.let {
+                val typeLabel = when (housingType) {
+                    "incubator" -> "Incubator"
+                    "hutch"     -> "Hutch"
+                    else        -> "Brooder"
+                }
+                "$typeLabel: ${it.name}"
+            } ?: "Manage Brooder #$brooderId"
+            Text(headerText, style = MaterialTheme.typography.headlineMedium)
         }
 
         if (isLoading) {
@@ -165,7 +188,8 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
         // =====================================================
         // Temperature schedule
         // =====================================================
-        if (targetTemp != null) {
+        // Hutches don't have environmental sensors — skip the whole temp block.
+        if (targetTemp != null && !isHutch) {
             val tt = targetTemp!!
             Card(
                 Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
@@ -223,14 +247,21 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
             elevation = CardDefaults.cardElevation(2.dp),
         ) {
             Column(Modifier.padding(16.dp)) {
-                Text("Chick Count", style = MaterialTheme.typography.titleMedium)
+                // Housing-type-aware count label: eggs / chicks / birds.
+                val (countTitle, residentSingular, residentIcon) = when (housingType) {
+                    "incubator" -> Triple("Egg Count",   "egg",   "\uD83E\uDD5A") // \uD83E\uDD5A
+                    "hutch"     -> Triple("Bird Count",  "bird",  "\uD83D\uDC26") // \uD83D\uDC26
+                    else        -> Triple("Chick Count", "chick", "\uD83D\uDC25") // \uD83D\uDC25
+                }
+                Text(countTitle, style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
                 val hc = headcount
                 val hcAgo = remember(hc?.timestamp) { formatTimeAgo(hc?.timestamp) }
                 if (hc?.count != null) {
                     Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                        val label = residentSingular + if (hc.count != 1) "s" else ""
                         Text(
-                            "\uD83D\uDC25 ${hc.count} chick${if (hc.count != 1) "s" else ""} detected",
+                            "$residentIcon ${hc.count} $label detected",
                             style = MaterialTheme.typography.bodyLarge,
                             fontWeight = FontWeight.SemiBold,
                             color = SageGreen,
