@@ -971,7 +971,7 @@
   Page.Dashboard = {
     render: function(app){
       app.innerHTML = '<div class="dash-grid">' +
-        '<div class="panel" style="grid-column:1/-1"><div class="panel-header"><span class="panel-header-left">&#x1F3E0; Housing</span></div><div class="panel-body" id="d-brooder">'+loadingHTML()+'</div></div>' +
+        '<div class="panel" style="grid-column:1/-1"><div class="panel-body" id="d-brooder">'+loadingHTML()+'</div></div>' +
         '<div class="dash-row-2">' +
           '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F6A8; Alerts</span><a class="view-all-link" id="d-alerts-viewall" style="display:none">View all</a></div><div class="panel-body"><div class="alerts-scroll" id="d-alerts">'+loadingHTML()+'</div></div></div>' +
           '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F4CA; Quick Stats</span></div><div class="panel-body" id="d-stats">'+loadingHTML()+'</div></div>' +
@@ -1192,7 +1192,9 @@
       SECTIONS.forEach(function(section){
         var entries = byType[section.type];
         if (!entries.length) return;
-        html += '<h4 style="margin:.75rem 0 .4rem;font-size:.85rem;color:#666;font-weight:600">'+section.icon+' '+section.label+' ('+entries.length+')</h4>';
+        // Now that there's no umbrella header above these three sections, give
+        // them a bit more visual weight so they read as primary section heads.
+        html += '<h3 style="margin:.5rem 0 .5rem;font-size:1.0rem;color:#444;font-weight:600;border-bottom:1px solid var(--beige);padding-bottom:.3rem">'+section.icon+' '+section.label+' ('+entries.length+')</h3>';
         html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:.75rem;margin-bottom:.75rem">';
         entries.forEach(function(e){ html += renderCard(e); });
         html += '</div>';

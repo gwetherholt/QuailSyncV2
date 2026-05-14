@@ -285,25 +285,40 @@ fun DashboardScreen(
                     )
                 }
 
-                // === 3. Compact Housing Cards (incubators, brooders, hutches) ===
-                item(key = "brooders-header") {
-                    Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                        Text("Housing", style = MaterialTheme.typography.titleMedium)
-                        TextButton(onClick = onTelemetryClick) {
-                            Icon(Icons.Default.Sensors, null, Modifier.size(16.dp), tint = SageGreen)
-                            Spacer(Modifier.width(4.dp))
-                            Text("Telemetry", color = SageGreen)
+                // === 3. Compact Housing Cards, partitioned by housing type ===
+                // Three sections — Incubators / Brooders / Hutches — each only
+                // rendered when non-empty. Mirrors the web dashboard layout.
+                val sections = listOf(
+                    Triple("incubator", "🥚 Incubators", brooders.filter { (it.brooder.housingType ?: "brooder").lowercase() == "incubator" }),
+                    Triple("brooder",   "🐥 Brooders",   brooders.filter { (it.brooder.housingType ?: "brooder").lowercase() == "brooder" }),
+                    Triple("hutch",     "🐦 Hutches",    brooders.filter { (it.brooder.housingType ?: "brooder").lowercase() == "hutch" }),
+                )
+
+                // Telemetry link sits next to the first non-empty section header
+                // so the Telemetry button stays discoverable without duplicating.
+                val firstNonEmpty = sections.firstOrNull { it.third.isNotEmpty() }?.first
+                sections.forEach { (key, label, entries) ->
+                    if (entries.isEmpty()) return@forEach
+                    item(key = "section-header-$key") {
+                        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                            Text("$label (${entries.size})", style = MaterialTheme.typography.titleMedium)
+                            if (key == firstNonEmpty) {
+                                TextButton(onClick = onTelemetryClick) {
+                                    Icon(Icons.Default.Sensors, null, Modifier.size(16.dp), tint = SageGreen)
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("Telemetry", color = SageGreen)
+                                }
+                            }
                         }
                     }
-                }
-
-                items(brooders, key = { "brooder-${it.brooder.id}" }) { state ->
-                    CompactBrooderCard(
-                        state = state,
-                        liveReading = liveReadings[state.brooder.id],
-                        chickGroup = chickGroups.find { it.brooderId == state.brooder.id && it.status == "Active" },
-                        onClick = { onBrooderClick(state.brooder.id) },
-                    )
+                    items(entries, key = { "brooder-${it.brooder.id}" }) { state ->
+                        CompactBrooderCard(
+                            state = state,
+                            liveReading = liveReadings[state.brooder.id],
+                            chickGroup = chickGroups.find { it.brooderId == state.brooder.id && it.status == "Active" },
+                            onClick = { onBrooderClick(state.brooder.id) },
+                        )
+                    }
                 }
 
                 // === Breeding & Culling Card ===
