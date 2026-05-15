@@ -144,6 +144,7 @@ async fn create_and_list_birds() {
         status: BirdStatus::Active,
         notes: None,
         nfc_tag_id: None,
+        chick_group_id: None,
     };
     let resp = client
         .post(format!("{base}/api/birds"))
@@ -202,6 +203,7 @@ async fn breeding_suggest_same_lineage() {
             status: BirdStatus::Active,
             notes: None,
             nfc_tag_id: None,
+            chick_group_id: None,
         })
         .send()
         .await
@@ -221,6 +223,7 @@ async fn breeding_suggest_same_lineage() {
             status: BirdStatus::Active,
             notes: None,
             nfc_tag_id: None,
+            chick_group_id: None,
         })
         .send()
         .await
@@ -276,6 +279,7 @@ async fn breeding_suggest_different_lineages() {
             status: BirdStatus::Active,
             notes: None,
             nfc_tag_id: None,
+            chick_group_id: None,
         })
         .send()
         .await
@@ -295,6 +299,7 @@ async fn breeding_suggest_different_lineages() {
             status: BirdStatus::Active,
             notes: None,
             nfc_tag_id: None,
+            chick_group_id: None,
         })
         .send()
         .await
@@ -345,6 +350,7 @@ async fn breeding_suggest_full_siblings() {
             status: BirdStatus::Active,
             notes: None,
             nfc_tag_id: None,
+            chick_group_id: None,
         })
         .send()
         .await
@@ -364,6 +370,7 @@ async fn breeding_suggest_full_siblings() {
             status: BirdStatus::Active,
             notes: None,
             nfc_tag_id: None,
+            chick_group_id: None,
         })
         .send()
         .await
@@ -383,6 +390,7 @@ async fn breeding_suggest_full_siblings() {
             status: BirdStatus::Active,
             notes: None,
             nfc_tag_id: None,
+            chick_group_id: None,
         })
         .send()
         .await
@@ -402,6 +410,7 @@ async fn breeding_suggest_full_siblings() {
             status: BirdStatus::Active,
             notes: None,
             nfc_tag_id: None,
+            chick_group_id: None,
         })
         .send()
         .await
@@ -541,6 +550,7 @@ async fn graduate_creates_birds_with_unique_ids_and_intake_fields() {
     // Mixed payload: bird 0 has weight + photo, bird 1 has nothing extra,
     // bird 2 has only weight. Tests that backwards-compatible defaults work.
     let req = GraduateRequest {
+        target_housing_id: None,
         birds: vec![
             GraduateBird {
                 sex: Sex::Male,
@@ -1461,6 +1471,7 @@ mod housing_assignment_tests {
                     status: BirdStatus::Active,
                     notes: None,
                     nfc_tag_id: None,
+                    chick_group_id: None,
                 })
                 .send().await.unwrap();
             let b: Bird = resp.json().await.unwrap();
@@ -1587,5 +1598,225 @@ mod housing_assignment_tests {
                 .await.unwrap().json().await.unwrap();
         assert_eq!(residents.individual_birds.len(), 1);
         assert_eq!(residents.individual_birds[0].id, bird_id);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Issue #14 — graduate-to-hutch + assign-graduated-group
+// ---------------------------------------------------------------------------
+
+mod graduate_to_hutch_tests {
+    use super::*;
+    use quailsync_common::{
+        AssignGraduatedGroupRequest, AssignGraduatedGroupResponse, BrooderResidentsResponse,
+        ChickGroupStatus, CreateBrooder, CreateChickGroup, GraduateBird, GraduateRequest,
+        HousingType, LifeStage,
+    };
+    use serde_json::json;
+
+    /// Seed: lineage + brooder (chick nursery) + hutch + chick group, then
+    /// return their ids so individual tests can pick what they need.
+    async fn seed_pipeline(base: &str, client: &reqwest::Client) -> (i64, i64, i64) {
+        let bl: Lineage = client.post(format!("{base}/api/lineages"))
+            .json(&CreateLineage { name: "L".into(), source: "S".into(), notes: None })
+            .send().await.unwrap().json().await.unwrap();
+
+        let brooder: serde_json::Value = client.post(format!("{base}/api/brooders"))
+            .json(&CreateBrooder {
+                name: "Brooder A".into(),
+                lineage_id: None,
+                life_stage: LifeStage::Chick,
+                qr_code: "b-1".into(),
+                notes: None,
+                camera_url: None,
+                housing_type: Some(HousingType::Brooder),
+            })
+            .send().await.unwrap().json().await.unwrap();
+        let brooder_id = brooder["id"].as_i64().unwrap();
+
+        let hutch: serde_json::Value = client.post(format!("{base}/api/brooders"))
+            .json(&CreateBrooder {
+                name: "Hutch A".into(),
+                lineage_id: None,
+                life_stage: LifeStage::Adult,
+                qr_code: "h-1".into(),
+                notes: None,
+                camera_url: None,
+                housing_type: Some(HousingType::Hutch),
+            })
+            .send().await.unwrap().json().await.unwrap();
+        let hutch_id = hutch["id"].as_i64().unwrap();
+
+        let group: ChickGroup = client.post(format!("{base}/api/chick-groups"))
+            .json(&CreateChickGroup {
+                clutch_id: None,
+                brooder_id: Some(brooder_id),
+                initial_count: 2,
+                hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                notes: None,
+                lineage_ids: vec![bl.id],
+            })
+            .send().await.unwrap().json().await.unwrap();
+        (brooder_id, hutch_id, group.id)
+    }
+
+    fn two_birds() -> Vec<GraduateBird> {
+        vec![
+            GraduateBird {
+                sex: Sex::Male,
+                band_color: Some("red".into()),
+                nfc_tag_id: None,
+                notes: None,
+                weight_grams: None,
+                photo_path: None,
+            },
+            GraduateBird {
+                sex: Sex::Female,
+                band_color: Some("blue".into()),
+                nfc_tag_id: None,
+                notes: None,
+                weight_grams: None,
+                photo_path: None,
+            },
+        ]
+    }
+
+    #[tokio::test]
+    async fn graduate_with_target_housing_stamps_birds_and_group() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (_b, hutch_id, group_id) = seed_pipeline(&base, &client).await;
+
+        let resp = client.post(format!("{base}/api/chick-groups/{group_id}/graduate"))
+            .json(&GraduateRequest {
+                birds: two_birds(),
+                target_housing_id: Some(hutch_id),
+            })
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 200);
+        let birds: Vec<Bird> = resp.json().await.unwrap();
+        assert_eq!(birds.len(), 2);
+        for b in &birds {
+            assert_eq!(b.housing_id, Some(hutch_id));
+            assert_eq!(b.chick_group_id, Some(group_id));
+        }
+
+        // Group itself: status=Graduated, housing_id set.
+        let group: ChickGroup = reqwest::get(format!("{base}/api/chick-groups/{group_id}"))
+            .await.unwrap().json().await.unwrap();
+        assert!(matches!(group.status, ChickGroupStatus::Graduated));
+        assert_eq!(group.housing_id, Some(hutch_id));
+
+        // Residents endpoint surfaces the group + its birds.
+        let residents: BrooderResidentsResponse =
+            reqwest::get(format!("{base}/api/brooders/{hutch_id}/residents"))
+                .await.unwrap().json().await.unwrap();
+        assert_eq!(residents.chick_groups.len(), 1);
+        assert_eq!(residents.chick_groups[0].id, group_id);
+        assert_eq!(residents.individual_birds.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn graduate_without_target_leaves_group_unhoused() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (_b, _hutch, group_id) = seed_pipeline(&base, &client).await;
+
+        let resp = client.post(format!("{base}/api/chick-groups/{group_id}/graduate"))
+            .json(&GraduateRequest { birds: two_birds(), target_housing_id: None })
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let group: ChickGroup = reqwest::get(format!("{base}/api/chick-groups/{group_id}"))
+            .await.unwrap().json().await.unwrap();
+        assert!(matches!(group.status, ChickGroupStatus::Graduated));
+        assert_eq!(group.housing_id, None);
+    }
+
+    #[tokio::test]
+    async fn graduate_with_brooder_target_returns_400() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (brooder_id, _hutch, group_id) = seed_pipeline(&base, &client).await;
+
+        // brooder_id is a brooder, NOT a hutch — server must reject.
+        let resp = client.post(format!("{base}/api/chick-groups/{group_id}/graduate"))
+            .json(&GraduateRequest { birds: two_birds(), target_housing_id: Some(brooder_id) })
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn assign_graduated_group_moves_group_and_birds() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (_b, hutch_id, group_id) = seed_pipeline(&base, &client).await;
+
+        // Graduate first WITHOUT a target — group has housing_id = NULL.
+        client.post(format!("{base}/api/chick-groups/{group_id}/graduate"))
+            .json(&GraduateRequest { birds: two_birds(), target_housing_id: None })
+            .send().await.unwrap();
+
+        // Now assign to the hutch.
+        let resp = client.post(format!("{base}/api/brooders/{hutch_id}/assign-graduated-group"))
+            .json(&AssignGraduatedGroupRequest { group_id })
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: AssignGraduatedGroupResponse = resp.json().await.unwrap();
+        assert_eq!(body.group_id, group_id);
+        assert_eq!(body.housing_id, hutch_id);
+        assert_eq!(body.birds_updated, 2);
+
+        // Residents now lists the group + its birds.
+        let residents: BrooderResidentsResponse =
+            reqwest::get(format!("{base}/api/brooders/{hutch_id}/residents"))
+                .await.unwrap().json().await.unwrap();
+        assert_eq!(residents.chick_groups.len(), 1);
+        assert_eq!(residents.individual_birds.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn assign_graduated_group_rejects_non_hutch_target() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (brooder_id, _hutch, group_id) = seed_pipeline(&base, &client).await;
+        client.post(format!("{base}/api/chick-groups/{group_id}/graduate"))
+            .json(&GraduateRequest { birds: two_birds(), target_housing_id: None })
+            .send().await.unwrap();
+        let resp = client.post(format!("{base}/api/brooders/{brooder_id}/assign-graduated-group"))
+            .json(&AssignGraduatedGroupRequest { group_id })
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn assign_graduated_group_rejects_active_group() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (_b, hutch_id, group_id) = seed_pipeline(&base, &client).await;
+        // Group is still Active — should be rejected.
+        let resp = client.post(format!("{base}/api/brooders/{hutch_id}/assign-graduated-group"))
+            .json(&AssignGraduatedGroupRequest { group_id })
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn put_chick_group_housing_id_null_clears_assignment() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (_b, hutch_id, group_id) = seed_pipeline(&base, &client).await;
+        client.post(format!("{base}/api/chick-groups/{group_id}/graduate"))
+            .json(&GraduateRequest { birds: two_birds(), target_housing_id: Some(hutch_id) })
+            .send().await.unwrap();
+
+        // Now clear housing_id via the generic PUT.
+        client.put(format!("{base}/api/chick-groups/{group_id}"))
+            .json(&json!({ "housing_id": serde_json::Value::Null }))
+            .send().await.unwrap();
+
+        let group: ChickGroup = reqwest::get(format!("{base}/api/chick-groups/{group_id}"))
+            .await.unwrap().json().await.unwrap();
+        assert_eq!(group.housing_id, None);
     }
 }

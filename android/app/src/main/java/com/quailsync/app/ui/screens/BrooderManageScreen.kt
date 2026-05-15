@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -88,6 +89,11 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
     var headcount by remember { mutableStateOf<com.quailsync.app.data.HeadcountResponse?>(null) }
     var allGroups by remember { mutableStateOf<List<ChickGroupDto>>(emptyList()) }
     var residentBirds by remember { mutableStateOf<List<Bird>>(emptyList()) }
+    // Issue #14: the residents endpoint now returns graduated chick groups
+    // assigned to this unit via chick_groups.housing_id. Tracked separately
+    // from `allGroups` (which is the global /api/chick-groups list used by
+    // the "Chick Group Assignment" dropdown above).
+    var residentGroups by remember { mutableStateOf<List<ChickGroupDto>>(emptyList()) }
     // Issue #13: full bird list (for the "Assign Birds" picker — filtered to
     // unhoused active birds when the dialog opens). Fetched on each load.
     var allBirds by remember { mutableStateOf<List<Bird>>(emptyList()) }
@@ -95,6 +101,10 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
     // `showAssignDialog = false` inside dialog callbacks would trip Kotlin's
     // UNUSED_VALUE flow analyser otherwise — same precedent as elsewhere.
     val showAssignDialog = remember { mutableStateOf(false) }
+    // Issue #14: separate dialog for "Assign Graduated Group". Mirrors the
+    // dashboard's picker — only shown when there's at least one Graduated
+    // group that isn't already in this hutch.
+    val showAssignGroupDialog = remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var refreshKey by remember { mutableStateOf(0) }
@@ -151,12 +161,14 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
             }
 
             // Residents — may return non-JSON
-            residentBirds = try {
+            try {
                 val r = api.getBrooderResidents(brooderId)
-                r.individualBirds
+                residentBirds = r.individualBirds
+                residentGroups = r.chickGroups
             } catch (e: Exception) {
                 Log.e("QuailSync", "residents failed (treating as empty)", e)
-                emptyList()
+                residentBirds = emptyList()
+                residentGroups = emptyList()
             }
             allBirds = try { api.getBirds() } catch (e: Exception) {
                 Log.e("QuailSync", "getBirds for picker failed", e); emptyList()
@@ -441,17 +453,31 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
             Column(Modifier.padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                     Text("Residents", style = MaterialTheme.typography.titleMedium)
-                    // Issue #13 — assign unhoused adult birds to this unit.
-                    TextButton(onClick = { showAssignDialog.value = true }) {
-                        Icon(Icons.Default.Add, null, Modifier.size(16.dp), tint = SageGreen)
-                        Spacer(Modifier.width(4.dp))
-                        Text("Assign Birds", color = SageGreen)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Issue #14 — assign a previously-graduated group to
+                        // this hutch. Hutches only; brooders/incubators don't
+                        // own graduated groups so the button would be useless.
+                        if (isHutch) {
+                            TextButton(onClick = { showAssignGroupDialog.value = true }) {
+                                Icon(Icons.Default.Group, null, Modifier.size(16.dp), tint = SageGreen)
+                                Spacer(Modifier.width(4.dp))
+                                Text("Assign Group", color = SageGreen)
+                            }
+                        }
+                        // Issue #13 — assign unhoused adult birds to this unit.
+                        TextButton(onClick = { showAssignDialog.value = true }) {
+                            Icon(Icons.Default.Add, null, Modifier.size(16.dp), tint = SageGreen)
+                            Spacer(Modifier.width(4.dp))
+                            Text("Assign Birds", color = SageGreen)
+                        }
                     }
                 }
                 Spacer(Modifier.height(8.dp))
 
-                // Show the current chick group from our derived state
-                val groupsInBrooder = allGroups.filter { it.brooderId == brooderId && it.status == "Active" }
+                // `residentGroups` already includes Active groups (for brooders)
+                // and Graduated groups (for hutches) — server-side filtering at
+                // /api/brooders/{id}/residents (issue #14).
+                val groupsInBrooder = residentGroups
 
                 if (groupsInBrooder.isEmpty() && residentBirds.isEmpty()) {
                     Text("No residents", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -463,9 +489,51 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
                             Text("${g.currentCount}", style = MaterialTheme.typography.labelLarge, color = Color.White, fontWeight = FontWeight.Bold)
                         }
                         Spacer(Modifier.width(10.dp))
-                        Column {
-                            Text("Chick Group #${g.id}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                            Text("${g.currentCount} of ${g.initialCount} chicks, hatched ${g.hatchDate}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Column(Modifier.weight(1f)) {
+                            val role = if (g.status == "Graduated") "Graduated" else "Chick"
+                            Text("$role Group #${g.id}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                            Text("${g.currentCount} of ${g.initialCount} birds, hatched ${g.hatchDate}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        // Issue #14 — detach a graduated group from this hutch.
+                        // Only shown on the hutch path (Graduated status); for
+                        // Active chick groups, the existing "Unassign Group"
+                        // button at the top handles it.
+                        if (isHutch && g.status == "Graduated") {
+                            IconButton(onClick = {
+                                scope.launch {
+                                    try {
+                                        // Retrofit/Gson default config strips
+                                        // null fields, so a plain
+                                        // updateChickGroup(id, mapOf("housing_id" to null))
+                                        // would send {} and the server-side
+                                        // "is field present?" check would miss
+                                        // it. Use a raw PUT with explicit JSON.
+                                        val url = "${serverUrl.trimEnd('/')}/api/chick-groups/${g.id}"
+                                        withContext(Dispatchers.IO) {
+                                            val body = """{"housing_id": null}""".toRequestBody("application/json".toMediaType())
+                                            val req = okhttp3.Request.Builder().url(url).put(body).build()
+                                            okhttp3.OkHttpClient().newCall(req).execute().close()
+                                        }
+                                        // Also unhouse every bird that came
+                                        // from this group, so they don't get
+                                        // orphaned in the hutch's bird list.
+                                        val groupBirdIds = residentBirds
+                                            .filter { it.chickGroupId == g.id }
+                                            .map { it.id }
+                                        if (groupBirdIds.isNotEmpty()) {
+                                            api.unassignBirdsFromHousing(
+                                                brooderId,
+                                                com.quailsync.app.data.BirdAssignmentRequest(groupBirdIds),
+                                            )
+                                        }
+                                        refreshKey++
+                                    } catch (e: Exception) {
+                                        Log.e("QuailSync", "detach group ${g.id} failed", e)
+                                    }
+                                }
+                            }) {
+                                Icon(Icons.Default.Close, contentDescription = "Detach group", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }
@@ -604,6 +672,92 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
                     showAssignDialog.value = false
                     selected.clear()
                 }) { Text("Cancel") }
+            },
+        )
+    }
+
+    // Issue #14 — "Assign Graduated Group" picker. Hutch-only. Lists every
+    // Graduated chick group whose housing_id is null OR points at another
+    // hutch (lets the user move groups between hutches). Single-select to
+    // keep the model simple; the user can re-open the dialog to add another.
+    if (showAssignGroupDialog.value) {
+        val available = allGroups.filter { it.status == "Graduated" && it.housingId != brooderId }
+        val pickedId = remember { mutableStateOf<Int?>(null) }
+        AlertDialog(
+            onDismissRequest = { showAssignGroupDialog.value = false; pickedId.value = null },
+            title = { Text("Assign Graduated Group") },
+            text = {
+                if (available.isEmpty()) {
+                    Text(
+                        "No unassigned graduated groups available.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                        available.forEach { g ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Checkbox(
+                                    checked = pickedId.value == g.id,
+                                    onCheckedChange = { if (it) pickedId.value = g.id else pickedId.value = null },
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text("Group #${g.id}", style = MaterialTheme.typography.bodyMedium)
+                                    val lineageLabel = if (g.lineages.isNotEmpty()) {
+                                        com.quailsync.app.data.formatLineages(g.lineages, maxShown = 2)
+                                    } else "(no lineage)"
+                                    val whereLabel = g.housingId?.let { " · in hutch #$it" } ?: ""
+                                    Text(
+                                        "$lineageLabel · ${g.currentCount} birds$whereLabel",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val gid = pickedId.value ?: return@Button
+                        scope.launch {
+                            try {
+                                val resp = api.assignGraduatedGroupToHousing(
+                                    brooderId,
+                                    com.quailsync.app.data.AssignGraduatedGroupRequest(gid),
+                                )
+                                Toast.makeText(
+                                    context,
+                                    "Group #${resp.groupId} assigned (${resp.birdsUpdated} birds)",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                                showAssignGroupDialog.value = false
+                                pickedId.value = null
+                                refreshKey++
+                            } catch (e: Exception) {
+                                Log.e("QuailSync", "assign-graduated-group failed", e)
+                                Toast.makeText(
+                                    context,
+                                    "Failed: ${e.message}",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        }
+                    },
+                    enabled = pickedId.value != null,
+                    colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
+                ) { Text("Assign") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAssignGroupDialog.value = false; pickedId.value = null }) { Text("Cancel") }
             },
         )
     }

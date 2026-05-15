@@ -79,6 +79,10 @@ data class Bird(
     @SerializedName("latest_weight") val latestWeight: Double? = null,
     /** Issue #13: permanent housing assignment for adult birds. `null` = unhoused. */
     @SerializedName("housing_id") val housingId: Int? = null,
+    /** Issue #14: back-link to the chick group the bird graduated from.
+     *  Populated by the server (`/graduate` handler) or by the batch-band
+     *  flow when it passes chick_group_id on POST /api/birds. */
+    @SerializedName("chick_group_id") val chickGroupId: Int? = null,
     /** Many-to-many lineages, populated by the server from the junction table. */
     @SerializedName("lineages") val lineages: List<Lineage> = emptyList(),
 ) {
@@ -220,6 +224,17 @@ data class BirdAssignmentResponse(
     @SerializedName("updated") val updated: Long,
 )
 
+/** Body for POST /api/brooders/{id}/assign-graduated-group (issue #14). */
+data class AssignGraduatedGroupRequest(
+    @SerializedName("group_id") val groupId: Int,
+)
+
+data class AssignGraduatedGroupResponse(
+    @SerializedName("group_id") val groupId: Int,
+    @SerializedName("housing_id") val housingId: Int,
+    @SerializedName("birds_updated") val birdsUpdated: Long,
+)
+
 data class Camera(
     @SerializedName("id") val id: Int,
     @SerializedName("name") val name: String,
@@ -253,6 +268,11 @@ data class CreateBirdRequest(
     @SerializedName("status") val status: String = "Active",
     @SerializedName("notes") val notes: String? = null,
     @SerializedName("nfc_tag_id") val nfcTagId: String? = null,
+    /** Issue #14: back-link to the chick group this bird is graduating from.
+     *  Server-side `/graduate` stamps this internally; the batch-band flow
+     *  uses individual POST /api/birds calls and needs to pass it explicitly
+     *  so "Assign Graduated Group" can later find every bird in a group. */
+    @SerializedName("chick_group_id") val chickGroupId: Int? = null,
 )
 
 data class PhotoUploadResponse(
@@ -288,6 +308,10 @@ data class ChickGroupDto(
     @SerializedName("hatch_date") val hatchDate: String,
     @SerializedName("status") val status: String,
     @SerializedName("notes") val notes: String? = null,
+    /** Issue #14: which hutch the graduated group lives in. Null for Active
+     *  groups (still in nursery `brooderId`) and graduated groups that
+     *  haven't been placed yet. */
+    @SerializedName("housing_id") val housingId: Int? = null,
     @SerializedName("is_ready_to_transition") val isReadyToTransition: Boolean = false,
     /** Many-to-many lineages, populated by the server from the junction table. */
     @SerializedName("lineages") val lineages: List<Lineage> = emptyList(),
@@ -456,6 +480,15 @@ interface QuailSyncApi {
         @Path("id") housingId: Int,
         @Body body: BirdAssignmentRequest,
     ): BirdAssignmentResponse
+
+    /** Issue #14: move an already-graduated chick group (and every bird it
+     *  produced) into this hutch. Server validates housing type and group
+     *  status (must be `Graduated`). */
+    @POST("api/brooders/{id}/assign-graduated-group")
+    suspend fun assignGraduatedGroupToHousing(
+        @Path("id") housingId: Int,
+        @Body body: AssignGraduatedGroupRequest,
+    ): AssignGraduatedGroupResponse
 
     @GET("api/brooders/{id}/readings")
     suspend fun getBrooderReadings(@Path("id") id: Int): List<BrooderReading>

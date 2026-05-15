@@ -87,6 +87,7 @@ async fn seed_bird(base: &str, lineage_id: i64, sex: Sex) -> Bird {
             status: BirdStatus::Active,
             notes: None,
             nfc_tag_id: None,
+            chick_group_id: None,
         })
         .send()
         .await

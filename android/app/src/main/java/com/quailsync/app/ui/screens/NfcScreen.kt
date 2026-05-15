@@ -440,6 +440,10 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
                     generation = 1,
                     bandColor = bandColor.ifBlank { null },
                     notes = notes.ifBlank { null },
+                    // Issue #14: stamp the back-link when the batch was
+                    // launched from a chick group. Null when the batch was
+                    // started ad-hoc from the NFC Setup screen.
+                    chickGroupId = state.chickGroupId,
                 )
                 Log.d("QuailSync", "Batch: creating bird: sex=$sexValue, lineage=${state.lineageId}, band=$bandColor")
                 val bird = api.createBird(request)

@@ -195,6 +195,10 @@ pub fn build_app(state: AppState) -> Router {
             "/api/brooders/{id}/unassign-birds",
             axum::routing::post(brooders::unassign_birds),
         )
+        .route(
+            "/api/brooders/{id}/assign-graduated-group",
+            axum::routing::post(brooders::assign_graduated_group),
+        )
         .route("/api/birds/{id}/move", axum::routing::put(birds::move_bird))
         .route(
             "/api/cameras",

@@ -470,7 +470,7 @@ pub(crate) async fn assign_group_to_brooder(
         return db_error(e);
     }
     match conn.query_row(
-        "SELECT id, clutch_id, brooder_id, initial_count, current_count, hatch_date, status, notes FROM chick_groups WHERE id = ?1",
+        "SELECT id, clutch_id, brooder_id, initial_count, current_count, hatch_date, status, notes, housing_id FROM chick_groups WHERE id = ?1",
         params![body.group_id], row_to_chick_group,
     ) {
         Ok(mut group) => {
@@ -500,9 +500,18 @@ pub(crate) async fn brooder_residents(
     Path(brooder_id): Path<i64>,
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
+    // Issue #14: a housing unit's group residents come from two sources —
+    //   • brooder/nursery role: Active chick groups whose nursery brooder_id
+    //     matches.
+    //   • hutch role: Graduated groups that have been assigned via
+    //     chick_groups.housing_id.
+    // A single OR query covers both; the status field disambiguates on the
+    // client and we don't need to know the unit's housing_type here.
     let mut stmt = conn.prepare(
-        "SELECT id, clutch_id, brooder_id, initial_count, current_count, hatch_date, status, notes
-         FROM chick_groups WHERE brooder_id = ?1 AND status = 'Active'"
+        "SELECT id, clutch_id, brooder_id, initial_count, current_count, hatch_date, status, notes, housing_id
+         FROM chick_groups
+         WHERE (brooder_id = ?1 AND status = 'Active')
+            OR (housing_id  = ?1 AND status = 'Graduated')"
     ).expect("prepare failed");
     let mut groups: Vec<ChickGroup> = stmt
         .query_map(params![brooder_id], row_to_chick_group)
@@ -516,7 +525,7 @@ pub(crate) async fn brooder_residents(
     // `chick_groups` above. The two are intentionally disjoint — a bird in
     // a chick group has housing_id = NULL.
     let mut stmt = conn.prepare(
-        "SELECT id, band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path, housing_id
+        "SELECT id, band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path, housing_id, chick_group_id
          FROM birds WHERE housing_id = ?1 AND status = 'Active'"
     ).expect("prepare failed");
     let mut birds: Vec<Bird> = stmt
@@ -629,4 +638,88 @@ pub(crate) async fn unassign_birds(
         }
     }
     (StatusCode::OK, Json(BirdAssignmentResponse { updated })).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Issue #14 — move an already-graduated chick group (and the birds it
+// produced) into a hutch.
+// ---------------------------------------------------------------------------
+
+/// `POST /api/brooders/{id}/assign-graduated-group` — body `{ "group_id": N }`.
+/// Used from the hutch detail view to place a previously-graduated group
+/// whose `housing_id` is NULL (or pointed somewhere else). Validates:
+///   • target housing unit exists and is of type `hutch`
+///   • group exists and has status = `Graduated`
+/// Writes both the group row and every bird with `chick_group_id = group_id`
+/// in a single pair of UPDATEs.
+pub(crate) async fn assign_graduated_group(
+    State(state): State<AppState>,
+    Path(brooder_id): Path<i64>,
+    Json(body): Json<AssignGraduatedGroupRequest>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+
+    // Target must exist and be a hutch.
+    let housing_type: Option<String> = conn
+        .query_row(
+            "SELECT housing_type FROM brooders WHERE id = ?1",
+            params![brooder_id],
+            |row| row.get(0),
+        )
+        .ok();
+    match housing_type.as_deref() {
+        Some("hutch") => {}
+        Some(other) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("housing unit #{brooder_id} is a {other}, not a hutch"),
+            )
+                .into_response();
+        }
+        None => return (StatusCode::NOT_FOUND, "housing unit not found").into_response(),
+    }
+
+    // Group must exist and be graduated.
+    let group_status: Option<String> = conn
+        .query_row(
+            "SELECT status FROM chick_groups WHERE id = ?1",
+            params![body.group_id],
+            |row| row.get(0),
+        )
+        .ok();
+    match group_status.as_deref() {
+        Some("Graduated") => {}
+        Some(other) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("group #{} is {other}, not Graduated", body.group_id),
+            )
+                .into_response();
+        }
+        None => return (StatusCode::NOT_FOUND, "chick group not found").into_response(),
+    }
+
+    if let Err(e) = conn.execute(
+        "UPDATE chick_groups SET housing_id = ?1 WHERE id = ?2",
+        params![brooder_id, body.group_id],
+    ) {
+        return db_error(e);
+    }
+    let birds_updated = match conn.execute(
+        "UPDATE birds SET housing_id = ?1 WHERE chick_group_id = ?2 AND status = 'Active'",
+        params![brooder_id, body.group_id],
+    ) {
+        Ok(n) => n as i64,
+        Err(e) => return db_error(e),
+    };
+
+    (
+        StatusCode::OK,
+        Json(AssignGraduatedGroupResponse {
+            group_id: body.group_id,
+            housing_id: brooder_id,
+            birds_updated,
+        }),
+    )
+        .into_response()
 }

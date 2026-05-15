@@ -670,6 +670,7 @@ async fn cmd_bird_add(
         status: BirdStatus::Active,
         notes,
         nfc_tag_id: nfc,
+        chick_group_id: None,
     };
     let resp = reqwest::Client::new()
         .post(format!("{base}/api/birds"))

@@ -41,6 +41,7 @@ pub(crate) async fn create_chick_group(
         hatch_date: body.hatch_date,
         status: ChickGroupStatus::Active,
         notes: body.notes,
+        housing_id: None,
         is_ready_to_transition: false,
         lineages,
     };
@@ -48,7 +49,7 @@ pub(crate) async fn create_chick_group(
     (StatusCode::CREATED, Json(group)).into_response()
 }
 
-const GROUP_SELECT: &str = "SELECT id, clutch_id, brooder_id, initial_count, current_count, hatch_date, status, notes FROM chick_groups";
+const GROUP_SELECT: &str = "SELECT id, clutch_id, brooder_id, initial_count, current_count, hatch_date, status, notes, housing_id FROM chick_groups";
 
 pub(crate) async fn list_chick_groups(State(state): State<AppState>) -> Json<Vec<ChickGroup>> {
     let conn = acquire_db(&state);
@@ -121,6 +122,19 @@ pub(crate) async fn update_chick_group(
         conn.execute(
             "UPDATE chick_groups SET status = ?1 WHERE id = ?2",
             params![status, id],
+        )
+        .ok();
+    }
+    // Issue #14: allow clearing or setting housing_id from the hutch detail
+    // view's "Unassign group" action. `null` clears it; an integer sets it
+    // (validation that the target is actually a hutch lives in the dedicated
+    // POST /api/brooders/{id}/assign-graduated-group endpoint — this generic
+    // PUT is a low-level write used mainly to detach).
+    if body.get("housing_id").is_some() {
+        let val: Option<i64> = body.get("housing_id").and_then(|v| v.as_i64());
+        conn.execute(
+            "UPDATE chick_groups SET housing_id = ?1 WHERE id = ?2",
+            params![val, id],
         )
         .ok();
     }
@@ -270,6 +284,36 @@ pub(crate) async fn graduate_chick_group(
         return (StatusCode::BAD_REQUEST, "group is not active").into_response();
     }
 
+    // Issue #14: optional hutch destination. If supplied, must point at an
+    // existing housing unit of type `hutch`. Validated up-front so a typo
+    // doesn't half-graduate the batch.
+    if let Some(target) = body.target_housing_id {
+        let housing_type: Option<String> = conn
+            .query_row(
+                "SELECT housing_type FROM brooders WHERE id = ?1",
+                params![target],
+                |row| row.get(0),
+            )
+            .ok();
+        match housing_type.as_deref() {
+            Some("hutch") => {}
+            Some(other) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("target_housing_id #{target} is a {other}, not a hutch"),
+                )
+                    .into_response();
+            }
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("target_housing_id #{target} does not exist"),
+                )
+                    .into_response();
+            }
+        }
+    }
+
     // Birds inherit the group's lineages by default.
     let group_lineage_ids: Vec<i64> = conn
         .prepare("SELECT lineage_id FROM chick_group_lineages WHERE chick_group_id = ?1")
@@ -312,10 +356,17 @@ pub(crate) async fn graduate_chick_group(
     let mut birds_created = Vec::new();
     for gb in &body.birds {
         if let Err(e) = conn.execute(
-            "INSERT INTO birds (band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'Active', ?7, ?8, ?9, ?10)",
-            params![gb.band_color, sex_to_str(&gb.sex), group.hatch_date.to_string(),
-                mother_id, father_id, generation, gb.notes, gb.nfc_tag_id, group.brooder_id, gb.photo_path],
+            "INSERT INTO birds (band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path, housing_id, chick_group_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'Active', ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                gb.band_color, sex_to_str(&gb.sex), group.hatch_date.to_string(),
+                mother_id, father_id, generation, gb.notes, gb.nfc_tag_id,
+                group.brooder_id, gb.photo_path,
+                // Issue #14: stamp the optional hutch destination, plus the
+                // back-link to this group so "Assign Graduated Group" can
+                // re-find these birds later.
+                body.target_housing_id, id,
+            ],
         ) {
             return db_error(e);
         }
@@ -350,14 +401,19 @@ pub(crate) async fn graduate_chick_group(
             nfc_tag_id: gb.nfc_tag_id.clone(),
             current_brooder_id: group.brooder_id,
             photo_path: gb.photo_path.clone(),
-            housing_id: None,
+            housing_id: body.target_housing_id,
+            chick_group_id: Some(id),
             lineages,
         });
     }
 
+    // Flip the group to Graduated and (if a hutch was named) record where it
+    // now lives. Doing both in one statement keeps the group row consistent —
+    // it must never be Active with a housing_id, or Graduated without bird
+    // back-links if target_housing_id was supplied.
     conn.execute(
-        "UPDATE chick_groups SET status = 'Graduated' WHERE id = ?1",
-        params![id],
+        "UPDATE chick_groups SET status = 'Graduated', housing_id = COALESCE(?1, housing_id) WHERE id = ?2",
+        params![body.target_housing_id, id],
     )
     .ok();
 
@@ -379,6 +435,7 @@ mod tests {
             hatch_date: hatch,
             status,
             notes: None,
+            housing_id: None,
             is_ready_to_transition: false,
             lineages: Vec::new(),
         }

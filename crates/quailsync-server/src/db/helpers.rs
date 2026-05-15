@@ -152,8 +152,9 @@ pub fn str_to_chick_group_status(s: &str) -> ChickGroupStatus {
 
 /// Maps a `birds` row produced by `BIRD_SELECT` (id, band_color, sex,
 /// hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id,
-/// current_brooder_id, photo_path, housing_id). The `lineages` field is left
-/// empty — callers populate it via `fetch_bird_lineages`.
+/// current_brooder_id, photo_path, housing_id, chick_group_id). The
+/// `lineages` field is left empty — callers populate it via
+/// `fetch_bird_lineages`.
 pub fn row_to_bird(row: &rusqlite::Row) -> rusqlite::Result<Bird> {
     let sex_str: String = row.get(2)?;
     let hatch_str: String = row.get(3)?;
@@ -172,6 +173,7 @@ pub fn row_to_bird(row: &rusqlite::Row) -> rusqlite::Result<Bird> {
         current_brooder_id: row.get(10)?,
         photo_path: row.get(11)?,
         housing_id: row.get(12)?,
+        chick_group_id: row.get(13)?,
         lineages: Vec::new(),
     })
 }
@@ -200,8 +202,8 @@ pub fn row_to_clutch(row: &rusqlite::Row) -> rusqlite::Result<Clutch> {
 }
 
 /// Maps a `chick_groups` row produced by `GROUP_SELECT` (id, clutch_id,
-/// brooder_id, initial_count, current_count, hatch_date, status, notes).
-/// The `lineages` field is left empty — callers populate it via
+/// brooder_id, initial_count, current_count, hatch_date, status, notes,
+/// housing_id). The `lineages` field is left empty — callers populate it via
 /// `fetch_chick_group_lineages`.
 pub fn row_to_chick_group(row: &rusqlite::Row) -> rusqlite::Result<ChickGroup> {
     let hatch_str: String = row.get(5)?;
@@ -215,6 +217,7 @@ pub fn row_to_chick_group(row: &rusqlite::Row) -> rusqlite::Result<ChickGroup> {
         hatch_date: NaiveDate::parse_from_str(&hatch_str, "%Y-%m-%d").unwrap_or_default(),
         status: str_to_chick_group_status(&status_str),
         notes: row.get(7)?,
+        housing_id: row.get(8)?,
         is_ready_to_transition: false,
         lineages: Vec::new(),
     };

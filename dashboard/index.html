@@ -1106,11 +1106,15 @@
         el.innerHTML='<div data-brooder-id="legacy" style="border-left:4px solid var(--safe)"><div class="reading-row"><div><span class="reading-label">Temperature</span><br><span class="reading-value" data-field="temp">'+temp+'&deg;F</span></div><div style="text-align:right"><span class="reading-label">Humidity</span><br><span class="reading-value" data-field="hum">'+hum+'%</span></div></div><div class="sparkline" data-field="spark">'+self._buildSparkBars(temps,30,32)+'</div><div data-field="alert"></div></div>';
         return;
       }
-      // Multi-brooder — fetch all status/readings in parallel
+      // Multi-brooder — fetch all status/readings in parallel, plus the
+      // chick-groups list once (issue #14 needs to know which brooders have
+      // an Active group ready to graduate, so it can show the button).
       var fetches = brooders.map(function(b){
         return Promise.all([API.get('/api/brooders/'+b.id+'/status'), API.get('/api/brooders/'+b.id+'/readings?minutes=60')]);
       });
+      var groupsPromise = API.get('/api/chick-groups');
       var results = await Promise.all(fetches);
+      var allGroups = (await groupsPromise) || [];
 
       // Issue #11: group by housing_type. Hutches don't have sensors, so
       // their cards skip the temp/humidity/sparkline block.
@@ -1123,7 +1127,16 @@
       for (var i = 0; i < brooders.length; i++) {
         var t = (brooders[i].housing_type || 'brooder').toLowerCase();
         if (!byType[t]) t = 'brooder';
-        byType[t].push({ b: brooders[i], status: results[i][0], readings: results[i][1] });
+        // The "ready" group for this brooder is the Active group whose
+        // is_ready_to_transition=true. Server already does the date math.
+        var readyGroup = null;
+        for (var gi = 0; gi < allGroups.length; gi++) {
+          var g = allGroups[gi];
+          if (g.brooder_id === brooders[i].id && g.status === 'Active' && g.is_ready_to_transition) {
+            readyGroup = g; break;
+          }
+        }
+        byType[t].push({ b: brooders[i], status: results[i][0], readings: results[i][1], readyGroup: readyGroup });
       }
 
       function renderCard(entry) {
@@ -1193,6 +1206,17 @@
           card+='<div data-field="alert" style="font-size:.7rem;color:var(--danger);margin-top:.3rem">'+alertOfflineMarkup+'</div>';
         } else if (alertMessage) {
           card+='<div data-field="alert" style="font-size:.7rem;color:var(--danger);margin-top:.3rem">'+escapeHtml(alertMessage)+'</div>';
+        }
+        // Issue #14: "Graduate → Hutch" CTA on brooder cards whose Active
+        // chick group is past the 5-week ready threshold. Hutches/incubators
+        // never get this button — only brooders host chick groups.
+        if (!isHutch && entry.readyGroup) {
+          var rg = entry.readyGroup;
+          card+='<button class="btn-primary" style="font-size:.75rem;padding:5px 8px;margin-top:.4rem;width:100%" '
+            + 'title="Open the banding modal — picks a hutch as part of graduation" '
+            + 'onclick="Router.navigate(\'#/nursery\');setTimeout(function(){if(Page.Nursery&&Page.Nursery.openGraduateModal)Page.Nursery.openGraduateModal('+rg.id+')},300)">'
+            + 'Graduate &#x2192; Hutch (Group #'+rg.id+', '+rg.current_count+' chicks)'
+            + '</button>';
         }
         card+='</div>';
         return card;
@@ -1421,11 +1445,12 @@
       // Modal skeleton — body is filled by _renderHutchDetailContents so we
       // can re-render after an assign/unassign without flicker.
       var skeleton = '<div class="modal-overlay" id="hutch-detail-overlay" onclick="if(event.target===this)Page.Dashboard.closeHutchDetailModal()">'
-        + '<div class="modal" style="min-width:360px;max-width:480px">'
+        + '<div class="modal" style="min-width:360px;max-width:520px">'
         +   '<h3 id="hutch-detail-title">Hutch Residents</h3>'
         +   '<div id="hutch-detail-body">'+loadingHTML()+'</div>'
-        +   '<div class="modal-actions">'
+        +   '<div class="modal-actions" style="flex-wrap:wrap">'
         +     '<button class="btn-cancel" onclick="Page.Dashboard.closeHutchDetailModal()">Close</button>'
+        +     '<button class="status-btn" onclick="Page.Dashboard.openAssignGradGroupModal('+housingId+')">+ Graduated Group</button>'
         +     '<button class="btn-primary" onclick="Page.Dashboard.openAssignBirdsModal('+housingId+')">+ Assign Birds</button>'
         +   '</div>'
         + '</div></div>';
@@ -1452,16 +1477,39 @@
         }
         if (hutch && titleEl) titleEl.textContent = hutch.name + ' — Residents';
 
-        var residents = (results[1] && results[1].individual_birds) || [];
-        if (residents.length === 0) {
-          bodyEl.innerHTML = '<p style="color:#888;font-size:.85rem;margin:.5rem 0">No birds assigned to this hutch yet.</p>';
+        // Issue #14: the /residents endpoint now returns graduated chick
+        // groups too (chick_groups with status=Graduated and housing_id=this
+        // hutch). They render as a separate section above individual birds.
+        var residentsResp = results[1] || {};
+        var groups = (residentsResp.chick_groups || []).filter(function(g) {
+          return (g.status === 'Graduated');
+        });
+        var birds = residentsResp.individual_birds || [];
+
+        if (groups.length === 0 && birds.length === 0) {
+          bodyEl.innerHTML = '<p style="color:#888;font-size:.85rem;margin:.5rem 0">No residents in this hutch yet.</p>';
           return;
         }
-        var rowsHtml = residents.map(function(b) {
+
+        // Birds that belong to one of the visible groups are nested under
+        // that group rather than listed twice. Birds without a group go to
+        // the bottom "Individual birds" section.
+        var birdsByGroup = {};
+        var ungrouped = [];
+        for (var bi = 0; bi < birds.length; bi++) {
+          var b = birds[bi];
+          if (b.chick_group_id != null && groups.find(function(g){ return g.id === b.chick_group_id; })) {
+            (birdsByGroup[b.chick_group_id] = birdsByGroup[b.chick_group_id] || []).push(b);
+          } else {
+            ungrouped.push(b);
+          }
+        }
+
+        function renderBirdRow(b) {
           var dot = bandDot(b.band_color || '#ccc', 16);
           var sex = b.sex ? escapeHtml(b.sex) : '—';
           var lineages = formatLineages(b.lineages) || '<span style="color:#bbb">(no lineage)</span>';
-          return '<div style="display:flex;align-items:center;gap:.5rem;padding:.4rem .2rem;border-bottom:1px solid var(--beige)">'
+          return '<div style="display:flex;align-items:center;gap:.5rem;padding:.35rem .2rem;border-bottom:1px solid var(--beige)">'
             +   '<span style="flex-shrink:0">' + dot + '</span>'
             +   '<div style="flex:1;min-width:0">'
             +     '<div style="font-size:.82rem">' + birdLink(b.id) + ' <span style="color:#888;font-size:.72rem">· ' + sex + '</span></div>'
@@ -1469,8 +1517,32 @@
             +   '</div>'
             +   '<button class="btn-cancel" style="font-size:.7rem;padding:3px 8px" onclick="Page.Dashboard.unassignBirdFromHutch(' + housingId + ',' + b.id + ')">Unassign</button>'
             + '</div>';
-        }).join('');
-        bodyEl.innerHTML = '<div style="max-height:50vh;overflow-y:auto">' + rowsHtml + '</div>';
+        }
+
+        var html = '';
+        groups.forEach(function(g) {
+          var groupLineages = formatLineages(g.lineages) || '<span style="color:#bbb">(no lineage)</span>';
+          var groupBirds = (birdsByGroup[g.id] || []);
+          html += '<div style="margin-bottom:.6rem;border:1px solid var(--beige);border-radius:8px;overflow:hidden">'
+            +   '<div style="display:flex;align-items:center;gap:.5rem;background:var(--beige);padding:.4rem .5rem">'
+            +     '<strong style="font-size:.82rem">Group #' + g.id + '</strong>'
+            +     '<span style="font-size:.72rem;color:#888">' + groupLineages + ' · ' + g.current_count + ' birds · hatched ' + escapeHtml(g.hatch_date) + '</span>'
+            +     '<button class="btn-cancel" style="margin-left:auto;font-size:.7rem;padding:3px 8px" onclick="Page.Dashboard.unassignGraduatedGroup(' + housingId + ',' + g.id + ')">Unassign group</button>'
+            +   '</div>';
+          if (groupBirds.length > 0) {
+            html += '<div>' + groupBirds.map(renderBirdRow).join('') + '</div>';
+          } else {
+            html += '<div style="padding:.4rem .5rem;font-size:.72rem;color:#888">No birds with this group id yet.</div>';
+          }
+          html += '</div>';
+        });
+        if (ungrouped.length > 0) {
+          if (groups.length > 0) {
+            html += '<div style="font-size:.72rem;color:#888;margin:.5rem 0 .25rem">Individual birds</div>';
+          }
+          html += ungrouped.map(renderBirdRow).join('');
+        }
+        bodyEl.innerHTML = '<div style="max-height:50vh;overflow-y:auto">' + html + '</div>';
       } catch (e) {
         bodyEl.innerHTML = '<p style="color:var(--danger);font-size:.85rem">Failed to load residents: ' + escapeHtml(e && e.message ? e.message : 'unknown') + '</p>';
       }
@@ -1493,6 +1565,97 @@
         }
       } catch (e) {
         toast('Failed to unassign bird: ' + (e && e.message ? e.message : 'unknown'), 'error');
+      }
+    },
+
+    /* ---------- Issue #14: assign a graduated group to a hutch ---------- */
+
+    // Picker showing every Graduated group whose housing_id is currently
+    // NULL or pointing somewhere other than this hutch. Hidden when none
+    // are available so the button doesn't pop an empty list.
+    openAssignGradGroupModal: async function(housingId) {
+      var groups = await API.get('/api/chick-groups') || [];
+      var available = groups.filter(function(g) {
+        return g.status === 'Graduated' && g.housing_id !== housingId;
+      });
+      var rows = available.length === 0
+        ? '<p style="color:#888;font-size:.85rem">No unassigned graduated groups available.</p>'
+        : available.map(function(g) {
+            var lineages = formatLineages(g.lineages) || '(no lineage)';
+            var where = (g.housing_id != null)
+              ? '<span style="color:#888;font-size:.72rem"> · currently in hutch #' + g.housing_id + '</span>'
+              : '';
+            return '<label style="display:flex;align-items:center;gap:.5rem;padding:4px 0;border-bottom:1px solid var(--beige)">'
+              + '<input type="radio" name="grad-group-pick" class="m-grad-group" value="' + g.id + '">'
+              + '<span style="flex:1"><strong>Group #' + g.id + '</strong> <span style="color:#888;font-size:.72rem">· ' + lineages + ' · ' + g.current_count + ' birds</span>' + where + '</span>'
+              + '</label>';
+          }).join('');
+      var html = '<div class="modal-overlay" id="grad-pick-overlay" onclick="if(event.target===this)Page.Dashboard.closeAssignGradGroupModal()">'
+        + '<div class="modal" style="max-width:480px"><h3>Assign Graduated Group</h3>'
+        + '<div style="max-height:50vh;overflow-y:auto;margin:.5rem 0">' + rows + '</div>'
+        + '<div class="modal-actions">'
+        +   '<button class="btn-cancel" onclick="Page.Dashboard.closeAssignGradGroupModal()">Cancel</button>'
+        +   '<button class="btn-primary" onclick="Page.Dashboard.submitAssignGradGroup(' + housingId + ')">Assign</button>'
+        + '</div>'
+        + '</div></div>';
+      document.body.insertAdjacentHTML('beforeend', html);
+    },
+
+    closeAssignGradGroupModal: function() {
+      var ov = document.getElementById('grad-pick-overlay');
+      if (ov) ov.remove();
+    },
+
+    submitAssignGradGroup: async function(housingId) {
+      var picked = document.querySelector('.m-grad-group:checked');
+      if (!picked) { toast('Select a group', 'error'); return; }
+      var groupId = parseInt(picked.value, 10);
+      try {
+        var resp = await API.post('/api/brooders/' + housingId + '/assign-graduated-group', { group_id: groupId });
+        if (resp && resp.group_id != null) {
+          toast('Group #' + resp.group_id + ' assigned (' + resp.birds_updated + ' birds)');
+          this.closeAssignGradGroupModal();
+          // Detail modal stays open behind the picker — refresh it so the
+          // new group appears immediately.
+          var detail = document.getElementById('hutch-detail-overlay');
+          if (detail) await this._renderHutchDetailContents(housingId);
+          this._pollBrooder();
+        } else {
+          toast('Failed to assign group', 'error');
+        }
+      } catch (e) {
+        toast('Failed to assign group: ' + (e && e.message ? e.message : 'unknown'), 'error');
+      }
+    },
+
+    // Detaches a graduated group from this hutch by clearing chick_groups.housing_id
+    // and unhousing every bird that came from the group. Backend doesn't have
+    // a dedicated endpoint — we use PUT /api/chick-groups/{id} (housing_id=null)
+    // plus the existing unassign-birds batch endpoint.
+    unassignGraduatedGroup: async function(housingId, groupId) {
+      try {
+        // Find the birds in this group (we already fetched them as residents,
+        // but re-fetch to be safe in case the modal is stale).
+        var residents = await API.get('/api/brooders/' + housingId + '/residents') || {};
+        var birdIds = (residents.individual_birds || [])
+          .filter(function(b){ return b.chick_group_id === groupId; })
+          .map(function(b){ return b.id; });
+
+        // Clear the group's housing_id first.
+        var groupResp = await API.put('/api/chick-groups/' + groupId, { housing_id: null });
+        if (groupResp === null) {
+          toast('Failed to unassign group', 'error');
+          return;
+        }
+        // Then unassign every bird in the group from this hutch.
+        if (birdIds.length > 0) {
+          await API.post('/api/brooders/' + housingId + '/unassign-birds', { bird_ids: birdIds });
+        }
+        toast('Group #' + groupId + ' unassigned');
+        await this._renderHutchDetailContents(housingId);
+        this._pollBrooder();
+      } catch (e) {
+        toast('Failed to unassign group: ' + (e && e.message ? e.message : 'unknown'), 'error');
       }
     },
 
@@ -2997,9 +3160,28 @@
       this._load();
     },
     openGraduateModal: async function(id){
+      // Issue #14: this can be invoked from the dashboard's "Graduate → Hutch"
+      // button right after we navigate here, before _load() populates _groups.
+      // Self-fetch in that case so we don't silently no-op.
+      if (!this._groups || this._groups.length === 0) {
+        this._groups = await API.get('/api/chick-groups') || [];
+      }
       var group = this._groups.find(function(g){ return g.id === id; });
       if(!group) return;
       var n = group.current_count;
+      // Issue #14: fetch hutches so the user can route the just-graduated
+      // group straight into one. The picker is optional — leaving it at
+      // "(Don't assign — use 'Assign Graduated Group' later)" graduates with
+      // target_housing_id = null and the group can be placed from the hutch
+      // detail view afterwards.
+      var brooders = await API.get('/api/brooders') || [];
+      var hutches = brooders.filter(function(b){
+        return (b.housing_type || 'brooder').toLowerCase() === 'hutch';
+      });
+      var hutchOpts = '<option value="">(Don\'t assign — place later)</option>'
+        + hutches.map(function(h){
+            return '<option value="' + h.id + '">' + escapeHtml(h.name) + '</option>';
+          }).join('');
       var rows = '';
       for(var i=0; i<n; i++){
         rows += '<tr>' +
@@ -3017,6 +3199,10 @@
         '<select id="qf-sex"><option value="Female">Female</option><option value="Male">Male</option><option value="Unknown">Unknown</option></select>' +
         ' with band color <input id="qf-band" type="text" style="width:80px" placeholder="color"> ' +
         '<button class="status-btn" onclick="Page.Nursery._quickFill()">Apply</button></div>' +
+        '<div style="background:var(--beige);padding:.6rem;border-radius:8px;margin-bottom:.75rem;font-size:.85rem">' +
+        '<strong>Move to hutch:</strong> <select id="grad-target-housing">'+hutchOpts+'</select>' +
+        (hutches.length === 0 ? ' <span style="color:#999">(no hutches defined yet)</span>' : '') +
+        '</div>' +
         '<div style="max-height:350px;overflow-y:auto"><table class="data-table" style="width:100%"><thead><tr><th>#</th><th>Sex</th><th>Band</th><th>NFC</th><th>Notes</th></tr></thead>' +
         '<tbody id="grad-tbody">'+rows+'</tbody></table></div>' +
         '<div id="grad-error" style="color:var(--dusty-rose);font-size:.85rem;margin-top:.4rem"></div>' +
@@ -3060,10 +3246,19 @@
         if(errEl) errEl.textContent = 'Duplicate band colors among males! Each male needs a unique band.';
         return;
       }
-      var result = await API.put('/api/chick-groups/'+id+'/graduate', {birds: birds});
+      // Issue #14: include the optional hutch destination. Empty string means
+      // "don't assign" — server treats null as graduate-without-hutch.
+      var targetSel = document.getElementById('grad-target-housing');
+      var targetId = targetSel && targetSel.value ? parseInt(targetSel.value, 10) : null;
+      var payload = { birds: birds };
+      if(targetId) payload.target_housing_id = targetId;
+      // Backend is POST (not PUT — pre-existing bug fixed as part of #14).
+      var result = await API.post('/api/chick-groups/'+id+'/graduate', payload);
       this.closeGraduateModal();
       if(result){
-        toast('Graduated '+birds.length+' birds!');
+        var msg = 'Graduated '+birds.length+' birds';
+        if(targetId) msg += ' into hutch';
+        toast(msg + '!');
         Router.navigate('#/flock');
       } else {
         toast('Graduation failed','error');

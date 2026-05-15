@@ -265,6 +265,9 @@ pub fn init_db(conn: &Connection) {
         .expect("ALTER TABLE birds ADD COLUMN housing_id failed");
         println!("[migration] added birds.housing_id");
     }
+    // (birds.chick_group_id is added below, after the chick_groups table
+    //  exists — its FK refers to chick_groups, which is created further
+    //  down in `init_db`.)
 
     // System alerts (backup/maintenance scripts -> dashboard bell icon)
     conn.execute_batch(
@@ -310,6 +313,32 @@ pub fn init_db(conn: &Connection) {
         );",
     )
     .expect("failed to create chick group tables");
+
+    // Issue #14: track which hutch a graduated chick group has moved into.
+    // Distinct from brooder_id (the nursery brooder during the chick stage).
+    // Nullable — Active groups have NULL; graduated groups stay NULL until
+    // assigned to a hutch.
+    if !column_exists(conn, "chick_groups", "housing_id") {
+        conn.execute(
+            "ALTER TABLE chick_groups ADD COLUMN housing_id INTEGER REFERENCES brooders(id)",
+            [],
+        )
+        .expect("ALTER TABLE chick_groups ADD COLUMN housing_id failed");
+        println!("[migration] added chick_groups.housing_id");
+    }
+    // Issue #14: link birds back to the chick group they graduated from, so
+    // "assign graduated group → hutch" can find a group's birds. Nullable —
+    // existing birds (pre-issue-#14) and birds that weren't created via the
+    // graduate flow have NULL. Placed here (after `chick_groups` is created)
+    // so the REFERENCES target exists.
+    if !column_exists(conn, "birds", "chick_group_id") {
+        conn.execute(
+            "ALTER TABLE birds ADD COLUMN chick_group_id INTEGER REFERENCES chick_groups(id)",
+            [],
+        )
+        .expect("ALTER TABLE birds ADD COLUMN chick_group_id failed");
+        println!("[migration] added birds.chick_group_id");
+    }
 
     // -------------------------------------------------------------------------
     // Many-to-many lineage migration.
@@ -411,6 +440,8 @@ pub fn init_db(conn: &Connection) {
          CREATE INDEX IF NOT EXISTS idx_weights_bird_date ON weight_records(bird_id, date);
          CREATE INDEX IF NOT EXISTS idx_processing_status ON processing_records(status);
          CREATE INDEX IF NOT EXISTS idx_chick_groups_brooder ON chick_groups(brooder_id, status);
+         CREATE INDEX IF NOT EXISTS idx_chick_groups_housing ON chick_groups(housing_id);
+         CREATE INDEX IF NOT EXISTS idx_birds_chick_group ON birds(chick_group_id);
          CREATE INDEX IF NOT EXISTS idx_alerts_timestamp ON alerts(timestamp);
          CREATE INDEX IF NOT EXISTS idx_headcounts_brooder ON headcounts(brooder_id, received_at);",
     )

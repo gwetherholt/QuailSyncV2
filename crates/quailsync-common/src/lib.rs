@@ -207,6 +207,12 @@ pub struct Bird {
     /// from the chick group's `brooder_id`.
     #[serde(default)]
     pub housing_id: Option<i64>,
+    /// The chick group this bird graduated from (issue #14). Populated by
+    /// the graduate handler; lets "assign graduated group → hutch" find all
+    /// birds of a group later. `None` for legacy birds and any bird not
+    /// produced via the graduate flow.
+    #[serde(default)]
+    pub chick_group_id: Option<i64>,
     /// Many-to-many lineage tags. Populated from the `bird_lineages`
     /// junction table; empty Vec is allowed (legacy migration only).
     #[serde(default)]
@@ -263,6 +269,12 @@ pub struct CreateBird {
     pub notes: Option<String>,
     #[serde(default)]
     pub nfc_tag_id: Option<String>,
+    /// Optional back-link to the chick group this bird came from (issue #14).
+    /// The Android batch-banding flow creates birds via POST /api/birds (not
+    /// /graduate) — passing chick_group_id here keeps the relationship intact
+    /// so "Assign Graduated Group → hutch" can later find the group's birds.
+    #[serde(default)]
+    pub chick_group_id: Option<i64>,
     /// One or more lineage IDs; must be non-empty (validated at handler level).
     pub lineage_ids: Vec<i64>,
 }
@@ -598,6 +610,11 @@ pub struct ChickGroup {
     pub hatch_date: NaiveDate,
     pub status: ChickGroupStatus,
     pub notes: Option<String>,
+    /// The hutch the group lives in after graduation (issue #14). `None` for
+    /// Active groups (still in their nursery `brooder_id`) and for graduated
+    /// groups that haven't been assigned to a hutch yet.
+    #[serde(default)]
+    pub housing_id: Option<i64>,
     #[serde(default)]
     pub is_ready_to_transition: bool,
     /// Many-to-many lineage tags. Populated from the `chick_group_lineages`
@@ -670,6 +687,30 @@ pub struct MortalityRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraduateRequest {
     pub birds: Vec<GraduateBird>,
+    /// Issue #14: optional hutch destination. When provided the server
+    /// validates the target is a `Hutch`, stamps `housing_id` on every
+    /// graduated bird, and writes the group's `housing_id` so the group
+    /// shows up under that hutch's residents. Omitting leaves both NULL
+    /// (graduated, unhoused) — the dashboard's "Assign Graduated Group"
+    /// flow can place them later.
+    #[serde(default)]
+    pub target_housing_id: Option<i64>,
+}
+
+/// Body for `POST /api/brooders/{id}/assign-graduated-group` (issue #14).
+/// Moves an already-graduated group + every bird produced from it into the
+/// target hutch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssignGraduatedGroupRequest {
+    pub group_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssignGraduatedGroupResponse {
+    pub group_id: i64,
+    pub housing_id: i64,
+    /// Number of bird rows whose housing_id was set by this call.
+    pub birds_updated: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

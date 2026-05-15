@@ -22,12 +22,16 @@ pub(crate) async fn create_bird(
     }
     let conn = acquire_db(&state);
     if let Err(e) = conn.execute(
-        "INSERT INTO birds (band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT INTO birds (band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, chick_group_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             body.band_color, sex_to_str(&body.sex),
             body.hatch_date.to_string(), body.mother_id, body.father_id,
             body.generation, bird_status_to_str(&body.status), body.notes, body.nfc_tag_id,
+            // Issue #14: stamp the chick group back-link when caller supplies
+            // it. Android's batch-band flow uses this to preserve the
+            // relationship that the /graduate handler maintains internally.
+            body.chick_group_id,
         ],
     ) {
         return db_error(e);
@@ -53,13 +57,14 @@ pub(crate) async fn create_bird(
             current_brooder_id: None,
             photo_path: None,
             housing_id: None,
+            chick_group_id: body.chick_group_id,
             lineages,
         }),
     )
         .into_response()
 }
 
-const BIRD_SELECT: &str = "SELECT id, band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path, housing_id FROM birds";
+const BIRD_SELECT: &str = "SELECT id, band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path, housing_id, chick_group_id FROM birds";
 
 pub(crate) async fn list_birds(State(state): State<AppState>) -> Json<Vec<Bird>> {
     let conn = acquire_db(&state);
