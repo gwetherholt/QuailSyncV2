@@ -106,7 +106,14 @@ class TelemetryViewModel(application: Application) : AndroidViewModel(applicatio
 
     private suspend fun loadDataSuspend() {
         try {
-            val brooderList = api.getBrooders().distinctBy { it.id }
+            // Telemetry screen is sensor-only: temperature, humidity, and the
+            // alerts they generate. Hutches don't have environmental sensors
+            // attached, so they have nothing to show here — filtering at fetch
+            // time also skips the per-id readings/alerts/target-temp round
+            // trips for them.
+            val brooderList = api.getBrooders()
+                .distinctBy { it.id }
+                .filter { (it.housingType ?: "brooder").lowercase() != "hutch" }
             val states = brooderList.map { brooder ->
                 val readings = try { api.getBrooderReadings(brooder.id) } catch (_: Exception) { emptyList() }
                 val alerts = try { api.getBrooderAlerts(brooder.id) } catch (_: Exception) { emptyList() }

@@ -363,13 +363,23 @@ fun DashboardScreen(
                     }
                     items(entries, key = { "brooder-${it.brooder.id}" }) { state ->
                         val activeGroup = chickGroups.find { it.brooderId == state.brooder.id && it.status == "Active" }
-                        // Occupancy = any signal that something lives here:
-                        //   • an Active nursery group on this brooder
-                        //   • a Graduated group assigned to this hutch via housing_id (issue #14)
-                        //   • any individual active bird housed via housing_id (issue #13)
-                        // chick_group_id back-link means group birds also count via
-                        // housing_id; we don't sum counts (which would double-count
-                        // graduated birds), we only need yes/no for the dot.
+                        // Resident count — housing-type aware:
+                        //   • Hutch: count active birds with housing_id == this. Birds
+                        //     that graduated from a group are stamped with both
+                        //     housing_id and chick_group_id, so counting birds gives
+                        //     the right total without double-counting the group.
+                        //   • Brooder / Incubator: the chick group's currentCount is
+                        //     the live tally (birds don't exist as rows yet during
+                        //     the nursery / incubation stages).
+                        val housingType = (state.brooder.housingType ?: "brooder").lowercase()
+                        val residentCount = if (housingType == "hutch") {
+                            birds.count { it.housingId == state.brooder.id && it.status?.lowercase() == "active" }
+                        } else {
+                            activeGroup?.currentCount ?: 0
+                        }
+                        // Occupancy dot still derives from the same three signals so
+                        // a hutch with a graduated group but no per-bird records yet
+                        // (e.g. mid-migration) still lights up.
                         val isOccupied = activeGroup != null
                             || chickGroups.any { it.housingId == state.brooder.id && it.status == "Graduated" }
                             || birds.any { it.housingId == state.brooder.id && (it.status?.lowercase() == "active") }
@@ -377,6 +387,7 @@ fun DashboardScreen(
                             state = state,
                             liveReading = liveReadings[state.brooder.id],
                             chickGroup = activeGroup,
+                            residentCount = residentCount,
                             isOccupied = isOccupied,
                             onClick = { onBrooderClick(state.brooder.id) },
                         )
@@ -689,6 +700,7 @@ private fun CompactBrooderCard(
     state: BrooderState,
     liveReading: LiveReading?,
     chickGroup: ChickGroupDto?,
+    residentCount: Int,
     isOccupied: Boolean,
     onClick: () -> Unit,
 ) {
@@ -790,25 +802,30 @@ private fun CompactBrooderCard(
                 )
             }
 
-            // Chick info — label is housing-type aware (eggs for incubators,
-            // chicks for brooders, birds for hutches). Mirrors the dashboard
-            // pluralisation logic.
-            if (chickGroup != null) {
-                Spacer(Modifier.width(12.dp))
-                Column(horizontalAlignment = Alignment.End) {
-                    val plural = when (state.brooder.housingType?.lowercase()) {
-                        "incubator" -> "eggs"
-                        "hutch" -> "birds"
-                        else -> "chicks"
-                    }
-                    val singular = plural.dropLast(1)
-                    val countLabel = if (chickGroup.currentCount == 1) singular else plural
-                    Text(
-                        "${chickGroup.currentCount} $countLabel",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = SageGreen,
-                        maxLines = 1,
-                    )
+            // Resident count — always rendered (including 0) so empty hutches
+            // and pre-hatch incubators read consistently. Pluralisation tracks
+            // the housing type: eggs for incubators, chicks for brooders,
+            // birds for hutches. The hutch path was previously gated on a
+            // non-null `chickGroup` filtered by brooderId — that filter never
+            // matched graduated groups (which reference the hutch via
+            // housingId), so hutches with residents showed "--" until birds
+            // were assigned individually.
+            Spacer(Modifier.width(12.dp))
+            Column(horizontalAlignment = Alignment.End) {
+                val plural = when (state.brooder.housingType?.lowercase()) {
+                    "incubator" -> "eggs"
+                    "hutch" -> "birds"
+                    else -> "chicks"
+                }
+                val singular = plural.dropLast(1)
+                val countLabel = if (residentCount == 1) singular else plural
+                Text(
+                    "$residentCount $countLabel",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (residentCount > 0) SageGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+                if (chickGroup != null) {
                     if (chickAge != null && chickAge >= 0) {
                         Text(
                             "Day $chickAge",
