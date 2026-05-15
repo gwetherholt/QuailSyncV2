@@ -285,9 +285,11 @@ pub(crate) async fn list_brooders(
     Query(q): Query<ListBroodersQuery>,
 ) -> Json<Vec<Brooder>> {
     let conn = acquire_db(&state);
-    let filter = q.r#type.as_deref().map(|s| s.to_lowercase()).filter(|s| {
-        matches!(s.as_str(), "incubator" | "brooder" | "hutch")
-    });
+    let filter = q
+        .r#type
+        .as_deref()
+        .map(|s| s.to_lowercase())
+        .filter(|s| matches!(s.as_str(), "incubator" | "brooder" | "hutch"));
 
     const COLS: &str = "id, name, lineage_id, life_stage, qr_code, notes, camera_url, housing_type";
     let rows: Vec<Brooder> = match filter {

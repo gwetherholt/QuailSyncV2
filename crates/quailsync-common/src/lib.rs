@@ -548,16 +548,13 @@ pub struct CreateDetectionResult {
 /// What the housing unit is used for. Separate axis from `LifeStage` (which
 /// describes the residents). A single physical pen can change role across
 /// its lifetime (e.g. an incubator becoming a brooder for a hatched clutch).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum HousingType {
     Incubator,
+    #[default]
     Brooder,
     Hutch,
-}
-
-impl Default for HousingType {
-    fn default() -> Self { Self::Brooder }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
