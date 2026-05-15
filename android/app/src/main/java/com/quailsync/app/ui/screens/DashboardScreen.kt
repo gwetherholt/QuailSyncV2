@@ -21,16 +21,26 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -39,6 +49,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -142,6 +153,36 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /** Issue #11: create a new housing unit. `onResult(true)` on success. */
+    fun createHousing(
+        name: String,
+        housingType: String,
+        lifeStage: String,
+        qrCode: String,
+        notes: String?,
+        onResult: (Boolean) -> Unit,
+    ) {
+        viewModelScope.launch {
+            val ok = try {
+                val body = mapOf(
+                    "name" to name,
+                    "lineage_id" to null,
+                    "life_stage" to lifeStage,
+                    "qr_code" to qrCode,
+                    "notes" to notes,
+                    "camera_url" to null,
+                    "housing_type" to housingType,
+                )
+                api.createBrooder(body)
+                true
+            } catch (e: Exception) {
+                Log.e("QuailSync", "createHousing failed", e); false
+            }
+            if (ok) loadDataSuspend()
+            onResult(ok)
+        }
+    }
+
     private fun loadData() { viewModelScope.launch { loadDataSuspend() } }
 
     private suspend fun loadDataSuspend() {
@@ -240,6 +281,15 @@ fun DashboardScreen(
         }
     }
 
+    // Issue #11: housing-creation dialog state. Hosted at the screen root
+    // so the FAB and the existing scroll content can both reach it.
+    // Explicit MutableState — see precedent in BreedingScreen/TelemetryScreen.
+    // `by` delegate writes inside lambdas get flagged UNUSED_VALUE because the
+    // flow-analyser can't see Compose's recomposition reads; .value writes are
+    // operator-fun setter calls and don't trigger the warning.
+    val showAddHousing = remember { mutableStateOf(false) }
+
+    Box(modifier = Modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize()) {
         // Header
         Row(
@@ -374,7 +424,153 @@ fun DashboardScreen(
                 item { Spacer(Modifier.height(16.dp)) }
             }
         }
+    } // end Column
+
+        // FAB anchored above the parent Scaffold's Settings FAB so both
+        // stay reachable. Tapping opens the AddHousingDialog below.
+        FloatingActionButton(
+            onClick = { showAddHousing.value = true },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 88.dp),
+            containerColor = SageGreen,
+            contentColor = Color.White,
+        ) {
+            Icon(Icons.Default.Add, contentDescription = "Add Housing")
+        }
+    } // end Box
+
+    if (showAddHousing.value) {
+        AddHousingDialog(
+            onDismiss = { showAddHousing.value = false },
+            onConfirm = { name, type, stage, qr, notes ->
+                viewModel.createHousing(name, type, stage, qr, notes) { ok ->
+                    if (ok) showAddHousing.value = false
+                }
+            },
+            existingCount = brooders.size,
+        )
     }
+}
+
+// =====================================================================
+// Add Housing Dialog (issue #11)
+// =====================================================================
+
+/** Modal for creating a new housing unit. Type drives the default
+ *  life-stage (Incubator/Brooder → Chick, Hutch → Adult) and the auto-
+ *  filled QR code (`{type}-{nextN}`). User can override either before
+ *  submit. Name is the only required field. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AddHousingDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (name: String, housingType: String, lifeStage: String, qrCode: String, notes: String?) -> Unit,
+    existingCount: Int,
+) {
+    val nextN = existingCount + 1
+    var name by remember { mutableStateOf("") }
+    var housingType by remember { mutableStateOf("brooder") }
+    var lifeStage by remember { mutableStateOf("Chick") }
+    var qrCode by remember { mutableStateOf("brooder-$nextN") }
+    var notes by remember { mutableStateOf("") }
+    var typeMenuOpen by remember { mutableStateOf(false) }
+    var stageMenuOpen by remember { mutableStateOf(false) }
+
+    // Defaults per housing type — must match the dashboard's auto-fill rule.
+    fun defaultStageFor(t: String) = when (t) {
+        "hutch" -> "Adult"
+        else    -> "Chick" // Incubator + Brooder both default to Chick.
+    }
+    fun isAutoQr(value: String) = Regex("^(incubator|brooder|hutch)-\\d+\$").matches(value)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add Housing") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Name") },
+                    placeholder = { Text("e.g. Nurture Right 360") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                ExposedDropdownMenuBox(typeMenuOpen, { typeMenuOpen = it }) {
+                    OutlinedTextField(
+                        value = housingType.replaceFirstChar { it.uppercase() },
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Type") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(typeMenuOpen) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                    )
+                    ExposedDropdownMenu(typeMenuOpen, { typeMenuOpen = false }) {
+                        listOf("incubator", "brooder", "hutch").forEach { t ->
+                            DropdownMenuItem(
+                                text = { Text(t.replaceFirstChar { it.uppercase() }) },
+                                onClick = {
+                                    housingType = t
+                                    // Auto-update life stage to the type's default.
+                                    lifeStage = defaultStageFor(t)
+                                    // Only regenerate QR if the field still looks auto.
+                                    if (isAutoQr(qrCode)) qrCode = "$t-$nextN"
+                                    typeMenuOpen = false
+                                },
+                            )
+                        }
+                    }
+                }
+
+                ExposedDropdownMenuBox(stageMenuOpen, { stageMenuOpen = it }) {
+                    OutlinedTextField(
+                        value = lifeStage,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Life Stage") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(stageMenuOpen) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                    )
+                    ExposedDropdownMenu(stageMenuOpen, { stageMenuOpen = false }) {
+                        listOf("Chick", "Adolescent", "Adult").forEach { s ->
+                            DropdownMenuItem(
+                                text = { Text(s) },
+                                onClick = { lifeStage = s; stageMenuOpen = false },
+                            )
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = qrCode,
+                    onValueChange = { qrCode = it },
+                    label = { Text("QR Code") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                OutlinedTextField(
+                    value = notes,
+                    onValueChange = { notes = it },
+                    label = { Text("Notes (optional)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onConfirm(name.trim(), housingType, lifeStage, qrCode.trim(), notes.trim().ifBlank { null })
+                },
+                enabled = name.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
+            ) { Text("Create") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 // =====================================================================

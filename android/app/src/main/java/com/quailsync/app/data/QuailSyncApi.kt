@@ -424,6 +424,12 @@ interface QuailSyncApi {
     @GET("api/brooders")
     suspend fun getBrooders(): List<Brooder>
 
+    /** Create a new housing unit. Body keys: name, lineage_id, life_stage,
+     *  qr_code, notes, camera_url, housing_type. Server defaults housing_type
+     *  to "brooder" when omitted. */
+    @POST("api/brooders")
+    suspend fun createBrooder(@Body body: Map<String, @JvmSuppressWildcards Any?>): Brooder
+
     @GET("api/brooders/{id}/readings")
     suspend fun getBrooderReadings(@Path("id") id: Int): List<BrooderReading>
 

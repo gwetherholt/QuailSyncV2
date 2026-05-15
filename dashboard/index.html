@@ -1188,7 +1188,11 @@
         return card;
       }
 
-      var html = '';
+      // "Add Housing" CTA — anchored at the top-right of the panel body so
+      // it stays discoverable regardless of how many housing units exist.
+      var html = '<div style="display:flex;justify-content:flex-end;margin-bottom:.5rem">'
+        + '<button class="btn-primary" onclick="Page.Dashboard.openAddHousingModal()" style="font-size:.85rem;padding:6px 12px">+ Add Housing</button>'
+        + '</div>';
       SECTIONS.forEach(function(section){
         var entries = byType[section.type];
         if (!entries.length) return;
@@ -1225,6 +1229,99 @@
             hcEl.innerHTML='<span style="font-size:1rem">'+icon+'</span><span class="reading-value" style="font-weight:600;color:#7d8b6a">'+hc.count+'</span><span style="color:#7d8b6a"> '+label+'</span><span style="color:#999;margin-left:auto">'+agoStr+'</span>';
           }
         }catch(e){ console.log('[headcount] error for brooder '+bid+': '+e); hcEl.innerHTML=''; }
+      }
+    },
+
+    /* ---------- Add Housing modal ---------- */
+    // Suggested defaults per housing type — `lifeStage` auto-fills when the
+    // user picks a Type, and the QR code seeds to "{type}-{n}" where n is
+    // current housing count + 1 (best-effort, user can edit before submit).
+    _housingDefaults: {
+      incubator: { life_stage: 'Chick', qr_prefix: 'incubator' },
+      brooder:   { life_stage: 'Chick', qr_prefix: 'brooder' },
+      hutch:     { life_stage: 'Adult', qr_prefix: 'hutch' },
+    },
+
+    openAddHousingModal: async function(){
+      // Use current count as a "next id" hint for the QR auto-fill.
+      var existing = await API.get('/api/brooders');
+      var nextN = ((existing && existing.length) || 0) + 1;
+      var defaults = this._housingDefaults.brooder;
+      var html = '<div class="modal-overlay" id="housing-modal-overlay" onclick="if(event.target===this)Page.Dashboard.closeAddHousingModal()">'
+        + '<div class="modal"><h3>Add Housing</h3>'
+        + '<label>Name</label><input id="m-housing-name" type="text" placeholder="e.g. Nurture Right 360">'
+        + '<label>Type</label><select id="m-housing-type" onchange="Page.Dashboard._onHousingTypeChange()">'
+        +   '<option value="incubator">Incubator</option>'
+        +   '<option value="brooder" selected>Brooder</option>'
+        +   '<option value="hutch">Hutch</option>'
+        + '</select>'
+        + '<label>Life Stage</label><select id="m-housing-stage">'
+        +   '<option value="Chick">Chick</option>'
+        +   '<option value="Adolescent">Adolescent</option>'
+        +   '<option value="Adult">Adult</option>'
+        + '</select>'
+        + '<label>QR Code</label><input id="m-housing-qr" type="text" value="' + defaults.qr_prefix + '-' + nextN + '">'
+        + '<label>Notes</label><textarea id="m-housing-notes" placeholder="Optional notes"></textarea>'
+        + '<div class="modal-actions">'
+        +   '<button class="btn-cancel" onclick="Page.Dashboard.closeAddHousingModal()">Cancel</button>'
+        +   '<button class="btn-primary" onclick="Page.Dashboard.submitAddHousing()">Create</button>'
+        + '</div>'
+        + '</div></div>';
+      document.body.insertAdjacentHTML('beforeend', html);
+      // Stash nextN so the type-change handler can rebuild the QR default.
+      var modal = document.getElementById('housing-modal-overlay');
+      if (modal) modal.dataset.nextN = String(nextN);
+      // Set initial life-stage to match the default Brooder type.
+      document.getElementById('m-housing-stage').value = defaults.life_stage;
+    },
+
+    _onHousingTypeChange: function(){
+      var type = document.getElementById('m-housing-type').value;
+      var defaults = this._housingDefaults[type] || this._housingDefaults.brooder;
+      document.getElementById('m-housing-stage').value = defaults.life_stage;
+      // Refresh QR auto-fill only if the user hasn't edited it away from the
+      // previous prefix; otherwise leave their custom value alone.
+      var modal = document.getElementById('housing-modal-overlay');
+      var nextN = (modal && modal.dataset.nextN) || '1';
+      var qrEl = document.getElementById('m-housing-qr');
+      // Heuristic: if the field still looks like an auto-default ({prefix}-{n}),
+      // regenerate. If it looks edited, leave it alone.
+      var looksAuto = /^(incubator|brooder|hutch)-\d+$/.test(qrEl.value);
+      if (looksAuto) qrEl.value = defaults.qr_prefix + '-' + nextN;
+    },
+
+    closeAddHousingModal: function(){
+      var ov = document.getElementById('housing-modal-overlay');
+      if (ov) ov.remove();
+    },
+
+    submitAddHousing: async function(){
+      var name = document.getElementById('m-housing-name').value.trim();
+      var type = document.getElementById('m-housing-type').value;
+      var stage = document.getElementById('m-housing-stage').value;
+      var qr = document.getElementById('m-housing-qr').value.trim();
+      var notes = document.getElementById('m-housing-notes').value.trim() || null;
+      if (!name) { toast('Name is required', 'error'); return; }
+      var body = {
+        name: name,
+        lineage_id: null,
+        life_stage: stage,
+        qr_code: qr,
+        notes: notes,
+        camera_url: null,
+        housing_type: type,
+      };
+      try {
+        var resp = await API.post('/api/brooders', body);
+        if (resp && resp.id != null) {
+          toast('Housing created: ' + name);
+          this.closeAddHousingModal();
+          this._pollBrooder();
+        } else {
+          toast('Failed to create housing', 'error');
+        }
+      } catch (e) {
+        toast('Failed to create housing: ' + (e && e.message ? e.message : 'unknown'), 'error');
       }
     },
 
