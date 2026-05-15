@@ -986,6 +986,9 @@
       var self = this;
       setTimeout(function(){ self._pollHeadcount(); }, 3000);
       addInterval(function(){ self._pollHeadcount(); }, 30000);
+      // Issue #13: backfill hutch resident counts after cards render.
+      setTimeout(function(){ self._pollHutchResidents(); }, 3000);
+      addInterval(function(){ self._pollHutchResidents(); }, 30000);
       addInterval(this._pollStats, 60000);
       addInterval(this._pollFlock, 60000);
     },
@@ -1162,8 +1165,13 @@
         if(hasCam){ card+='<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--safe);margin-right:4px"></span><span style="color:var(--safe)">Cam</span>'; }
         card+='</div>';
         if (isHutch) {
-          // No temp/humidity sensors expected; show a simple residents row.
-          card+='<div style="font-size:.78rem;color:#888;padding:6px 8px;background:var(--beige);border-radius:6px;margin-bottom:.3rem">No environmental sensors</div>';
+          // No temp/humidity sensors expected; residents (housed birds) are
+          // the primary signal here. `data-residents-hc` is updated by the
+          // residents poll below.
+          card+='<div data-residents-hc="'+b.id+'" style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;font-size:.78rem;padding:6px 8px;background:var(--beige);border-radius:6px;margin-bottom:.3rem">'
+            + '<span><span class="reading-value" style="font-weight:600;color:#7d8b6a">--</span><span style="color:#999"> residents</span></span>'
+            + '<button class="btn-cancel" style="font-size:.72rem;padding:3px 8px" onclick="Page.Dashboard.openAssignBirdsModal('+b.id+')">+ Assign</button>'
+            + '</div>';
         } else {
           card+='<div style="display:flex;gap:.5rem;align-items:flex-start;margin-bottom:.2rem">';
           card+='<div style="flex:1"><div class="reading-row"><div><span class="reading-label">Temp</span><br><span class="reading-value" data-field="temp">'+tempStr+'</span></div><div style="text-align:right"><span class="reading-label">Hum</span><br><span class="reading-value" data-field="hum">'+humStr+'</span></div></div></div>';
@@ -1322,6 +1330,76 @@
         }
       } catch (e) {
         toast('Failed to create housing: ' + (e && e.message ? e.message : 'unknown'), 'error');
+      }
+    },
+
+    /* ---------- Issue #13: hutch residents (assign / unassign) ---------- */
+
+    // Called after _pollBrooder renders to backfill resident counts on
+    // every hutch card. Each card has `data-residents-hc="<id>"` we look up.
+    _pollHutchResidents: async function(){
+      var els = document.querySelectorAll('[data-residents-hc]');
+      if (!els.length) return;
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        var hid = el.getAttribute('data-residents-hc');
+        try {
+          var res = await API.get('/api/brooders/' + hid + '/residents');
+          var count = (res && res.individual_birds) ? res.individual_birds.length : 0;
+          var countEl = el.querySelector('.reading-value');
+          if (countEl) countEl.textContent = String(count);
+        } catch (e) { /* leave the placeholder */ }
+      }
+    },
+
+    openAssignBirdsModal: async function(housingId) {
+      // Fetch all birds and filter to active unhoused — server returns the
+      // full list cheaply, client-side filter is fine.
+      var birds = await API.get('/api/birds') || [];
+      var unhoused = birds.filter(function(b) {
+        return b.housing_id == null && (b.status || '').toLowerCase() === 'active';
+      });
+      var rows = unhoused.length === 0
+        ? '<p style="color:#888;font-size:.85rem">No unhoused active birds available.</p>'
+        : unhoused.map(function(b) {
+            var bandHtml = b.band_color ? '<span style="color:#888;font-size:.72rem"> · band: ' + escapeHtml(b.band_color) + '</span>' : '';
+            var sex = b.sex ? '<span style="color:#888;font-size:.72rem">' + escapeHtml(b.sex) + '</span>' : '';
+            return '<label style="display:flex;align-items:center;gap:.5rem;padding:4px 0">'
+              + '<input type="checkbox" class="m-assign-bird" value="' + b.id + '">'
+              + '<span>Bird #' + b.id + '</span>' + (sex ? ' ' + sex : '') + bandHtml
+              + '</label>';
+          }).join('');
+      var html = '<div class="modal-overlay" id="assign-modal-overlay" onclick="if(event.target===this)Page.Dashboard.closeAssignBirdsModal()">'
+        + '<div class="modal"><h3>Assign Birds</h3>'
+        + '<div style="max-height:50vh;overflow-y:auto;margin:.5rem 0">' + rows + '</div>'
+        + '<div class="modal-actions">'
+        +   '<button class="btn-cancel" onclick="Page.Dashboard.closeAssignBirdsModal()">Cancel</button>'
+        +   '<button class="btn-primary" onclick="Page.Dashboard.submitAssignBirds(' + housingId + ')">Assign</button>'
+        + '</div>'
+        + '</div></div>';
+      document.body.insertAdjacentHTML('beforeend', html);
+    },
+
+    closeAssignBirdsModal: function(){
+      var ov = document.getElementById('assign-modal-overlay');
+      if (ov) ov.remove();
+    },
+
+    submitAssignBirds: async function(housingId) {
+      var checks = document.querySelectorAll('.m-assign-bird:checked');
+      var ids = Array.prototype.map.call(checks, function(c) { return parseInt(c.value, 10); });
+      if (ids.length === 0) { toast('Select at least one bird', 'error'); return; }
+      try {
+        var resp = await API.post('/api/brooders/' + housingId + '/assign-birds', { bird_ids: ids });
+        if (resp && resp.updated != null) {
+          toast('Assigned ' + resp.updated + ' bird' + (resp.updated !== 1 ? 's' : ''));
+          this.closeAssignBirdsModal();
+          this._pollBrooder();
+        } else {
+          toast('Failed to assign birds', 'error');
+        }
+      } catch (e) {
+        toast('Failed to assign birds: ' + (e && e.message ? e.message : 'unknown'), 'error');
       }
     },
 

@@ -511,9 +511,13 @@ pub(crate) async fn brooder_residents(
         .collect();
     populate_chick_group_lineages(&conn, &mut groups);
 
+    // Issue #13: residents are individual adult birds permanently assigned
+    // via `birds.housing_id`. Chick-stage birds still come in through
+    // `chick_groups` above. The two are intentionally disjoint — a bird in
+    // a chick group has housing_id = NULL.
     let mut stmt = conn.prepare(
-        "SELECT id, band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path
-         FROM birds WHERE current_brooder_id = ?1 AND status = 'Active'"
+        "SELECT id, band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path, housing_id
+         FROM birds WHERE housing_id = ?1 AND status = 'Active'"
     ).expect("prepare failed");
     let mut birds: Vec<Bird> = stmt
         .query_map(params![brooder_id], row_to_bird)
@@ -527,4 +531,102 @@ pub(crate) async fn brooder_residents(
         chick_groups: groups,
         individual_birds: birds,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Issue #13 — assign / unassign individual birds to a housing unit
+// ---------------------------------------------------------------------------
+
+/// `POST /api/brooders/{id}/assign-birds` — body `{ "bird_ids": [...] }`.
+/// Validates the housing unit and all bird ids exist, then sets
+/// `birds.housing_id = {id}` for each. Atomic across the batch.
+pub(crate) async fn assign_birds(
+    State(state): State<AppState>,
+    Path(brooder_id): Path<i64>,
+    Json(body): Json<BirdAssignmentRequest>,
+) -> impl IntoResponse {
+    if body.bird_ids.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "bird_ids must contain at least one id",
+        )
+            .into_response();
+    }
+    let conn = acquire_db(&state);
+
+    // Housing unit must exist.
+    let housing_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM brooders WHERE id = ?1",
+            params![brooder_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if housing_exists == 0 {
+        return (StatusCode::NOT_FOUND, "housing unit not found").into_response();
+    }
+
+    // All bird ids must exist before any writes — fail loudly on a typo so
+    // we don't half-apply the batch.
+    for bird_id in &body.bird_ids {
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM birds WHERE id = ?1",
+                params![bird_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if exists == 0 {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("bird #{bird_id} does not exist"),
+            )
+                .into_response();
+        }
+    }
+
+    let mut updated: i64 = 0;
+    for bird_id in &body.bird_ids {
+        match conn.execute(
+            "UPDATE birds SET housing_id = ?1 WHERE id = ?2",
+            params![brooder_id, bird_id],
+        ) {
+            Ok(n) => updated += n as i64,
+            Err(e) => return db_error(e),
+        }
+    }
+    (StatusCode::OK, Json(BirdAssignmentResponse { updated })).into_response()
+}
+
+/// `POST /api/brooders/{id}/unassign-birds` — clears `housing_id` for every
+/// bird id in the body. Tolerant: ids that don't exist or that weren't
+/// housed in this unit are simply no-ops (the row count returned reflects
+/// only rows actually modified).
+pub(crate) async fn unassign_birds(
+    State(state): State<AppState>,
+    Path(brooder_id): Path<i64>,
+    Json(body): Json<BirdAssignmentRequest>,
+) -> impl IntoResponse {
+    if body.bird_ids.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "bird_ids must contain at least one id",
+        )
+            .into_response();
+    }
+    let conn = acquire_db(&state);
+
+    let mut updated: i64 = 0;
+    for bird_id in &body.bird_ids {
+        // Only clear when the bird is actually in this housing unit; avoids
+        // accidentally unhousing a bird that was assigned elsewhere.
+        match conn.execute(
+            "UPDATE birds SET housing_id = NULL WHERE id = ?1 AND housing_id = ?2",
+            params![bird_id, brooder_id],
+        ) {
+            Ok(n) => updated += n as i64,
+            Err(e) => return db_error(e),
+        }
+    }
+    (StatusCode::OK, Json(BirdAssignmentResponse { updated })).into_response()
 }

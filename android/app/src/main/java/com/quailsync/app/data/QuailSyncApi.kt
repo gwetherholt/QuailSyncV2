@@ -77,6 +77,8 @@ data class Bird(
     @SerializedName("sire_id") val sireId: Int? = null,
     @SerializedName("dam_id") val damId: Int? = null,
     @SerializedName("latest_weight") val latestWeight: Double? = null,
+    /** Issue #13: permanent housing assignment for adult birds. `null` = unhoused. */
+    @SerializedName("housing_id") val housingId: Int? = null,
     /** Many-to-many lineages, populated by the server from the junction table. */
     @SerializedName("lineages") val lineages: List<Lineage> = emptyList(),
 ) {
@@ -207,6 +209,15 @@ data class CreateChickGroupRequest(
 
 data class ReplaceLineagesRequest(
     @SerializedName("lineage_ids") val lineageIds: List<Int>,
+)
+
+/** Body for POST /api/brooders/{id}/assign-birds and /unassign-birds (issue #13). */
+data class BirdAssignmentRequest(
+    @SerializedName("bird_ids") val birdIds: List<Int>,
+)
+
+data class BirdAssignmentResponse(
+    @SerializedName("updated") val updated: Long,
 )
 
 data class Camera(
@@ -429,6 +440,22 @@ interface QuailSyncApi {
      *  to "brooder" when omitted. */
     @POST("api/brooders")
     suspend fun createBrooder(@Body body: Map<String, @JvmSuppressWildcards Any?>): Brooder
+
+    /** Issue #13: assign a batch of birds to a housing unit. Body:
+     *  `{"bird_ids":[…]}`. Server validates all ids before any writes. */
+    @POST("api/brooders/{id}/assign-birds")
+    suspend fun assignBirdsToHousing(
+        @Path("id") housingId: Int,
+        @Body body: BirdAssignmentRequest,
+    ): BirdAssignmentResponse
+
+    /** Issue #13: clear housing assignment for a batch of birds currently
+     *  housed in `id`. Tolerant — unhoused birds and birds elsewhere are no-ops. */
+    @POST("api/brooders/{id}/unassign-birds")
+    suspend fun unassignBirdsFromHousing(
+        @Path("id") housingId: Int,
+        @Body body: BirdAssignmentRequest,
+    ): BirdAssignmentResponse
 
     @GET("api/brooders/{id}/readings")
     suspend fun getBrooderReadings(@Path("id") id: Int): List<BrooderReading>

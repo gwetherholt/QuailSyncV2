@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -20,6 +21,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -30,15 +33,19 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -81,6 +88,13 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
     var headcount by remember { mutableStateOf<com.quailsync.app.data.HeadcountResponse?>(null) }
     var allGroups by remember { mutableStateOf<List<ChickGroupDto>>(emptyList()) }
     var residentBirds by remember { mutableStateOf<List<Bird>>(emptyList()) }
+    // Issue #13: full bird list (for the "Assign Birds" picker — filtered to
+    // unhoused active birds when the dialog opens). Fetched on each load.
+    var allBirds by remember { mutableStateOf<List<Bird>>(emptyList()) }
+    // Picker dialog visibility. Explicit MutableState because the lambda-write
+    // `showAssignDialog = false` inside dialog callbacks would trip Kotlin's
+    // UNUSED_VALUE flow analyser otherwise — same precedent as elsewhere.
+    val showAssignDialog = remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var refreshKey by remember { mutableStateOf(0) }
@@ -143,6 +157,9 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
             } catch (e: Exception) {
                 Log.e("QuailSync", "residents failed (treating as empty)", e)
                 emptyList()
+            }
+            allBirds = try { api.getBirds() } catch (e: Exception) {
+                Log.e("QuailSync", "getBirds for picker failed", e); emptyList()
             }
             Log.d("QuailSync", "BrooderManage: loaded. allGroups=${allGroups.size}, birds=${residentBirds.size}")
         } catch (e: Exception) {
@@ -422,7 +439,15 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
             elevation = CardDefaults.cardElevation(2.dp),
         ) {
             Column(Modifier.padding(16.dp)) {
-                Text("Residents", style = MaterialTheme.typography.titleMedium)
+                Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                    Text("Residents", style = MaterialTheme.typography.titleMedium)
+                    // Issue #13 — assign unhoused adult birds to this unit.
+                    TextButton(onClick = { showAssignDialog.value = true }) {
+                        Icon(Icons.Default.Add, null, Modifier.size(16.dp), tint = SageGreen)
+                        Spacer(Modifier.width(4.dp))
+                        Text("Assign Birds", color = SageGreen)
+                    }
+                }
                 Spacer(Modifier.height(8.dp))
 
                 // Show the current chick group from our derived state
@@ -460,6 +485,23 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
                             Text("${b.sex?.replaceFirstChar { it.uppercase() } ?: "Unknown"} · ${b.status?.replaceFirstChar { it.uppercase() } ?: ""}",
                                 style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
+                        // Issue #13 — remove this bird from the housing unit.
+                        IconButton(onClick = {
+                            scope.launch {
+                                try {
+                                    api.unassignBirdsFromHousing(
+                                        brooderId,
+                                        com.quailsync.app.data.BirdAssignmentRequest(listOf(b.id)),
+                                    )
+                                    refreshKey++
+                                } catch (e: Exception) {
+                                    Log.e("QuailSync", "unassign bird ${b.id} failed", e)
+                                }
+                            }
+                        }) {
+                            Icon(Icons.Default.Close, contentDescription = "Remove from housing",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
             }
@@ -473,6 +515,97 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
                 Text(error!!, Modifier.padding(12.dp), color = AlertRed, style = MaterialTheme.typography.bodyMedium)
             }
         }
+    }
+
+    // Issue #13 — picker dialog. Shown when the Residents card's "Assign
+    // Birds" button is tapped. Lists unhoused active birds with checkboxes;
+    // confirming POSTs to /api/brooders/{id}/assign-birds and refreshes.
+    if (showAssignDialog.value) {
+        val unhoused = allBirds.filter {
+            it.housingId == null && it.status?.lowercase() == "active"
+        }
+        val selected = remember { mutableStateListOf<Int>() }
+        AlertDialog(
+            onDismissRequest = {
+                showAssignDialog.value = false
+                selected.clear()
+            },
+            title = { Text("Assign Birds") },
+            text = {
+                if (unhoused.isEmpty()) {
+                    Text(
+                        "No unhoused birds available.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                        unhoused.forEach { b ->
+                            val checked = selected.contains(b.id)
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Checkbox(
+                                    checked = checked,
+                                    onCheckedChange = {
+                                        if (it) selected.add(b.id) else selected.remove(b.id)
+                                    },
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        b.bandId ?: "Bird #${b.id}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                    val sub = listOfNotNull(
+                                        b.sex?.replaceFirstChar { it.uppercase() },
+                                        b.bandColor?.let { "band: $it" },
+                                    ).joinToString(" · ")
+                                    if (sub.isNotEmpty()) {
+                                        Text(
+                                            sub,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val toAssign = selected.toList()
+                        scope.launch {
+                            try {
+                                api.assignBirdsToHousing(
+                                    brooderId,
+                                    com.quailsync.app.data.BirdAssignmentRequest(toAssign),
+                                )
+                                showAssignDialog.value = false
+                                selected.clear()
+                                refreshKey++
+                            } catch (e: Exception) {
+                                Log.e("QuailSync", "assign birds failed", e)
+                            }
+                        }
+                    },
+                    enabled = selected.isNotEmpty(),
+                    colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
+                ) { Text("Assign (${selected.size})") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showAssignDialog.value = false
+                    selected.clear()
+                }) { Text("Cancel") }
+            },
+        )
     }
 
 }

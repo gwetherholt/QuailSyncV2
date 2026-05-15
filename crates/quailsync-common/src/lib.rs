@@ -200,6 +200,13 @@ pub struct Bird {
     pub current_brooder_id: Option<i64>,
     #[serde(default)]
     pub photo_path: Option<String>,
+    /// Permanent housing assignment for adult birds (issue #13). Distinct
+    /// from `current_brooder_id`, which tracks the bird's *current* physical
+    /// location during the chick/adolescent stages. `None` for unhoused
+    /// birds — chick-stage birds remain unhoused; their location is derived
+    /// from the chick group's `brooder_id`.
+    #[serde(default)]
+    pub housing_id: Option<i64>,
     /// Many-to-many lineage tags. Populated from the `bird_lineages`
     /// junction table; empty Vec is allowed (legacy migration only).
     #[serde(default)]
@@ -295,6 +302,24 @@ pub struct UpdateBird {
     pub sex: Option<Sex>,
     #[serde(default)]
     pub hatch_date: Option<NaiveDate>,
+    /// Issue #13: set a permanent housing assignment for an adult bird. `None`
+    /// here means "leave unchanged" (NOT "clear"); use the dedicated
+    /// `POST /api/brooders/{id}/unassign-birds` endpoint to clear a housing
+    /// assignment. This avoids the JSON serde double-Option mess for a single
+    /// rarely-used semantic.
+    #[serde(default)]
+    pub housing_id: Option<i64>,
+}
+
+/// Body for `POST /api/brooders/{id}/assign-birds` and `/unassign-birds`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BirdAssignmentRequest {
+    pub bird_ids: Vec<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BirdAssignmentResponse {
+    pub updated: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

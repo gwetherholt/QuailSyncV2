@@ -255,6 +255,16 @@ pub fn init_db(conn: &Connection) {
     .ok();
     conn.execute("ALTER TABLE birds ADD COLUMN photo_path TEXT", [])
         .ok();
+    // Issue #13: permanent housing assignment for adult birds. Distinct from
+    // current_brooder_id (live location). Nullable — unhoused birds have NULL.
+    if !column_exists(conn, "birds", "housing_id") {
+        conn.execute(
+            "ALTER TABLE birds ADD COLUMN housing_id INTEGER REFERENCES brooders(id)",
+            [],
+        )
+        .expect("ALTER TABLE birds ADD COLUMN housing_id failed");
+        println!("[migration] added birds.housing_id");
+    }
 
     // System alerts (backup/maintenance scripts -> dashboard bell icon)
     conn.execute_batch(
@@ -397,6 +407,7 @@ pub fn init_db(conn: &Connection) {
          CREATE INDEX IF NOT EXISTS idx_birds_status ON birds(status);
          CREATE INDEX IF NOT EXISTS idx_birds_nfc ON birds(nfc_tag_id);
          CREATE INDEX IF NOT EXISTS idx_birds_brooder ON birds(current_brooder_id);
+         CREATE INDEX IF NOT EXISTS idx_birds_housing ON birds(housing_id);
          CREATE INDEX IF NOT EXISTS idx_weights_bird_date ON weight_records(bird_id, date);
          CREATE INDEX IF NOT EXISTS idx_processing_status ON processing_records(status);
          CREATE INDEX IF NOT EXISTS idx_chick_groups_brooder ON chick_groups(brooder_id, status);

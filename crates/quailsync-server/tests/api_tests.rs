@@ -1413,3 +1413,179 @@ mod lineage_tests {
         assert!(!cols2.contains(&"bloodline_id".to_string()));
     }
 }
+
+// ---------------------------------------------------------------------------
+// Issue #13 — hutch resident assignment (assign-birds / unassign-birds /
+// residents-by-housing_id)
+// ---------------------------------------------------------------------------
+
+mod housing_assignment_tests {
+    use super::*;
+    use quailsync_common::{BirdAssignmentRequest, BirdAssignmentResponse, BrooderResidentsResponse, CreateBrooder, LifeStage};
+    use serde_json::json;
+
+    /// Helper: seed a lineage + a hutch + two unhoused birds.
+    async fn seed_hutch_and_birds(base: &str, client: &reqwest::Client) -> (i64, Vec<i64>) {
+        // Lineage so birds have something to reference.
+        let bl: Lineage = client.post(format!("{base}/api/lineages"))
+            .json(&CreateLineage { name: "L".into(), source: "S".into(), notes: None })
+            .send().await.unwrap().json().await.unwrap();
+
+        // Hutch.
+        let hutch: serde_json::Value = client.post(format!("{base}/api/brooders"))
+            .json(&CreateBrooder {
+                name: "Outdoor Hutch".into(),
+                lineage_id: None,
+                life_stage: LifeStage::Adult,
+                qr_code: "hutch-1".into(),
+                notes: None,
+                camera_url: None,
+                housing_type: Some(quailsync_common::HousingType::Hutch),
+            })
+            .send().await.unwrap().json().await.unwrap();
+        let hutch_id = hutch["id"].as_i64().unwrap();
+
+        // Two birds. Use the typed CreateBird struct to avoid leaning on the
+        // dashboard's loose JSON shape.
+        let mut bird_ids = Vec::new();
+        for _ in 0..2 {
+            let resp = client.post(format!("{base}/api/birds"))
+                .json(&CreateBird {
+                    band_color: None,
+                    sex: Sex::Unknown,
+                    lineage_ids: vec![bl.id],
+                    hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                    mother_id: None,
+                    father_id: None,
+                    generation: 1,
+                    status: BirdStatus::Active,
+                    notes: None,
+                    nfc_tag_id: None,
+                })
+                .send().await.unwrap();
+            let b: Bird = resp.json().await.unwrap();
+            bird_ids.push(b.id);
+        }
+        (hutch_id, bird_ids)
+    }
+
+    #[tokio::test]
+    async fn assign_then_residents_returns_housed_birds() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (hutch_id, bird_ids) = seed_hutch_and_birds(&base, &client).await;
+
+        // Residents start empty.
+        let pre: BrooderResidentsResponse =
+            reqwest::get(format!("{base}/api/brooders/{hutch_id}/residents"))
+                .await.unwrap().json().await.unwrap();
+        assert!(pre.individual_birds.is_empty(), "no residents before assignment");
+
+        // Assign both birds.
+        let resp = client.post(format!("{base}/api/brooders/{hutch_id}/assign-birds"))
+            .json(&BirdAssignmentRequest { bird_ids: bird_ids.clone() })
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: BirdAssignmentResponse = resp.json().await.unwrap();
+        assert_eq!(body.updated, 2);
+
+        // Residents now lists both.
+        let post: BrooderResidentsResponse =
+            reqwest::get(format!("{base}/api/brooders/{hutch_id}/residents"))
+                .await.unwrap().json().await.unwrap();
+        assert_eq!(post.individual_birds.len(), 2);
+        let returned_ids: std::collections::HashSet<i64> =
+            post.individual_birds.iter().map(|b| b.id).collect();
+        assert_eq!(returned_ids, bird_ids.iter().copied().collect());
+        // Each bird's housing_id is reflected in the DTO.
+        for bird in &post.individual_birds {
+            assert_eq!(bird.housing_id, Some(hutch_id));
+        }
+    }
+
+    #[tokio::test]
+    async fn unassign_clears_housing_and_drops_from_residents() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (hutch_id, bird_ids) = seed_hutch_and_birds(&base, &client).await;
+
+        client.post(format!("{base}/api/brooders/{hutch_id}/assign-birds"))
+            .json(&BirdAssignmentRequest { bird_ids: bird_ids.clone() })
+            .send().await.unwrap();
+
+        let resp = client.post(format!("{base}/api/brooders/{hutch_id}/unassign-birds"))
+            .json(&BirdAssignmentRequest { bird_ids: vec![bird_ids[0]] })
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: BirdAssignmentResponse = resp.json().await.unwrap();
+        assert_eq!(body.updated, 1);
+
+        let residents: BrooderResidentsResponse =
+            reqwest::get(format!("{base}/api/brooders/{hutch_id}/residents"))
+                .await.unwrap().json().await.unwrap();
+        assert_eq!(residents.individual_birds.len(), 1);
+        assert_eq!(residents.individual_birds[0].id, bird_ids[1]);
+    }
+
+    #[tokio::test]
+    async fn assign_to_nonexistent_housing_returns_404() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (_h, bird_ids) = seed_hutch_and_birds(&base, &client).await;
+        let resp = client.post(format!("{base}/api/brooders/9999/assign-birds"))
+            .json(&BirdAssignmentRequest { bird_ids: bird_ids.clone() })
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[tokio::test]
+    async fn assign_with_nonexistent_bird_returns_400_and_no_partial_write() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (hutch_id, bird_ids) = seed_hutch_and_birds(&base, &client).await;
+        // Mix a valid id with an invalid one.
+        let resp = client.post(format!("{base}/api/brooders/{hutch_id}/assign-birds"))
+            .json(&BirdAssignmentRequest { bird_ids: vec![bird_ids[0], 99999] })
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 400);
+
+        // Confirm the valid bird was NOT assigned — validation must fail
+        // before any writes happen.
+        let residents: BrooderResidentsResponse =
+            reqwest::get(format!("{base}/api/brooders/{hutch_id}/residents"))
+                .await.unwrap().json().await.unwrap();
+        assert!(residents.individual_birds.is_empty(), "no partial assignment");
+    }
+
+    #[tokio::test]
+    async fn empty_bird_ids_returns_400() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (hutch_id, _) = seed_hutch_and_birds(&base, &client).await;
+        let resp = client.post(format!("{base}/api/brooders/{hutch_id}/assign-birds"))
+            .json(&json!({ "bird_ids": [] }))
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn update_bird_can_set_housing_id() {
+        // Verifies the PUT /api/birds/{id} path's housing_id field works
+        // independently of the dedicated assign-birds endpoint.
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (hutch_id, bird_ids) = seed_hutch_and_birds(&base, &client).await;
+        let bird_id = bird_ids[0];
+
+        let resp = client.put(format!("{base}/api/birds/{bird_id}"))
+            .json(&json!({ "housing_id": hutch_id }))
+            .send().await.unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let residents: BrooderResidentsResponse =
+            reqwest::get(format!("{base}/api/brooders/{hutch_id}/residents"))
+                .await.unwrap().json().await.unwrap();
+        assert_eq!(residents.individual_birds.len(), 1);
+        assert_eq!(residents.individual_birds[0].id, bird_id);
+    }
+}

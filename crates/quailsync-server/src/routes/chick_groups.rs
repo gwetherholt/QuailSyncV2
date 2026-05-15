@@ -350,6 +350,7 @@ pub(crate) async fn graduate_chick_group(
             nfc_tag_id: gb.nfc_tag_id.clone(),
             current_brooder_id: group.brooder_id,
             photo_path: gb.photo_path.clone(),
+            housing_id: None,
             lineages,
         });
     }

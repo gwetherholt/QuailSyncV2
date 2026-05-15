@@ -152,8 +152,8 @@ pub fn str_to_chick_group_status(s: &str) -> ChickGroupStatus {
 
 /// Maps a `birds` row produced by `BIRD_SELECT` (id, band_color, sex,
 /// hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id,
-/// current_brooder_id, photo_path). The `lineages` field is left empty —
-/// callers populate it via `fetch_bird_lineages`.
+/// current_brooder_id, photo_path, housing_id). The `lineages` field is left
+/// empty — callers populate it via `fetch_bird_lineages`.
 pub fn row_to_bird(row: &rusqlite::Row) -> rusqlite::Result<Bird> {
     let sex_str: String = row.get(2)?;
     let hatch_str: String = row.get(3)?;
@@ -171,6 +171,7 @@ pub fn row_to_bird(row: &rusqlite::Row) -> rusqlite::Result<Bird> {
         nfc_tag_id: row.get(9)?,
         current_brooder_id: row.get(10)?,
         photo_path: row.get(11)?,
+        housing_id: row.get(12)?,
         lineages: Vec::new(),
     })
 }

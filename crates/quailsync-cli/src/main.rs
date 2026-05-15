@@ -1323,6 +1323,7 @@ async fn cmd_processing_complete(
             band_color: None,
             sex: None,
             hatch_date: None,
+            housing_id: None,
         })
         .send()
         .await;

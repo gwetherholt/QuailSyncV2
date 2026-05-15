@@ -52,13 +52,14 @@ pub(crate) async fn create_bird(
             nfc_tag_id: body.nfc_tag_id,
             current_brooder_id: None,
             photo_path: None,
+            housing_id: None,
             lineages,
         }),
     )
         .into_response()
 }
 
-const BIRD_SELECT: &str = "SELECT id, band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path FROM birds";
+const BIRD_SELECT: &str = "SELECT id, band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path, housing_id FROM birds";
 
 pub(crate) async fn list_birds(State(state): State<AppState>) -> Json<Vec<Bird>> {
     let conn = acquire_db(&state);
@@ -138,6 +139,17 @@ pub(crate) async fn update_bird(
         if let Err(e) = conn.execute(
             "UPDATE birds SET hatch_date = ?1 WHERE id = ?2",
             params![hd.to_string(), id],
+        ) {
+            return db_error(e);
+        }
+    }
+    if let Some(hid) = body.housing_id {
+        // Issue #13: set housing assignment. Clearing goes through
+        // POST /api/brooders/{id}/unassign-birds — keep this one as a pure
+        // "set" so we don't need the Option<Option<i64>> serde dance.
+        if let Err(e) = conn.execute(
+            "UPDATE birds SET housing_id = ?1 WHERE id = ?2",
+            params![hid, id],
         ) {
             return db_error(e);
         }
