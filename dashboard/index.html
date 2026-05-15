@@ -1167,10 +1167,12 @@
         if (isHutch) {
           // No temp/humidity sensors expected; residents (housed birds) are
           // the primary signal here. `data-residents-hc` is updated by the
-          // residents poll below.
-          card+='<div data-residents-hc="'+b.id+'" style="display:flex;align-items:center;justify-content:space-between;gap:.4rem;font-size:.78rem;padding:6px 8px;background:var(--beige);border-radius:6px;margin-bottom:.3rem">'
+          // residents poll below. Clicking the count area opens the detail
+          // modal (issue #13) — the inner "+ Assign" button stops propagation
+          // so it still launches the picker directly.
+          card+='<div data-residents-hc="'+b.id+'" onclick="Page.Dashboard.openHutchDetailModal('+b.id+')" title="View residents" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:.4rem;font-size:.78rem;padding:6px 8px;background:var(--beige);border-radius:6px;margin-bottom:.3rem">'
             + '<span><span class="reading-value" style="font-weight:600;color:#7d8b6a">--</span><span style="color:#999"> residents</span></span>'
-            + '<button class="btn-cancel" style="font-size:.72rem;padding:3px 8px" onclick="Page.Dashboard.openAssignBirdsModal('+b.id+')">+ Assign</button>'
+            + '<button class="btn-cancel" style="font-size:.72rem;padding:3px 8px" onclick="event.stopPropagation();Page.Dashboard.openAssignBirdsModal('+b.id+')">+ Assign</button>'
             + '</div>';
         } else {
           card+='<div style="display:flex;gap:.5rem;align-items:flex-start;margin-bottom:.2rem">';
@@ -1395,11 +1397,102 @@
           toast('Assigned ' + resp.updated + ' bird' + (resp.updated !== 1 ? 's' : ''));
           this.closeAssignBirdsModal();
           this._pollBrooder();
+          // If the hutch detail modal is open behind this picker, refresh it
+          // so the just-assigned birds appear without forcing a close/reopen.
+          var detail = document.getElementById('hutch-detail-overlay');
+          if (detail) this._renderHutchDetailContents(housingId);
         } else {
           toast('Failed to assign birds', 'error');
         }
       } catch (e) {
         toast('Failed to assign birds: ' + (e && e.message ? e.message : 'unknown'), 'error');
+      }
+    },
+
+    /* ---------- Issue #13: hutch detail modal (residents + unassign) ---------- */
+
+    // Opens a modal showing the hutch's current residents with band-color
+    // swatch + lineages + a per-bird Unassign action. The contents render
+    // inside `#hutch-detail-body` so unassign / assign refreshes can rebuild
+    // just the list without re-mounting the modal frame.
+    openHutchDetailModal: async function(housingId) {
+      var existing = document.getElementById('hutch-detail-overlay');
+      if (existing) existing.remove();
+      // Modal skeleton — body is filled by _renderHutchDetailContents so we
+      // can re-render after an assign/unassign without flicker.
+      var skeleton = '<div class="modal-overlay" id="hutch-detail-overlay" onclick="if(event.target===this)Page.Dashboard.closeHutchDetailModal()">'
+        + '<div class="modal" style="min-width:360px;max-width:480px">'
+        +   '<h3 id="hutch-detail-title">Hutch Residents</h3>'
+        +   '<div id="hutch-detail-body">'+loadingHTML()+'</div>'
+        +   '<div class="modal-actions">'
+        +     '<button class="btn-cancel" onclick="Page.Dashboard.closeHutchDetailModal()">Close</button>'
+        +     '<button class="btn-primary" onclick="Page.Dashboard.openAssignBirdsModal('+housingId+')">+ Assign Birds</button>'
+        +   '</div>'
+        + '</div></div>';
+      document.body.insertAdjacentHTML('beforeend', skeleton);
+      await this._renderHutchDetailContents(housingId);
+    },
+
+    _renderHutchDetailContents: async function(housingId) {
+      var bodyEl = document.getElementById('hutch-detail-body');
+      var titleEl = document.getElementById('hutch-detail-title');
+      if (!bodyEl) return;
+      try {
+        // The residents endpoint returns birds with their lineages already
+        // populated. There's no single-id GET on /api/brooders/{id}, so we
+        // pull the list once to label the modal.
+        var results = await Promise.all([
+          API.get('/api/brooders'),
+          API.get('/api/brooders/' + housingId + '/residents'),
+        ]);
+        var all = results[0] || [];
+        var hutch = null;
+        for (var i = 0; i < all.length; i++) {
+          if (all[i].id === housingId) { hutch = all[i]; break; }
+        }
+        if (hutch && titleEl) titleEl.textContent = hutch.name + ' — Residents';
+
+        var residents = (results[1] && results[1].individual_birds) || [];
+        if (residents.length === 0) {
+          bodyEl.innerHTML = '<p style="color:#888;font-size:.85rem;margin:.5rem 0">No birds assigned to this hutch yet.</p>';
+          return;
+        }
+        var rowsHtml = residents.map(function(b) {
+          var dot = bandDot(b.band_color || '#ccc', 16);
+          var sex = b.sex ? escapeHtml(b.sex) : '—';
+          var lineages = formatLineages(b.lineages) || '<span style="color:#bbb">(no lineage)</span>';
+          return '<div style="display:flex;align-items:center;gap:.5rem;padding:.4rem .2rem;border-bottom:1px solid var(--beige)">'
+            +   '<span style="flex-shrink:0">' + dot + '</span>'
+            +   '<div style="flex:1;min-width:0">'
+            +     '<div style="font-size:.82rem">' + birdLink(b.id) + ' <span style="color:#888;font-size:.72rem">· ' + sex + '</span></div>'
+            +     '<div style="font-size:.7rem;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + lineages + '</div>'
+            +   '</div>'
+            +   '<button class="btn-cancel" style="font-size:.7rem;padding:3px 8px" onclick="Page.Dashboard.unassignBirdFromHutch(' + housingId + ',' + b.id + ')">Unassign</button>'
+            + '</div>';
+        }).join('');
+        bodyEl.innerHTML = '<div style="max-height:50vh;overflow-y:auto">' + rowsHtml + '</div>';
+      } catch (e) {
+        bodyEl.innerHTML = '<p style="color:var(--danger);font-size:.85rem">Failed to load residents: ' + escapeHtml(e && e.message ? e.message : 'unknown') + '</p>';
+      }
+    },
+
+    closeHutchDetailModal: function() {
+      var ov = document.getElementById('hutch-detail-overlay');
+      if (ov) ov.remove();
+    },
+
+    unassignBirdFromHutch: async function(housingId, birdId) {
+      try {
+        var resp = await API.post('/api/brooders/' + housingId + '/unassign-birds', { bird_ids: [birdId] });
+        if (resp && resp.updated != null && resp.updated > 0) {
+          toast('Bird unassigned');
+          await this._renderHutchDetailContents(housingId);
+          this._pollBrooder();
+        } else {
+          toast('Failed to unassign bird', 'error');
+        }
+      } catch (e) {
+        toast('Failed to unassign bird: ' + (e && e.message ? e.message : 'unknown'), 'error');
       }
     },
 

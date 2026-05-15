@@ -680,6 +680,7 @@ fun NfcScreen(nfcService: NfcService, viewModel: NfcViewModel) {
         TagConflictDialog(pendingConflict!!, conflictBird!!, { viewModel.confirmOverwrite() }, { viewModel.cancelOverwrite() })
     }
 
+
     orphanTag?.let { orphan ->
         OrphanTagDialog(
             orphan = orphan,
