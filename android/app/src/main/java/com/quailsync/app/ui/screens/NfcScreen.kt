@@ -67,6 +67,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -429,6 +430,12 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
      *  flipped to 'Graduated' once the batch completes — closes the loop
      *  on Hatchery cards (Bug A). */
     fun startBatchTagging(count: Int, lineageId: Int, chickGroupId: Int? = null) {
+        // Arm write mode FIRST, then transition state. Compose recomposition
+        // triggers off the state change, so doing it in the opposite order
+        // leaves a microsecond window where the screen is visible but write
+        // mode is still off. The screen also re-arms via LaunchedEffect as a
+        // belt-and-suspenders defense against any state-change paths we miss.
+        nfcService.enterWriteMode("QS-L$lineageId")
         _batchState.value = BatchState.AwaitingTagScan(
             currentIndex = 0,
             totalCount = count,
@@ -436,12 +443,26 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
             graduated = emptyList(),
             chickGroupId = chickGroupId,
         )
-        // Enter write mode immediately so the next tap writes a marker
-        // payload AND surfaces the tag's uniqueId via onBatchTagScanned.
-        // Payload is non-BIRD-prefixed so lookupBirdByNfc later falls
-        // through to the tag-uniqueId path, which is what actually
-        // identifies the bird (recorded as `nfc_tag_id` on POST).
-        nfcService.enterWriteMode("QS-L$lineageId")
+    }
+
+    /** Re-arm NFC write mode for the active AwaitingTagScan bird. Called
+     *  from BatchAwaitingScanScreen's LaunchedEffect so every bird in the
+     *  batch — not just bird 1 — gets write mode engaged when its scan
+     *  prompt is shown. Idempotent: enterWriteMode resets pending data and
+     *  clears stale writeResult/pendingConflict, so calling it on a tick
+     *  where write mode is already correct is harmless. */
+    fun armNfcForBatchScan() {
+        val state = _batchState.value as? BatchState.AwaitingTagScan ?: return
+        // Diagnostic: surface any case where write mode was unexpectedly
+        // off when we entered the scan screen. If this log fires, something
+        // between PostTagConfirm and here is cancelling write mode.
+        if (!nfcService.writeMode.value || nfcService.pendingWriteData.value == null) {
+            Log.w(
+                "QuailSync",
+                "Batch: write mode was off on entry to AwaitingTagScan (bird ${state.currentIndex + 1}/${state.totalCount}); re-arming.",
+            )
+        }
+        nfcService.enterWriteMode("QS-L${state.lineageId}")
     }
 
     /** Called by MainActivity when a tag is written successfully while we
@@ -714,8 +735,13 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
             }
         } else {
             // NFC-first refactor: each new bird starts at the tag-scan
-            // prompt rather than the per-bird form. Re-arm write mode so
-            // the next tap is captured.
+            // prompt rather than the per-bird form. Re-arm write mode
+            // BEFORE the state change so the screen is never visible with
+            // write mode off (root cause of bird-2+ "Failed to write to
+            // tag" bug — Compose recomposes off the state flow, so doing
+            // it in the other order opened a race). BatchAwaitingScanScreen
+            // also re-arms via LaunchedEffect as a second safety net.
+            nfcService.enterWriteMode("QS-L${state.lineageId}")
             _batchState.value = BatchState.AwaitingTagScan(
                 currentIndex = state.currentIndex,
                 totalCount = state.totalCount,
@@ -725,7 +751,6 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
                 lastFemaleBandColor = state.lastFemaleBandColor,
                 chickGroupId = state.chickGroupId,
             )
-            nfcService.enterWriteMode("QS-L${state.lineageId}")
         }
     }
 
@@ -1155,6 +1180,19 @@ fun BatchAwaitingScanScreen(state: BatchState.AwaitingTagScan, viewModel: NfcVie
     // Surface write-result errors (failed write to a damaged or non-NDEF tag)
     // so the user knows why nothing advanced — and can choose Skip.
     val writeResult by viewModel.nfcService.writeResult.collectAsState()
+
+    // Re-arm NFC write mode every time this screen becomes active for a new
+    // bird. Without this, the bird-2+ symptom is "Failed to write to tag" —
+    // after bird 1 the NfcService internally clears _writeMode on a
+    // successful write, and any intermediate state change (e.g. an
+    // unexpected recomposition or a stale write_result observer) that
+    // races the synchronous re-arm in advanceFromConfirm leaves the screen
+    // visible with write mode off. Keying the effect on currentIndex makes
+    // it fire once per bird and stay idempotent within the same bird.
+    LaunchedEffect(state.currentIndex) {
+        viewModel.armNfcForBatchScan()
+    }
+
     Column(Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
             Text("Graduate Batch", style = MaterialTheme.typography.headlineMedium)
