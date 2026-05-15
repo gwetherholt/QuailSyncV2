@@ -362,10 +362,22 @@ fun DashboardScreen(
                         }
                     }
                     items(entries, key = { "brooder-${it.brooder.id}" }) { state ->
+                        val activeGroup = chickGroups.find { it.brooderId == state.brooder.id && it.status == "Active" }
+                        // Occupancy = any signal that something lives here:
+                        //   • an Active nursery group on this brooder
+                        //   • a Graduated group assigned to this hutch via housing_id (issue #14)
+                        //   • any individual active bird housed via housing_id (issue #13)
+                        // chick_group_id back-link means group birds also count via
+                        // housing_id; we don't sum counts (which would double-count
+                        // graduated birds), we only need yes/no for the dot.
+                        val isOccupied = activeGroup != null
+                            || chickGroups.any { it.housingId == state.brooder.id && it.status == "Graduated" }
+                            || birds.any { it.housingId == state.brooder.id && (it.status?.lowercase() == "active") }
                         CompactBrooderCard(
                             state = state,
                             liveReading = liveReadings[state.brooder.id],
-                            chickGroup = chickGroups.find { it.brooderId == state.brooder.id && it.status == "Active" },
+                            chickGroup = activeGroup,
+                            isOccupied = isOccupied,
                             onClick = { onBrooderClick(state.brooder.id) },
                         )
                     }
@@ -677,6 +689,7 @@ private fun CompactBrooderCard(
     state: BrooderState,
     liveReading: LiveReading?,
     chickGroup: ChickGroupDto?,
+    isOccupied: Boolean,
     onClick: () -> Unit,
 ) {
     val currentTemp = liveReading?.temperature
@@ -688,6 +701,11 @@ private fun CompactBrooderCard(
         ?: state.brooder.latestHumidity
         ?: state.brooder.latestHumidityPercent
 
+    // Sensor status still drives the temp/humidity text dim-out — a hutch
+    // with no sensors will naturally have no readings and just render "--".
+    // The status dot above no longer reflects sensor state (see issue: red
+    // dot on hutches/incubators was misleading); sensor connection is shown
+    // on the Telemetry page instead.
     val sensorStatus = run {
         val lastReadingMs = liveReading?.receivedAt
         if (lastReadingMs != null) {
@@ -704,16 +722,10 @@ private fun CompactBrooderCard(
         }
     }
 
-    val hasActiveAlerts = state.alerts.any { it.acknowledged != true }
-    val hasCriticalAlert = state.alerts.any { it.acknowledged != true && it.severity?.lowercase() == "critical" }
-
-    val statusDotColor = when {
-        sensorStatus == SensorStatus.OFFLINE -> AlertRed
-        sensorStatus == SensorStatus.STALE -> AlertYellow
-        hasCriticalAlert -> AlertRed
-        hasActiveAlerts -> AlertYellow
-        else -> AlertGreen
-    }
+    // Occupancy-driven dot: green when residents live here, neutral gray
+    // when the unit is empty. Sensor connection state is intentionally NOT
+    // reflected here — it lives on Telemetry where the context fits.
+    val statusDotColor = if (isOccupied) AlertGreen else MaterialTheme.colorScheme.outline
 
     // Chick age
     val chickAge = chickGroup?.hatchDate?.let { hd ->
