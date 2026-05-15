@@ -138,6 +138,22 @@ sealed class BatchState {
     data object Idle : BatchState()
     data object Setup : BatchState()
 
+    /** First per-bird step: prompt the user to tap an NFC tag against the
+     *  bird's leg band. We enter write mode with a non-BIRD-prefixed payload
+     *  ("QS-L<lineage>") so the lookup-by-payload path doesn't get confused
+     *  later — bird association happens via the tag's hardware uniqueId,
+     *  which we record on the bird via nfc_tag_id at POST time. Has a
+     *  Skip option so a failed write or absent tag doesn't trap the user. */
+    data class AwaitingTagScan(
+        val currentIndex: Int,
+        val totalCount: Int,
+        val lineageId: Int,
+        val graduated: List<GraduatedBird>,
+        val lastMaleBandColor: String = "",
+        val lastFemaleBandColor: String = "",
+        val chickGroupId: Int? = null,
+    ) : BatchState()
+
     /** User is filling per-bird details before tapping the tag.
      *
      *  Bug 3 fix: when a submit fails (e.g. server 500), the per-bird form
@@ -164,6 +180,11 @@ sealed class BatchState {
          *  is flipped to 'Graduated' on batch completion (Bug A). Null
          *  when the batch was started ad-hoc from the NFC Setup screen. */
         val chickGroupId: Int? = null,
+        /** Tag uniqueId captured from the preceding AwaitingTagScan step.
+         *  `null` when the user pressed "Skip NFC". Forwarded into the
+         *  CreateBird payload so the bird-tag association is set in a
+         *  single POST (no follow-up PUT needed). */
+        val capturedTagId: String? = null,
     ) : BatchState()
 
     /** API call in progress to create the bird. */
@@ -341,10 +362,21 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
     fun confirmOverwrite() {
         val wasBatchPaused = _batchPausedForConflict.value
         val conflict = nfcService.pendingConflict.value
+        val stateBefore = _batchState.value
         val success = nfcService.confirmOverwrite()
         _conflictBird.value = null
         _batchPausedForConflict.value = false
-        if (wasBatchPaused && conflict != null) { onBatchTagWritten(conflict.tagId, success) }
+        if (wasBatchPaused && conflict != null) {
+            // Route the resumed-write notification to whichever batch step
+            // was paused. AwaitingTagScan needs onBatchTagScanned (which
+            // doesn't take a success flag — it advances regardless on
+            // success; on failure we just stay in scan state).
+            when (stateBefore) {
+                is BatchState.AwaitingTagScan -> if (success) onBatchTagScanned(conflict.tagId)
+                is BatchState.AwaitingTagWrite -> onBatchTagWritten(conflict.tagId, success)
+                else -> { /* not a batch path — nothing to resume */ }
+            }
+        }
     }
 
     fun cancelOverwrite() {
@@ -352,9 +384,14 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
         _conflictBird.value = null
         if (_batchPausedForConflict.value) {
             _batchPausedForConflict.value = false
-            val state = _batchState.value
-            if (state is BatchState.AwaitingTagWrite) {
-                nfcService.enterWriteMode("BIRD-${state.pendingBird.id}")
+            // Re-arm write mode with the appropriate payload so the user
+            // can tap a different tag.
+            when (val state = _batchState.value) {
+                is BatchState.AwaitingTagWrite ->
+                    nfcService.enterWriteMode("BIRD-${state.pendingBird.id}")
+                is BatchState.AwaitingTagScan ->
+                    nfcService.enterWriteMode("QS-L${state.lineageId}")
+                else -> { /* not a batch path */ }
             }
         }
     }
@@ -363,15 +400,21 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
 
     // --- Batch graduation ---
     //
-    // New flow per bird:
-    //   PerBirdEntry (user fills sex/band/notes)
-    //     → user taps "Create & Tag" button
-    //     → CreatingBird (API POST)
-    //     → AwaitingTagWrite (write mode active, user taps tag)
-    //     → tag written → next PerBirdEntry
+    // Per-bird flow (NFC-first ordering — see ScheduleWakeup-era refactor):
+    //   AwaitingTagScan (write mode active, user taps tag OR skips)
+    //     → tag captured (or skipped) → PerBirdEntry
+    //   PerBirdEntry (user fills sex/band/photo/notes/weight)
+    //     → user taps "Save Bird"
+    //     → CreatingBird (API POST with nfc_tag_id stamped in the body)
+    //     → PostTagConfirm (summary)
+    //     → next AwaitingTagScan
     //
-    // Sex, band color, notes are set individually per bird.
-    // Band color auto-fills from the last bird of the same sex.
+    // Why NFC first: the user is already handling the chick when they
+    // grab a tag. Capturing the tag uniqueId up front lets them put the
+    // bird down before filling out the form. The lookup code falls back
+    // to tag uniqueId when the payload doesn't start with "BIRD-", so the
+    // bird is reachable from a scan even without a BIRD-<id> payload on
+    // the tag.
 
     fun openBatchSetup() { _batchState.value = BatchState.Setup }
 
@@ -386,12 +429,48 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
      *  flipped to 'Graduated' once the batch completes — closes the loop
      *  on Hatchery cards (Bug A). */
     fun startBatchTagging(count: Int, lineageId: Int, chickGroupId: Int? = null) {
-        _batchState.value = BatchState.PerBirdEntry(
+        _batchState.value = BatchState.AwaitingTagScan(
             currentIndex = 0,
             totalCount = count,
             lineageId = lineageId,
             graduated = emptyList(),
             chickGroupId = chickGroupId,
+        )
+        // Enter write mode immediately so the next tap writes a marker
+        // payload AND surfaces the tag's uniqueId via onBatchTagScanned.
+        // Payload is non-BIRD-prefixed so lookupBirdByNfc later falls
+        // through to the tag-uniqueId path, which is what actually
+        // identifies the bird (recorded as `nfc_tag_id` on POST).
+        nfcService.enterWriteMode("QS-L$lineageId")
+    }
+
+    /** Called by MainActivity when a tag is written successfully while we
+     *  were in AwaitingTagScan. Captures the tag's uniqueId and advances
+     *  the state to PerBirdEntry; the captured id rides along in state
+     *  until POST. */
+    fun onBatchTagScanned(tagId: String) {
+        val state = _batchState.value as? BatchState.AwaitingTagScan ?: return
+        advanceFromScanToEntry(state, capturedTagId = tagId)
+    }
+
+    /** User pressed "Skip NFC" on the AwaitingTagScan screen — drop write
+     *  mode and continue with no nfc_tag_id on the bird. */
+    fun skipNfcScan() {
+        val state = _batchState.value as? BatchState.AwaitingTagScan ?: return
+        nfcService.cancelWriteMode()
+        advanceFromScanToEntry(state, capturedTagId = null)
+    }
+
+    private fun advanceFromScanToEntry(state: BatchState.AwaitingTagScan, capturedTagId: String?) {
+        _batchState.value = BatchState.PerBirdEntry(
+            currentIndex = state.currentIndex,
+            totalCount = state.totalCount,
+            lineageId = state.lineageId,
+            graduated = state.graduated,
+            lastMaleBandColor = state.lastMaleBandColor,
+            lastFemaleBandColor = state.lastFemaleBandColor,
+            chickGroupId = state.chickGroupId,
+            capturedTagId = capturedTagId,
         )
     }
 
@@ -444,10 +523,18 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
                     // launched from a chick group. Null when the batch was
                     // started ad-hoc from the NFC Setup screen.
                     chickGroupId = state.chickGroupId,
+                    // NFC-first refactor: the tag uniqueId captured at the
+                    // AwaitingTagScan step rides through PerBirdEntry in
+                    // `capturedTagId`. Sending it in the create-bird body
+                    // collapses what used to be a POST + PUT into one call;
+                    // skipped scans send null and the bird is created without
+                    // a tag association (user can attach one later via the
+                    // standalone NFC tool).
+                    nfcTagId = state.capturedTagId,
                 )
-                Log.d("QuailSync", "Batch: creating bird: sex=$sexValue, lineage=${state.lineageId}, band=$bandColor")
+                Log.d("QuailSync", "Batch: creating bird: sex=$sexValue, lineage=${state.lineageId}, band=$bandColor, tag=${state.capturedTagId ?: "(none)"}")
                 val bird = api.createBird(request)
-                Log.d("QuailSync", "Batch: created bird ${bird.id}, entering write mode")
+                Log.d("QuailSync", "Batch: created bird ${bird.id}")
 
                 // Persist optional intake fields one-at-a-time as soon as the bird id is known,
                 // so partial data isn't lost if the user closes the app mid-batch.
@@ -469,17 +556,21 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
                     saveBirdPhotoLocally(bird.id, photoBitmap, context)
                 }
 
-                nfcService.enterWriteMode("BIRD-${bird.id}")
-
                 val updatedMale = if (sex.lowercase() == "male" && bandColor.isNotBlank()) bandColor else state.lastMaleBandColor
                 val updatedFemale = if (sex.lowercase() == "female" && bandColor.isNotBlank()) bandColor else state.lastFemaleBandColor
 
-                _batchState.value = BatchState.AwaitingTagWrite(
-                    currentIndex = state.currentIndex,
+                // NFC-first refactor: tag was already captured (or skipped)
+                // before we got here, so we go straight to the confirmation
+                // summary. `justTaggedTagId` is empty when NFC was skipped so
+                // PostTagConfirmScreen can hide tag-specific UI for that case.
+                val graduatedBird = GraduatedBird(state.currentIndex, bird, state.capturedTagId ?: "")
+                _batchState.value = BatchState.PostTagConfirm(
+                    currentIndex = state.currentIndex + 1,
                     totalCount = state.totalCount,
                     lineageId = state.lineageId,
-                    graduated = state.graduated,
-                    pendingBird = bird,
+                    graduated = state.graduated + graduatedBird,
+                    justTaggedBird = bird,
+                    justTaggedTagId = state.capturedTagId ?: "",
                     lastMaleBandColor = updatedMale,
                     lastFemaleBandColor = updatedFemale,
                     chickGroupId = state.chickGroupId,
@@ -622,7 +713,10 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
                 // now-graduated group filters out of the Active section then.
             }
         } else {
-            _batchState.value = BatchState.PerBirdEntry(
+            // NFC-first refactor: each new bird starts at the tag-scan
+            // prompt rather than the per-bird form. Re-arm write mode so
+            // the next tap is captured.
+            _batchState.value = BatchState.AwaitingTagScan(
                 currentIndex = state.currentIndex,
                 totalCount = state.totalCount,
                 lineageId = state.lineageId,
@@ -631,6 +725,7 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
                 lastFemaleBandColor = state.lastFemaleBandColor,
                 chickGroupId = state.chickGroupId,
             )
+            nfcService.enterWriteMode("QS-L${state.lineageId}")
         }
     }
 
@@ -672,6 +767,7 @@ fun NfcScreen(nfcService: NfcService, viewModel: NfcViewModel) {
 
     when (val state = batchState) {
         is BatchState.Setup -> BatchSetupScreen(viewModel)
+        is BatchState.AwaitingTagScan -> BatchAwaitingScanScreen(state, viewModel)
         is BatchState.PerBirdEntry -> PerBirdEntryScreen(state, viewModel)
         is BatchState.CreatingBird -> BatchCreatingScreen(state)
         is BatchState.AwaitingTagWrite -> BatchAwaitingWriteScreen(state, viewModel)
@@ -1047,6 +1143,93 @@ fun BatchCreatingScreen(state: BatchState.CreatingBird) {
         CircularProgressIndicator(color = SageGreen, modifier = Modifier.size(48.dp))
         Spacer(Modifier.height(16.dp))
         Text("Creating ${state.sex} bird…", style = MaterialTheme.typography.titleMedium)
+    }
+}
+
+// =====================================================================
+// Batch Awaiting Tag Scan — first step per bird in the NFC-first flow
+// =====================================================================
+
+@Composable
+fun BatchAwaitingScanScreen(state: BatchState.AwaitingTagScan, viewModel: NfcViewModel) {
+    // Surface write-result errors (failed write to a damaged or non-NDEF tag)
+    // so the user knows why nothing advanced — and can choose Skip.
+    val writeResult by viewModel.nfcService.writeResult.collectAsState()
+    Column(Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+            Text("Graduate Batch", style = MaterialTheme.typography.headlineMedium)
+            OutlinedButton(onClick = { viewModel.cancelBatch() }, colors = ButtonDefaults.outlinedButtonColors(contentColor = AlertRed)) { Text("Cancel") }
+        }
+        Spacer(Modifier.height(8.dp))
+        LinearProgressIndicator(
+            progress = { state.graduated.size.toFloat() / state.totalCount },
+            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+            color = SageGreen, trackColor = SageGreenLight.copy(alpha = 0.3f),
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Bird ${state.currentIndex + 1} of ${state.totalCount}",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+
+        Spacer(Modifier.height(24.dp))
+
+        // Headline prompt that doubles as the spec verbatim ("Tap NFC tag to
+        // bird's leg band"). We don't know this bird's sex yet, so band color
+        // is shown as a "last used" reference rather than a definitive label —
+        // the user can fall back to whichever color they actually put on this
+        // chick's leg.
+        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))) {
+            Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                Text(
+                    "Tap NFC tag to bird's leg band",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                val lastBands = listOfNotNull(
+                    state.lastMaleBandColor.takeIf { it.isNotBlank() }?.let { "♂ $it" }, // ♂
+                    state.lastFemaleBandColor.takeIf { it.isNotBlank() }?.let { "♀ $it" }, // ♀
+                ).joinToString("  ·  ")
+                if (lastBands.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Last bands used: $lastBands",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // Reuse the existing pulsing NFC visual. We're in write mode (see
+        // startBatchTagging) so the dusty-rose pulse matches the rest of the
+        // app's write-mode affordance.
+        NfcScanArea(writeMode = true, pendingWriteData = "Tap tag for bird ${state.currentIndex + 1}")
+
+        Spacer(Modifier.height(16.dp))
+
+        // Skip NFC — the user can opt out per bird (tag missing, damaged,
+        // out of range, etc.) and still complete the batch. The bird is
+        // created without an nfc_tag_id and can be re-tagged later via the
+        // standalone NFC tool.
+        OutlinedButton(
+            onClick = { viewModel.skipNfcScan() },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Skip NFC for this bird") }
+
+        // Last write attempt's error message — only shown if something failed.
+        // Successful writes advance state immediately so this card is only
+        // visible on hardware errors / read-only tags.
+        writeResult?.let { r ->
+            if (!r.success) {
+                Spacer(Modifier.height(8.dp))
+                Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE))) {
+                    Text(r.message, Modifier.padding(12.dp), color = AlertRed, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
     }
 }
 

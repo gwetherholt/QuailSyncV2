@@ -180,7 +180,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleNfcIntent(intent: Intent) {
-        val wasBatchWriting = nfcViewModel.batchState.value is BatchState.AwaitingTagWrite
+        // Snapshot the batch state BEFORE handleIntent runs — handleIntent
+        // flips write mode off on success, so we'd otherwise lose the
+        // "which batch step were we in?" context.
+        val batchStateAtEntry = nfcViewModel.batchState.value
+        val wasBatchWriting = batchStateAtEntry is BatchState.AwaitingTagWrite
+        // NFC-first refactor: the AwaitingTagScan step also runs in write
+        // mode (so we get the tag uniqueId via the Written result), but
+        // routes to a different VM handler that captures the tag id and
+        // advances to the per-bird form rather than logging a graduated bird.
+        val wasBatchScanning = batchStateAtEntry is BatchState.AwaitingTagScan
 
         val (scanResult, writeAttempt) = nfcService.handleIntent(intent) ?: return
 
@@ -188,14 +197,20 @@ class MainActivity : ComponentActivity() {
             when (writeAttempt) {
                 is NfcService.WriteAttemptResult.Written -> {
                     Toast.makeText(this, "Wrote ${scanResult.payload ?: scanResult.tagId}", Toast.LENGTH_SHORT).show()
-                    if (wasBatchWriting) nfcViewModel.onBatchTagWritten(scanResult.tagId, true)
+                    when {
+                        wasBatchWriting -> nfcViewModel.onBatchTagWritten(scanResult.tagId, true)
+                        wasBatchScanning -> nfcViewModel.onBatchTagScanned(scanResult.tagId)
+                    }
                 }
                 is NfcService.WriteAttemptResult.Conflict -> {
                     nfcViewModel.lookupConflictBird(writeAttempt.conflict)
-                    if (wasBatchWriting) nfcViewModel.setBatchPausedForConflict(true)
+                    if (wasBatchWriting || wasBatchScanning) nfcViewModel.setBatchPausedForConflict(true)
                 }
                 is NfcService.WriteAttemptResult.Failed -> {
                     Toast.makeText(this, writeAttempt.message, Toast.LENGTH_SHORT).show()
+                    // For AwaitingTagScan we stay put — the user can retry
+                    // or hit "Skip NFC". For the legacy AwaitingTagWrite path
+                    // we explicitly notify so it can fall back to retry.
                     if (wasBatchWriting) nfcViewModel.onBatchTagWritten(scanResult.tagId, false)
                 }
             }
