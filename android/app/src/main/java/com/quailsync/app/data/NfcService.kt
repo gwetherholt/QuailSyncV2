@@ -8,6 +8,7 @@ import android.nfc.NdefMessage
 import android.nfc.NdefRecord
 import android.nfc.NfcAdapter
 import android.nfc.Tag
+import android.nfc.tech.MifareUltralight
 import android.nfc.tech.Ndef
 import android.nfc.tech.NdefFormatable
 import android.os.Build
@@ -35,6 +36,18 @@ data class TagConflict(
     val existingPayload: String,
     val existingBirdId: Int,
     val pendingWriteData: String,
+)
+
+/** NTAG21x command opcodes — see NXP NTAG213/215/216 datasheet §10. */
+private const val NTAG_CMD_PWD_AUTH: Byte = 0x1B
+private const val NTAG_CMD_GET_VERSION: Byte = 0x60
+
+/** Common factory-default NTAG passwords, tried in order. The 0xFFFFFFFF
+ *  variant is the canonical NTAG factory state; some preprogrammed batches
+ *  use all-zeros instead. */
+private val DEFAULT_NTAG_PASSWORDS = listOf(
+    byteArrayOf(0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte()),
+    byteArrayOf(0x00, 0x00, 0x00, 0x00),
 )
 
 class NfcService {
@@ -175,6 +188,206 @@ class NfcService {
         _lastScan.value = result
         _scanHistory.value = listOf(result) + _scanHistory.value.take(19)
         return Pair(result, null)
+    }
+
+    /**
+     * Permissive write path for the batch graduation flow. Bypasses ALL
+     * conflict detection — any tag the user taps (blank, formatted-but-empty,
+     * carrying a stale `QS-L*`, carrying `BIRD-*` from a prior session, or
+     * carrying foreign data) is overwritten with `writeData`. The server's
+     * `clear_nfc_tag_from_others` handles DB uniqueness when the eventual
+     * bird-create POST runs, so the client never needs to inspect what was
+     * on the tag.
+     *
+     * The batch UX requires every tap to "just work" — the user is holding a
+     * chick in one hand and a tag in the other. Pausing for "overwrite?"
+     * confirmation, looking up the previous bird, or surfacing a generic
+     * "Failed to write" toast all break the flow. This method is the minimal
+     * happy-path: extract tag → write → return its hardware uniqueId.
+     *
+     * On success, write mode is cleared and the tag id is returned. On
+     * hardware failure the tag id is null and `_writeResult` is populated
+     * with a retry-friendly message that `BatchAwaitingScanScreen`'s banner
+     * already renders; write mode is left active so the next tap retries.
+     */
+    fun handleBatchIntent(intent: Intent, writeData: String): String? {
+        val action = intent.action ?: return null
+        if (action != NfcAdapter.ACTION_NDEF_DISCOVERED &&
+            action != NfcAdapter.ACTION_TAG_DISCOVERED &&
+            action != NfcAdapter.ACTION_TECH_DISCOVERED
+        ) return null
+
+        val tag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(NfcAdapter.EXTRA_TAG, Tag::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra<Tag>(NfcAdapter.EXTRA_TAG)
+        } ?: return null
+        val tagId = tag.id.joinToString("") { "%02X".format(it) }
+        Log.d("QuailSync", "Batch write: tag=$tagId payload='$writeData' (no conflict check)")
+
+        if (tryWriteAndRecordSuccess(tag, tagId, writeData)) return tagId
+
+        // First write failed. Some NTAG213/215 tags ship with factory password
+        // protection that gates writes even though `isWritable=true` — the
+        // first sign is IOException on writeNdefMessage. Try a one-shot
+        // unlock with common default passwords; if it works, retry the write
+        // within the same tap. This only fires in the batch path because the
+        // standalone scanner caller doesn't go through handleBatchIntent.
+        if (tag.techList.contains(MifareUltralight::class.java.name)) {
+            when (tryRemoveNtagPassword(tag, tagId)) {
+                NtagPasswordResult.Removed -> {
+                    if (tryWriteAndRecordSuccess(tag, tagId, writeData)) return tagId
+                    // Auth worked but the retry still failed — fall through to
+                    // generic "tag locked" so we don't lie that it's password-only.
+                }
+                NtagPasswordResult.CustomPassword -> {
+                    _writeResult.value = WriteResult(
+                        false,
+                        "This tag is password-protected with a custom password. " +
+                            "Remove the password using NFC Tools first.",
+                    )
+                    return null
+                }
+                NtagPasswordResult.NotApplicable -> {
+                    // Either not actually an NTAG variant, or the MU channel
+                    // couldn't be opened — generic message below.
+                }
+            }
+        }
+
+        // By the time we get here, writeNdefText has tried both Ndef and
+        // NdefFormatable paths AND (if the tech list supports it) we've tried
+        // to unlock with default passwords. The tag is unlikely to write on a
+        // simple retry. Steer the user to grab a different tag.
+        _writeResult.value = WriteResult(
+            false,
+            "This tag can't be written to — it may be locked. Try a different tag.",
+        )
+        // Leave write mode active so the next tap (on any tag) retries.
+        return null
+    }
+
+    /**
+     * Run a single NDEF write attempt; on success, mirror the side effects
+     * `handleBatchIntent` needs (clear write mode, populate writeResult,
+     * append to scan history). Returns whether the write succeeded.
+     */
+    private fun tryWriteAndRecordSuccess(tag: Tag, tagId: String, writeData: String): Boolean {
+        if (!writeNdefText(tag, writeData)) return false
+        _writeMode.value = false
+        _pendingWriteData.value = null
+        _writeResult.value = WriteResult(true, "Wrote '$writeData' to tag $tagId")
+        val result = NfcScanResult(tagId, writeData)
+        _lastScan.value = result
+        _scanHistory.value = listOf(result) + _scanHistory.value.take(19)
+        return true
+    }
+
+    /** Identifies which NTAG variant a MifareUltralight tag is, so we know
+     *  which page holds CFG0 (and therefore AUTH0). */
+    private data class NtagVariant(val name: String, val cfg0Page: Int)
+
+    private sealed class NtagPasswordResult {
+        /** Authenticated with a default password and AUTH0 set to 0xFF — caller should retry the write. */
+        data object Removed : NtagPasswordResult()
+        /** Tag is an NTAG but none of the default passwords worked. */
+        data object CustomPassword : NtagPasswordResult()
+        /** Tag isn't a recognised NTAG variant, or the MU channel failed. */
+        data object NotApplicable : NtagPasswordResult()
+    }
+
+    /**
+     * Best-effort: if the tag is an NTAG with factory password protection
+     * still enabled, authenticate with a default password and clear AUTH0 so
+     * subsequent NDEF writes succeed.
+     *
+     * Non-destructive on non-protected tags: an unprotected NTAG either
+     * accepts PWD_AUTH and returns PACK (in which case we set AUTH0=0xFF,
+     * which is the no-op "no pages need auth" state anyway) or returns NAK,
+     * which arrives here as IOException and we move on to the next password.
+     */
+    private fun tryRemoveNtagPassword(tag: Tag, tagId: String): NtagPasswordResult {
+        val mu = MifareUltralight.get(tag) ?: return NtagPasswordResult.NotApplicable
+        try {
+            mu.connect()
+            val variant = detectNtagVariant(mu)
+            if (variant == null) {
+                Log.w("QuailSync", "NFC: tag $tagId is MifareUltralight but not a recognised NTAG21x — skipping password removal")
+                return NtagPasswordResult.NotApplicable
+            }
+            for (password in DEFAULT_NTAG_PASSWORDS) {
+                val authed = try {
+                    // PWD_AUTH returns 2-byte PACK on success, 1-byte NAK on
+                    // failure. Android's MU.transceive surfaces NAKs as
+                    // IOException (TagLostException), so a successful auth
+                    // is a response whose size == 2.
+                    val response = mu.transceive(byteArrayOf(NTAG_CMD_PWD_AUTH) + password)
+                    response.size == 2
+                } catch (_: IOException) {
+                    false
+                }
+                if (!authed) continue
+                try {
+                    // Read CFG0 (4 pages of 4 bytes = 16 bytes; first 4 are CFG0).
+                    // Preserve bytes 0..2 (MIRROR_CONF / MIRROR_BYTE / RFUI) so
+                    // we only change AUTH0 in byte 3. AUTH0 = 0xFF means "first
+                    // page requiring auth is beyond end-of-memory" → no pages
+                    // require auth → password protection effectively disabled.
+                    val cfg0Page = mu.readPages(variant.cfg0Page)
+                    val newCfg0 = byteArrayOf(cfg0Page[0], cfg0Page[1], cfg0Page[2], 0xFF.toByte())
+                    mu.writePage(variant.cfg0Page, newCfg0)
+                    Log.d(
+                        "QuailSync",
+                        "NFC: removed password protection from tag $tagId " +
+                            "(${variant.name}, AUTH0=0xFF at page ${variant.cfg0Page})",
+                    )
+                    return NtagPasswordResult.Removed
+                } catch (e: IOException) {
+                    Log.e(
+                        "QuailSync",
+                        "NFC: tag $tagId authenticated but failed to clear AUTH0 — tag may have left field",
+                        e,
+                    )
+                    return NtagPasswordResult.NotApplicable
+                }
+            }
+            Log.w(
+                "QuailSync",
+                "NFC: tag $tagId (${variant.name}) didn't accept any default password — likely a custom password",
+            )
+            return NtagPasswordResult.CustomPassword
+        } catch (e: IOException) {
+            Log.e("QuailSync", "NFC: MifareUltralight comm error on tag $tagId", e)
+            return NtagPasswordResult.NotApplicable
+        } catch (e: Exception) {
+            Log.e("QuailSync", "NFC: unexpected error during password removal on tag $tagId", e)
+            return NtagPasswordResult.NotApplicable
+        } finally {
+            try { mu.close() } catch (_: Exception) {}
+        }
+    }
+
+    /** Issues GET_VERSION (0x60) and decodes the storage_size byte to identify
+     *  which NTAG21x variant this is. Returns null if the response is
+     *  malformed (e.g., tag isn't an NTAG21x at all, or comms dropped). */
+    private fun detectNtagVariant(mu: MifareUltralight): NtagVariant? {
+        return try {
+            val version = mu.transceive(byteArrayOf(NTAG_CMD_GET_VERSION))
+            // GET_VERSION response is 8 bytes: vendor, prod_type, prod_subtype,
+            // major_ver, minor_ver, storage_size, protocol_type. Storage size
+            // 0x0F = NTAG213 (180 bytes), 0x11 = NTAG215 (540 bytes),
+            // 0x13 = NTAG216 (924 bytes). CFG0 lives at different pages on
+            // each variant — see NTAG21x datasheet §8.5.
+            when (version.getOrNull(6)) {
+                0x0F.toByte() -> NtagVariant(name = "NTAG213", cfg0Page = 0x29)
+                0x11.toByte() -> NtagVariant(name = "NTAG215", cfg0Page = 0x83)
+                0x13.toByte() -> NtagVariant(name = "NTAG216", cfg0Page = 0xE3)
+                else -> null
+            }
+        } catch (_: IOException) {
+            null
+        }
     }
 
     /**
@@ -343,49 +556,77 @@ class NfcService {
     private fun writeNdefText(tag: Tag, text: String): Boolean {
         val record = NdefRecord.createTextRecord("en", text)
         val message = NdefMessage(arrayOf(record))
+        val tagId = tag.id.joinToString("") { "%02X".format(it) }
+
+        // Try the Ndef (already-formatted) path first. Any failure mode —
+        // read-only, IOException, unexpected exception — falls through to
+        // the NdefFormatable path: some tags that report `isWritable=false`
+        // via Ndef can still be reformatted (the OTP/lock bits on certain
+        // NTAG variants gate the data area but not the capability
+        // container), and a transient IOException on the Ndef channel
+        // doesn't necessarily mean the formatable channel is also dead.
         val ndef = Ndef.get(tag)
-        return if (ndef != null) {
-            writeToFormattedNdef(ndef, message, text)
-        } else {
-            writeToBlankTag(tag, message, text)
-        }
+        if (ndef != null && writeToFormattedNdef(ndef, message, text, tagId)) return true
+
+        // Fallback (also covers the truly-blank tag case, where
+        // Ndef.get(tag) returns null from the start).
+        if (writeToBlankTag(tag, message, text, tagId)) return true
+
+        Log.e(
+            "QuailSync",
+            "Tag $tagId is not writable by any method — tag may be locked or defective. " +
+                "techs=${tag.techList.joinToString(",")}",
+        )
+        return false
     }
 
     /** Path for tags already carrying an NDEF capability container. */
-    private fun writeToFormattedNdef(ndef: Ndef, message: NdefMessage, text: String): Boolean {
+    private fun writeToFormattedNdef(ndef: Ndef, message: NdefMessage, text: String, tagId: String): Boolean {
         return try {
             ndef.connect()
+            // Diagnostics: surface the tag's reported state so a locked-tag
+            // report from the user is debuggable from logs alone. IOException
+            // on writeNdefMessage gives no hint about why — printing isWritable,
+            // maxSize, type, and isConnected here lets us tell "locked"
+            // (isWritable=false) from "tag too small" (maxSize<payload) from
+            // "channel dropped" (isConnected=false at write time).
+            Log.d(
+                "QuailSync",
+                "NFC tag $tagId: writable=${ndef.isWritable}, maxSize=${ndef.maxSize}, " +
+                    "type=${ndef.type}, connected=${ndef.isConnected}",
+            )
             if (!ndef.isWritable) {
-                Log.e("QuailSync", "NFC tag is read-only — cannot write '$text'")
+                Log.w("QuailSync", "NFC tag $tagId is read-only via Ndef path — falling back to NdefFormatable")
                 ndef.close()
                 return false
             }
             ndef.writeNdefMessage(message)
             ndef.close()
-            Log.d("QuailSync", "NFC write success (Ndef path): $text")
+            Log.d("QuailSync", "NFC write success (Ndef path) for tag $tagId: $text")
             true
         } catch (e: IOException) {
-            Log.e("QuailSync", "NFC write error (Ndef path) — tag may have left field", e)
+            Log.e("QuailSync", "NFC write IOException (Ndef path) for tag $tagId — may be locked or out of field", e)
+            try { ndef.close() } catch (_: Exception) {}
             false
         } catch (e: Exception) {
-            Log.e("QuailSync", "NFC write error (Ndef path)", e)
+            Log.e("QuailSync", "NFC write error (Ndef path) for tag $tagId", e)
+            try { ndef.close() } catch (_: Exception) {}
             false
         }
     }
 
     /**
-     * Path for blank tags: try NdefFormatable, which writes the capability
-     * container and the message atomically. Logs distinguish "tag doesn't
-     * support NDEF at all" (a non-NFC-Forum tag the app can't use) from
-     * transient I/O errors so the batch screen can show the right hint.
+     * Path for blank or fallback-after-Ndef-failure: try NdefFormatable, which
+     * writes the capability container and the message atomically. Used both
+     * for truly-blank tags (factory state) and as a last-resort retry when
+     * the Ndef path reports read-only or throws IOException.
      */
-    private fun writeToBlankTag(tag: Tag, message: NdefMessage, text: String): Boolean {
+    private fun writeToBlankTag(tag: Tag, message: NdefMessage, text: String, tagId: String): Boolean {
         val formatable = NdefFormatable.get(tag)
         if (formatable == null) {
-            Log.e(
+            Log.w(
                 "QuailSync",
-                "Tag doesn't support NDEF (neither Ndef nor NdefFormatable) — " +
-                    "techs=${tag.techList.joinToString(",")}",
+                "Tag $tagId doesn't support NdefFormatable — techs=${tag.techList.joinToString(",")}",
             )
             return false
         }
@@ -393,13 +634,15 @@ class NfcService {
             formatable.connect()
             formatable.format(message)
             formatable.close()
-            Log.d("QuailSync", "NFC format+write success (NdefFormatable path, blank tag): $text")
+            Log.d("QuailSync", "NFC format+write success (NdefFormatable path) for tag $tagId: $text")
             true
         } catch (e: IOException) {
-            Log.e("QuailSync", "NFC format error — tag may have left field before format completed", e)
+            Log.e("QuailSync", "NFC format IOException (NdefFormatable path) for tag $tagId", e)
+            try { formatable.close() } catch (_: Exception) {}
             false
         } catch (e: Exception) {
-            Log.e("QuailSync", "NFC format error (NdefFormatable path)", e)
+            Log.e("QuailSync", "NFC format error (NdefFormatable path) for tag $tagId", e)
+            try { formatable.close() } catch (_: Exception) {}
             false
         }
     }

@@ -180,57 +180,59 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleNfcIntent(intent: Intent) {
-        // Snapshot the batch state BEFORE handleIntent runs — handleIntent
-        // flips write mode off on success, so we'd otherwise lose the
-        // "which batch step were we in?" context.
         val batchStateAtEntry = nfcViewModel.batchState.value
-        val wasBatchWriting = batchStateAtEntry is BatchState.AwaitingTagWrite
-        // NFC-first refactor: the AwaitingTagScan step also runs in write
-        // mode (so we get the tag uniqueId via the Written result), but
-        // routes to a different VM handler that captures the tag id and
-        // advances to the per-bird form rather than logging a graduated bird.
         val wasBatchScanning = batchStateAtEntry is BatchState.AwaitingTagScan
+        val wasBatchWriting = batchStateAtEntry is BatchState.AwaitingTagWrite
 
+        // Batch flow owns the NFC intent during AwaitingTagScan / AwaitingTagWrite.
+        // No conflict detection, no bird lookup, no shared logic with the
+        // standalone scanner — just overwrite whatever's on the tap with the
+        // active payload and capture its hardware uniqueId. The user is
+        // holding a chick in one hand and a tag in the other; every tap must
+        // Just Work. DB uniqueness across previously-tagged birds is enforced
+        // server-side via clear_nfc_tag_from_others on the create-bird POST.
+        if (wasBatchScanning || wasBatchWriting) {
+            val writeData = nfcService.pendingWriteData.value ?: when (batchStateAtEntry) {
+                is BatchState.AwaitingTagScan -> "QS-L${batchStateAtEntry.lineageId}"
+                is BatchState.AwaitingTagWrite -> "BIRD-${batchStateAtEntry.pendingBird.id}"
+                else -> null
+            }
+            if (writeData != null) {
+                val tagId = nfcService.handleBatchIntent(intent, writeData)
+                if (tagId != null) {
+                    Toast.makeText(this, "Tag written", Toast.LENGTH_SHORT).show()
+                    when {
+                        wasBatchScanning -> nfcViewModel.onBatchTagScanned(tagId)
+                        wasBatchWriting -> nfcViewModel.onBatchTagWritten(tagId, true)
+                    }
+                }
+                // Failure path: handleBatchIntent set _writeResult with the
+                // retry-friendly message — BatchAwaitingScanScreen's banner
+                // surfaces it. No toast (banner is the canonical error UX),
+                // stay on the same bird, write mode still active for retry.
+                navController?.navigate(Screen.Nfc.route) {
+                    popUpTo(navController!!.graph.findStartDestination().id) { saveState = true }
+                    launchSingleTop = true; restoreState = true
+                }
+                return
+            }
+        }
+
+        // Standalone NFC screen / non-batch state: keep conflict detection +
+        // bird lookup. A stray tap on someone else's tag here should not
+        // silently clobber their bird's association.
         val (scanResult, writeAttempt) = nfcService.handleIntent(intent) ?: return
 
         if (writeAttempt != null) {
             when (writeAttempt) {
                 is NfcService.WriteAttemptResult.Written -> {
                     Toast.makeText(this, "Wrote ${scanResult.payload ?: scanResult.tagId}", Toast.LENGTH_SHORT).show()
-                    when {
-                        wasBatchWriting -> nfcViewModel.onBatchTagWritten(scanResult.tagId, true)
-                        wasBatchScanning -> nfcViewModel.onBatchTagScanned(scanResult.tagId)
-                    }
                 }
                 is NfcService.WriteAttemptResult.Conflict -> {
-                    if (wasBatchScanning || wasBatchWriting) {
-                        // Batch flow: the user committed to re-tagging every
-                        // bird, so any tag with leftover BIRD-/QS- payload from
-                        // a prior session should be silently overwritten. The
-                        // older confirmation-dialog path showed a transient
-                        // "Failed to write to tag" banner during the
-                        // confirm round-trip, which read like a real failure
-                        // even though the eventual write succeeded.
-                        nfcViewModel.autoOverwriteForBatch(writeAttempt.conflict)
-                    } else {
-                        // Standalone NFC screen keeps the dialog — a stray
-                        // tap on someone else's tag should not silently
-                        // clobber that bird's association.
-                        nfcViewModel.lookupConflictBird(writeAttempt.conflict)
-                    }
+                    nfcViewModel.lookupConflictBird(writeAttempt.conflict)
                 }
                 is NfcService.WriteAttemptResult.Failed -> {
-                    // Toast is redundant during AwaitingTagScan — that
-                    // screen already surfaces the writeResult banner — and
-                    // its appearance during a transient hardware miss in
-                    // the batch flow reads like a hard failure to the user.
-                    // Keep the toast for the legacy AwaitingTagWrite path
-                    // and the standalone NFC screen where there's no other
-                    // error surface.
-                    if (!wasBatchScanning) {
-                        Toast.makeText(this, writeAttempt.message, Toast.LENGTH_SHORT).show()
-                    }
-                    if (wasBatchWriting) nfcViewModel.onBatchTagWritten(scanResult.tagId, false)
+                    Toast.makeText(this, writeAttempt.message, Toast.LENGTH_SHORT).show()
                 }
             }
             navController?.navigate(Screen.Nfc.route) {

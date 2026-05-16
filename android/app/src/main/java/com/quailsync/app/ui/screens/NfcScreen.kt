@@ -379,44 +379,6 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
         _conflictBird.value = null
     }
 
-    /**
-     * Resolve a tag-write conflict immediately without surfacing the user
-     * confirmation dialog. Called from `MainActivity.handleNfcIntent` when a
-     * conflict is detected while the batch is in `AwaitingTagScan` /
-     * `AwaitingTagWrite` — the user is mid-batch and every tag tap is
-     * expected to write, so pausing for "overwrite?" confirmation breaks
-     * the flow and (because the conflict resolution screen used to surface a
-     * generic "Failed to write" banner) reads like a hard failure.
-     *
-     * Runs synchronously while `NfcService.pendingConflict` and the cached
-     * `conflictTag` reference are still fresh from the just-returned
-     * `WriteAttemptResult.Conflict`. On success we dispatch to the regular
-     * batch handler (`onBatchTagScanned` / `onBatchTagWritten`); on failure
-     * `NfcService.confirmOverwrite` sets `_writeResult` to "Tag lost — tap
-     * the tag again", which `BatchAwaitingScanScreen` already renders, so
-     * no toast is needed.
-     */
-    fun autoOverwriteForBatch(conflict: TagConflict): Boolean {
-        Log.d(
-            "QuailSync",
-            "Batch: auto-overwriting tag ${conflict.tagId}, old=${conflict.existingPayload}, new=${conflict.pendingWriteData}",
-        )
-        val stateBefore = _batchState.value
-        val success = nfcService.confirmOverwrite()
-        // Conflict-bird state was never populated for the auto path (we
-        // skipped lookupConflictBird), but clear defensively in case a
-        // previous standalone-flow dialog left it set.
-        _conflictBird.value = null
-        if (success) {
-            when (stateBefore) {
-                is BatchState.AwaitingTagScan -> onBatchTagScanned(conflict.tagId)
-                is BatchState.AwaitingTagWrite -> onBatchTagWritten(conflict.tagId, true)
-                else -> { /* batch left state mid-resolve — drop quietly */ }
-            }
-        }
-        return success
-    }
-
     // --- Batch graduation ---
     //
     // Per-bird flow (NFC-first ordering — see ScheduleWakeup-era refactor):
