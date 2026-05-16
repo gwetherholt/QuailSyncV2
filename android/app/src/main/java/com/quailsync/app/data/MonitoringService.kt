@@ -116,25 +116,25 @@ class MonitoringService : Service() {
             .build()
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(ws: WebSocket, response: Response) {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.d(TAG, "WebSocket connected")
                 wsConnected = true
                 updateMonitorNotification()
             }
 
-            override fun onMessage(ws: WebSocket, text: String) {
+            override fun onMessage(webSocket: WebSocket, text: String) {
                 parseAndCheck(text)
             }
 
-            override fun onClosing(ws: WebSocket, code: Int, reason: String) {
-                ws.close(1000, null)
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                webSocket.close(1000, null)
                 Log.d(TAG, "WebSocket closing: $code $reason")
                 wsConnected = false
                 updateMonitorNotification()
                 scheduleReconnect()
             }
 
-            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "WebSocket failure", t)
                 wsConnected = false
                 updateMonitorNotification()
@@ -204,6 +204,7 @@ class MonitoringService : Service() {
         }
     }
 
+    @Suppress("UNUSED_PARAMETER")
     private fun checkThresholds(brooderId: Int, temperature: Double?, humidity: Double?) {
         val now = System.currentTimeMillis()
         val name = brooderNames[brooderId] ?: "Brooder #$brooderId"

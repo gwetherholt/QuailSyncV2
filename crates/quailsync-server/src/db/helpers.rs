@@ -361,6 +361,62 @@ pub fn replace_bird_lineages(
     Ok(())
 }
 
+/// Clear `nfc_tag_id` from every bird (optionally except `except_id`) that
+/// currently has the given tag. Used by `create_bird`, `update_bird`, and
+/// the graduate handler to make NFC tag reassignment seamless during batch
+/// graduation — without this, the `UNIQUE` constraint on `birds.nfc_tag_id`
+/// would 500 on every re-program of a tag that already belonged to another
+/// bird.
+///
+/// Logs the reassignment so re-pairings are auditable from the server log.
+/// Errors during the query/update are swallowed: we'd rather let the
+/// subsequent INSERT/UPDATE surface a constraint error than blow up the
+/// caller on a transient SELECT failure.
+pub fn clear_nfc_tag_from_others(
+    conn: &Connection,
+    tag_id: &str,
+    except_id: Option<i64>,
+) {
+    // Look up the prior owner (if any) so we can name it in the log line.
+    // The query is also the existence check — if no other bird holds the
+    // tag, we have nothing to do and skip the UPDATE entirely.
+    let prior_owner: Option<i64> = match except_id {
+        Some(id) => conn
+            .query_row(
+                "SELECT id FROM birds WHERE nfc_tag_id = ?1 AND id != ?2",
+                params![tag_id, id],
+                |row| row.get(0),
+            )
+            .ok(),
+        None => conn
+            .query_row(
+                "SELECT id FROM birds WHERE nfc_tag_id = ?1",
+                params![tag_id],
+                |row| row.get(0),
+            )
+            .ok(),
+    };
+    let Some(old_id) = prior_owner else { return };
+    let cleared = match except_id {
+        Some(id) => conn.execute(
+            "UPDATE birds SET nfc_tag_id = NULL WHERE nfc_tag_id = ?1 AND id != ?2",
+            params![tag_id, id],
+        ),
+        None => conn.execute(
+            "UPDATE birds SET nfc_tag_id = NULL WHERE nfc_tag_id = ?1",
+            params![tag_id],
+        ),
+    };
+    if cleared.is_ok() {
+        match except_id {
+            Some(new_id) => println!(
+                "[nfc] tag {tag_id} reassigned from bird {old_id} to bird {new_id}"
+            ),
+            None => println!("[nfc] tag {tag_id} reassigned from bird {old_id} to new bird"),
+        }
+    }
+}
+
 pub fn row_to_processing_record(row: &rusqlite::Row) -> rusqlite::Result<ProcessingRecord> {
     let reason_str: String = row.get(2)?;
     let sched_str: String = row.get(3)?;

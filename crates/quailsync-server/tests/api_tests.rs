@@ -1998,3 +1998,240 @@ mod graduate_to_hutch_tests {
         assert_eq!(group.housing_id, None);
     }
 }
+
+// ---------------------------------------------------------------------------
+// NFC tag reassignment — UNIQUE(birds.nfc_tag_id) used to surface as 500 when
+// the batch flow re-used a tag from a prior session. The fix in
+// `clear_nfc_tag_from_others` clears the prior owner first; these tests
+// pin that behaviour across the three INSERT/UPDATE paths.
+// ---------------------------------------------------------------------------
+
+mod nfc_tag_reassignment_tests {
+    use super::*;
+    use serde_json::json;
+
+    async fn seed_lineage(base: &str, client: &reqwest::Client) -> i64 {
+        let bl: Lineage = client
+            .post(format!("{base}/api/lineages"))
+            .json(&CreateLineage {
+                name: "L".into(),
+                source: "S".into(),
+                notes: None,
+            })
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        bl.id
+    }
+
+    fn create_bird_with_tag(lineage_id: i64, tag: Option<&str>) -> CreateBird {
+        CreateBird {
+            band_color: None,
+            sex: Sex::Unknown,
+            lineage_ids: vec![lineage_id],
+            hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            mother_id: None,
+            father_id: None,
+            generation: 1,
+            status: BirdStatus::Active,
+            notes: None,
+            nfc_tag_id: tag.map(|t| t.to_string()),
+            chick_group_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_bird_reuses_tag_by_clearing_prior_owner() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let lineage_id = seed_lineage(&base, &client).await;
+
+        // Bird 1 takes the tag.
+        let first: Bird = client
+            .post(format!("{base}/api/birds"))
+            .json(&create_bird_with_tag(lineage_id, Some("TAG-REUSE")))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(first.nfc_tag_id.as_deref(), Some("TAG-REUSE"));
+
+        // Bird 2 takes the SAME tag — should succeed (201), not 500.
+        let resp = client
+            .post(format!("{base}/api/birds"))
+            .json(&create_bird_with_tag(lineage_id, Some("TAG-REUSE")))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 201);
+        let second: Bird = resp.json().await.unwrap();
+        assert_eq!(second.nfc_tag_id.as_deref(), Some("TAG-REUSE"));
+
+        // Bird 1 must have had its tag cleared.
+        let first_after: Bird = reqwest::get(format!("{base}/api/birds"))
+            .await
+            .unwrap()
+            .json::<Vec<Bird>>()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|b| b.id == first.id)
+            .unwrap();
+        assert_eq!(first_after.nfc_tag_id, None);
+    }
+
+    #[tokio::test]
+    async fn update_bird_reassigns_tag_from_another_bird() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let lineage_id = seed_lineage(&base, &client).await;
+
+        let owner: Bird = client
+            .post(format!("{base}/api/birds"))
+            .json(&create_bird_with_tag(lineage_id, Some("TAG-MOVE")))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let other: Bird = client
+            .post(format!("{base}/api/birds"))
+            .json(&create_bird_with_tag(lineage_id, None))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        // Move TAG-MOVE from `owner` to `other` via PUT.
+        let resp = client
+            .put(format!("{base}/api/birds/{}", other.id))
+            .json(&json!({ "nfc_tag_id": "TAG-MOVE" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let all: Vec<Bird> = reqwest::get(format!("{base}/api/birds"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let owner_after = all.iter().find(|b| b.id == owner.id).unwrap();
+        let other_after = all.iter().find(|b| b.id == other.id).unwrap();
+        assert_eq!(owner_after.nfc_tag_id, None);
+        assert_eq!(other_after.nfc_tag_id.as_deref(), Some("TAG-MOVE"));
+    }
+
+    #[tokio::test]
+    async fn update_bird_keeps_same_tag_on_same_bird() {
+        // No-op path: re-PUTting the same tag onto the same bird must not
+        // clear it (the `except_id` guard).
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let lineage_id = seed_lineage(&base, &client).await;
+
+        let bird: Bird = client
+            .post(format!("{base}/api/birds"))
+            .json(&create_bird_with_tag(lineage_id, Some("TAG-SAME")))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        let resp = client
+            .put(format!("{base}/api/birds/{}", bird.id))
+            .json(&json!({ "nfc_tag_id": "TAG-SAME" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let after: Vec<Bird> = reqwest::get(format!("{base}/api/birds"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let same = after.iter().find(|b| b.id == bird.id).unwrap();
+        assert_eq!(same.nfc_tag_id.as_deref(), Some("TAG-SAME"));
+    }
+
+    #[tokio::test]
+    async fn graduate_handler_reuses_tags_across_batches() {
+        // The graduate handler INSERTs birds with the same UNIQUE column —
+        // pin that it also clears prior owners so a second batch graduation
+        // can re-program the same physical tags.
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let lineage_id = seed_lineage(&base, &client).await;
+
+        // Owner of TAG-G claims it first via direct create.
+        client
+            .post(format!("{base}/api/birds"))
+            .json(&create_bird_with_tag(lineage_id, Some("TAG-G")))
+            .send()
+            .await
+            .unwrap();
+
+        // Now a chick group graduates a bird that wants TAG-G.
+        let group: ChickGroup = client
+            .post(format!("{base}/api/chick-groups"))
+            .json(&CreateChickGroup {
+                clutch_id: None,
+                brooder_id: None,
+                initial_count: 1,
+                hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                notes: None,
+                lineage_ids: vec![lineage_id],
+            })
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        let resp = client
+            .post(format!("{base}/api/chick-groups/{}/graduate", group.id))
+            .json(&GraduateRequest {
+                target_housing_id: None,
+                birds: vec![GraduateBird {
+                    sex: Sex::Female,
+                    band_color: None,
+                    nfc_tag_id: Some("TAG-G".into()),
+                    notes: None,
+                    weight_grams: None,
+                    photo_path: None,
+                }],
+            })
+            .send()
+            .await
+            .unwrap();
+        // Pre-fix this would have been a 500 on the second occupant.
+        assert_eq!(resp.status(), 200);
+
+        // The graduated bird ends up with the tag; the prior owner doesn't.
+        let all: Vec<Bird> = reqwest::get(format!("{base}/api/birds"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let with_tag: Vec<&Bird> = all
+            .iter()
+            .filter(|b| b.nfc_tag_id.as_deref() == Some("TAG-G"))
+            .collect();
+        assert_eq!(with_tag.len(), 1, "exactly one bird should own TAG-G");
+    }
+}

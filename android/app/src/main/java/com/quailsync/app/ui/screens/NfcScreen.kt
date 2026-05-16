@@ -288,7 +288,6 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
     private val _orphanTag = MutableStateFlow<OrphanTag?>(null)
     val orphanTag: StateFlow<OrphanTag?> = _orphanTag.asStateFlow()
 
-    private val _batchPausedForConflict = MutableStateFlow(false)
 
     init { loadData() }
 
@@ -360,44 +359,63 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
         }
     }
 
+    /**
+     * Resolves a conflict from the *standalone* NFC screen's dialog. Batch
+     * flows never reach this path — they go through `autoOverwriteForBatch`
+     * directly from `MainActivity.handleNfcIntent`, so no batch-resume
+     * branching is needed here.
+     */
     fun confirmOverwrite() {
-        val wasBatchPaused = _batchPausedForConflict.value
-        val conflict = nfcService.pendingConflict.value
-        val stateBefore = _batchState.value
-        val success = nfcService.confirmOverwrite()
+        nfcService.confirmOverwrite()
         _conflictBird.value = null
-        _batchPausedForConflict.value = false
-        if (wasBatchPaused && conflict != null) {
-            // Route the resumed-write notification to whichever batch step
-            // was paused. AwaitingTagScan needs onBatchTagScanned (which
-            // doesn't take a success flag — it advances regardless on
-            // success; on failure we just stay in scan state).
-            when (stateBefore) {
-                is BatchState.AwaitingTagScan -> if (success) onBatchTagScanned(conflict.tagId)
-                is BatchState.AwaitingTagWrite -> onBatchTagWritten(conflict.tagId, success)
-                else -> { /* not a batch path — nothing to resume */ }
-            }
-        }
     }
 
+    /**
+     * Standalone counterpart to `confirmOverwrite`. Batch flows never invoke
+     * this either; the auto-overwrite path doesn't surface a user dialog.
+     */
     fun cancelOverwrite() {
         nfcService.cancelOverwrite()
         _conflictBird.value = null
-        if (_batchPausedForConflict.value) {
-            _batchPausedForConflict.value = false
-            // Re-arm write mode with the appropriate payload so the user
-            // can tap a different tag.
-            when (val state = _batchState.value) {
-                is BatchState.AwaitingTagWrite ->
-                    nfcService.enterWriteMode("BIRD-${state.pendingBird.id}")
-                is BatchState.AwaitingTagScan ->
-                    nfcService.enterWriteMode("QS-L${state.lineageId}")
-                else -> { /* not a batch path */ }
-            }
-        }
     }
 
-    fun setBatchPausedForConflict(paused: Boolean) { _batchPausedForConflict.value = paused }
+    /**
+     * Resolve a tag-write conflict immediately without surfacing the user
+     * confirmation dialog. Called from `MainActivity.handleNfcIntent` when a
+     * conflict is detected while the batch is in `AwaitingTagScan` /
+     * `AwaitingTagWrite` — the user is mid-batch and every tag tap is
+     * expected to write, so pausing for "overwrite?" confirmation breaks
+     * the flow and (because the conflict resolution screen used to surface a
+     * generic "Failed to write" banner) reads like a hard failure.
+     *
+     * Runs synchronously while `NfcService.pendingConflict` and the cached
+     * `conflictTag` reference are still fresh from the just-returned
+     * `WriteAttemptResult.Conflict`. On success we dispatch to the regular
+     * batch handler (`onBatchTagScanned` / `onBatchTagWritten`); on failure
+     * `NfcService.confirmOverwrite` sets `_writeResult` to "Tag lost — tap
+     * the tag again", which `BatchAwaitingScanScreen` already renders, so
+     * no toast is needed.
+     */
+    fun autoOverwriteForBatch(conflict: TagConflict): Boolean {
+        Log.d(
+            "QuailSync",
+            "Batch: auto-overwriting tag ${conflict.tagId}, old=${conflict.existingPayload}, new=${conflict.pendingWriteData}",
+        )
+        val stateBefore = _batchState.value
+        val success = nfcService.confirmOverwrite()
+        // Conflict-bird state was never populated for the auto path (we
+        // skipped lookupConflictBird), but clear defensively in case a
+        // previous standalone-flow dialog left it set.
+        _conflictBird.value = null
+        if (success) {
+            when (stateBefore) {
+                is BatchState.AwaitingTagScan -> onBatchTagScanned(conflict.tagId)
+                is BatchState.AwaitingTagWrite -> onBatchTagWritten(conflict.tagId, true)
+                else -> { /* batch left state mid-resolve — drop quietly */ }
+            }
+        }
+        return success
+    }
 
     // --- Batch graduation ---
     //

@@ -10,6 +10,8 @@ import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.nfc.tech.Ndef
 import android.nfc.tech.NdefFormatable
+import android.os.Build
+import android.os.Parcelable
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -125,7 +127,15 @@ class NfcService {
             action != NfcAdapter.ACTION_TECH_DISCOVERED
         ) return null
 
-        val tag = intent.getParcelableExtra<Tag>(NfcAdapter.EXTRA_TAG) ?: return null
+        // getParcelableExtra(name) was deprecated in API 33 (Tiramisu) in
+        // favour of the typed (name, class) overload. Our minSdk is 26 so we
+        // keep the legacy call on older devices and switch on Tiramisu+.
+        val tag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(NfcAdapter.EXTRA_TAG, Tag::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra<Tag>(NfcAdapter.EXTRA_TAG)
+        } ?: return null
         val tagId = tag.id.joinToString("") { "%02X".format(it) }
         Log.d("QuailSync", "NFC tag scanned: id=$tagId action=$action")
 
@@ -287,8 +297,18 @@ class NfcService {
     }
 
     private fun readNdefPayload(intent: Intent): String? {
-        val rawMessages = intent.getParcelableArrayExtra(NfcAdapter.EXTRA_NDEF_MESSAGES)
-            ?: return null
+        // Same Tiramisu deprecation story as getParcelableExtra above —
+        // typed overload only exists on API 33+. Array<NdefMessage> on the
+        // new path projects cleanly to Array<out Parcelable> via Kotlin's
+        // `out` variance, so no cast or unchecked-suppression is needed
+        // to unify the two branches.
+        val rawMessages: Array<out Parcelable>? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableArrayExtra(NfcAdapter.EXTRA_NDEF_MESSAGES, NdefMessage::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableArrayExtra(NfcAdapter.EXTRA_NDEF_MESSAGES)
+        }
+        rawMessages ?: return null
         return rawMessages.filterIsInstance<NdefMessage>()
             .flatMap { it.records.toList() }
             .firstOrNull { it.tnf == NdefRecord.TNF_WELL_KNOWN || it.tnf == NdefRecord.TNF_MIME_MEDIA }
@@ -305,41 +325,81 @@ class NfcService {
             }
     }
 
+    /**
+     * Writes `text` to the tag as an NDEF text record. Handles two tag states:
+     *  - **Already NDEF-formatted** (`Ndef.get(tag) != null`): connect and
+     *    write the message directly. This is the common case once a tag has
+     *    been programmed at least once.
+     *  - **Blank / un-formatted** (`Ndef.get(tag) == null` but
+     *    `NdefFormatable.get(tag) != null`): the factory state for most fresh
+     *    NTAG / Mifare tags. `format(message)` writes the NDEF capability
+     *    container AND the message in one round-trip, so we never need a
+     *    separate "format then write" second tap.
+     *
+     * Returns `false` on hardware failure, read-only tag, or an unsupported
+     * tag tech. The caller surfaces the message in `_writeResult` so the
+     * batch screen's banner can guide the user.
+     */
     private fun writeNdefText(tag: Tag, text: String): Boolean {
         val record = NdefRecord.createTextRecord("en", text)
         val message = NdefMessage(arrayOf(record))
+        val ndef = Ndef.get(tag)
+        return if (ndef != null) {
+            writeToFormattedNdef(ndef, message, text)
+        } else {
+            writeToBlankTag(tag, message, text)
+        }
+    }
 
+    /** Path for tags already carrying an NDEF capability container. */
+    private fun writeToFormattedNdef(ndef: Ndef, message: NdefMessage, text: String): Boolean {
         return try {
-            val ndef = Ndef.get(tag)
-            if (ndef != null) {
-                ndef.connect()
-                if (!ndef.isWritable) {
-                    Log.e("QuailSync", "NFC tag is read-only")
-                    ndef.close()
-                    return false
-                }
-                ndef.writeNdefMessage(message)
+            ndef.connect()
+            if (!ndef.isWritable) {
+                Log.e("QuailSync", "NFC tag is read-only — cannot write '$text'")
                 ndef.close()
-                Log.d("QuailSync", "NFC write success: $text")
-                true
-            } else {
-                val formatable = NdefFormatable.get(tag)
-                if (formatable != null) {
-                    formatable.connect()
-                    formatable.format(message)
-                    formatable.close()
-                    Log.d("QuailSync", "NFC format+write success: $text")
-                    true
-                } else {
-                    Log.e("QuailSync", "Tag doesn't support NDEF")
-                    false
-                }
+                return false
             }
+            ndef.writeNdefMessage(message)
+            ndef.close()
+            Log.d("QuailSync", "NFC write success (Ndef path): $text")
+            true
         } catch (e: IOException) {
-            Log.e("QuailSync", "NFC write error", e)
+            Log.e("QuailSync", "NFC write error (Ndef path) — tag may have left field", e)
             false
         } catch (e: Exception) {
-            Log.e("QuailSync", "NFC write error", e)
+            Log.e("QuailSync", "NFC write error (Ndef path)", e)
+            false
+        }
+    }
+
+    /**
+     * Path for blank tags: try NdefFormatable, which writes the capability
+     * container and the message atomically. Logs distinguish "tag doesn't
+     * support NDEF at all" (a non-NFC-Forum tag the app can't use) from
+     * transient I/O errors so the batch screen can show the right hint.
+     */
+    private fun writeToBlankTag(tag: Tag, message: NdefMessage, text: String): Boolean {
+        val formatable = NdefFormatable.get(tag)
+        if (formatable == null) {
+            Log.e(
+                "QuailSync",
+                "Tag doesn't support NDEF (neither Ndef nor NdefFormatable) — " +
+                    "techs=${tag.techList.joinToString(",")}",
+            )
+            return false
+        }
+        return try {
+            formatable.connect()
+            formatable.format(message)
+            formatable.close()
+            Log.d("QuailSync", "NFC format+write success (NdefFormatable path, blank tag): $text")
+            true
+        } catch (e: IOException) {
+            Log.e("QuailSync", "NFC format error — tag may have left field before format completed", e)
+            false
+        } catch (e: Exception) {
+            Log.e("QuailSync", "NFC format error (NdefFormatable path)", e)
             false
         }
     }

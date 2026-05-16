@@ -203,14 +203,33 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 is NfcService.WriteAttemptResult.Conflict -> {
-                    nfcViewModel.lookupConflictBird(writeAttempt.conflict)
-                    if (wasBatchWriting || wasBatchScanning) nfcViewModel.setBatchPausedForConflict(true)
+                    if (wasBatchScanning || wasBatchWriting) {
+                        // Batch flow: the user committed to re-tagging every
+                        // bird, so any tag with leftover BIRD-/QS- payload from
+                        // a prior session should be silently overwritten. The
+                        // older confirmation-dialog path showed a transient
+                        // "Failed to write to tag" banner during the
+                        // confirm round-trip, which read like a real failure
+                        // even though the eventual write succeeded.
+                        nfcViewModel.autoOverwriteForBatch(writeAttempt.conflict)
+                    } else {
+                        // Standalone NFC screen keeps the dialog — a stray
+                        // tap on someone else's tag should not silently
+                        // clobber that bird's association.
+                        nfcViewModel.lookupConflictBird(writeAttempt.conflict)
+                    }
                 }
                 is NfcService.WriteAttemptResult.Failed -> {
-                    Toast.makeText(this, writeAttempt.message, Toast.LENGTH_SHORT).show()
-                    // For AwaitingTagScan we stay put — the user can retry
-                    // or hit "Skip NFC". For the legacy AwaitingTagWrite path
-                    // we explicitly notify so it can fall back to retry.
+                    // Toast is redundant during AwaitingTagScan — that
+                    // screen already surfaces the writeResult banner — and
+                    // its appearance during a transient hardware miss in
+                    // the batch flow reads like a hard failure to the user.
+                    // Keep the toast for the legacy AwaitingTagWrite path
+                    // and the standalone NFC screen where there's no other
+                    // error surface.
+                    if (!wasBatchScanning) {
+                        Toast.makeText(this, writeAttempt.message, Toast.LENGTH_SHORT).show()
+                    }
                     if (wasBatchWriting) nfcViewModel.onBatchTagWritten(scanResult.tagId, false)
                 }
             }

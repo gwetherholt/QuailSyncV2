@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Tech filter for android.nfc.action.TECH_DISCOVERED. Required by the manifest
+  `<meta-data android:name="android.nfc.action.TECH_DISCOVERED" ... />` entry —
+  the OS uses this list to decide which tag techs route to this activity when
+  the activity isn't already on top.
+
+  Mirrors the runtime tech-list passed to NfcAdapter.enableForegroundDispatch
+  in NfcService — Ndef for tags already NDEF-formatted (the common case after
+  one programming pass), NdefFormatable for fresh blank tags from the
+  factory which trigger ACTION_TECH_DISCOVERED rather than ACTION_NDEF_DISCOVERED.
+-->
+<resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+    <tech-list>
+        <tech>android.nfc.tech.Ndef</tech>
+    </tech-list>
+    <tech-list>
+        <tech>android.nfc.tech.NdefFormatable</tech>
+    </tech-list>
+</resources>

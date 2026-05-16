@@ -323,8 +323,6 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
     var showAddBird by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
-    val lineageMap = remember(lineages) { lineages.associateBy { it.id } }
-
     val filteredBirds = remember(birds, selectedFilter) {
         when (selectedFilter) {
             FlockFilter.Active -> birds.filter { it.status?.lowercase() == "active" }

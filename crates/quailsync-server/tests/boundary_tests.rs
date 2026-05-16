@@ -357,11 +357,16 @@ async fn bird_nonexistent_lineage_panics() {
 
 #[tokio::test]
 async fn bird_duplicate_nfc_tag_id() {
+    // Behaviour change (was: 500 from UNIQUE constraint). The batch
+    // graduation flow physically re-uses NFC tags across sessions, so
+    // POST /api/birds now reassigns a duplicate tag from its prior owner
+    // to the new bird and returns 201. The prior owner's nfc_tag_id is
+    // cleared to NULL. See `clear_nfc_tag_from_others` and the dedicated
+    // reassignment tests in api_tests.rs::nfc_tag_reassignment_tests.
     let base = spawn_test_server().await;
     let bl = seed_lineage(&base).await;
     let tag = "QUAIL-ABC123";
 
-    // First bird with this tag — should succeed
     let resp = client()
         .post(format!("{base}/api/birds"))
         .json(&json!({
@@ -377,7 +382,7 @@ async fn bird_duplicate_nfc_tag_id() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED);
 
-    // Second bird with same tag — should fail (UNIQUE constraint)
+    // Second bird with the same tag now succeeds — reassignment, not error.
     let resp2 = client()
         .post(format!("{base}/api/birds"))
         .json(&json!({
@@ -391,12 +396,7 @@ async fn bird_duplicate_nfc_tag_id() {
         .send()
         .await
         .unwrap();
-    // Due to unwrap(), this panics with 500. Documenting behavior.
-    let status = resp2.status();
-    assert!(
-        status == StatusCode::INTERNAL_SERVER_ERROR || status == StatusCode::CONFLICT,
-        "Expected 500 (current: unwrap panic) or 409 (ideal), got {status}"
-    );
+    assert_eq!(resp2.status(), StatusCode::CREATED);
 }
 
 // ===========================================================================

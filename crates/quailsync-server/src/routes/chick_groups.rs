@@ -355,6 +355,13 @@ pub(crate) async fn graduate_chick_group(
 
     let mut birds_created = Vec::new();
     for gb in &body.birds {
+        // Re-tagging guard: tags reused from prior batches must lose their
+        // old owner before this INSERT, otherwise UNIQUE(nfc_tag_id) fires
+        // mid-batch and bricks the rest of the loop with a 500. Mirrors
+        // the same guard in routes/birds.rs::create_bird.
+        if let Some(ref tag) = gb.nfc_tag_id {
+            clear_nfc_tag_from_others(&conn, tag, None);
+        }
         if let Err(e) = conn.execute(
             "INSERT INTO birds (band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path, housing_id, chick_group_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'Active', ?7, ?8, ?9, ?10, ?11, ?12)",

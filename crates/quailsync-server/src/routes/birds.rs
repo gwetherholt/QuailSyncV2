@@ -21,6 +21,14 @@ pub(crate) async fn create_bird(
             .into_response();
     }
     let conn = acquire_db(&state);
+    // Re-tagging guard: NFC tags get re-used across batches. If this tag is
+    // already on another bird, clear it from that bird first so our INSERT
+    // doesn't trip the UNIQUE(nfc_tag_id) constraint and surface as a 500.
+    // The cleared bird's tag goes to NULL — they'll get a fresh tag the
+    // next time someone bands them.
+    if let Some(ref tag) = body.nfc_tag_id {
+        clear_nfc_tag_from_others(&conn, tag, None);
+    }
     if let Err(e) = conn.execute(
         "INSERT INTO birds (band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, chick_group_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -117,6 +125,11 @@ pub(crate) async fn update_bird(
         }
     }
     if let Some(ref nfc) = body.nfc_tag_id {
+        // Same re-tagging guard as create_bird — clear the tag from any
+        // OTHER bird that currently holds it, then set it on this bird.
+        // `Some(id)` excludes the bird we're about to update so writing the
+        // same tag back to the same bird is a clean no-op, not a clear.
+        clear_nfc_tag_from_others(&conn, nfc, Some(id));
         if let Err(e) = conn.execute(
             "UPDATE birds SET nfc_tag_id = ?1 WHERE id = ?2",
             params![nfc, id],

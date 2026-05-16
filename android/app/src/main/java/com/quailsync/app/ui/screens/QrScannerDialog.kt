@@ -136,6 +136,7 @@ private fun CameraPreviewWithScanner(onQrScanned: (String) -> Unit) {
                 .build()
             val scanner = BarcodeScanning.getClient(options)
 
+            @Suppress("DEPRECATION") // setTargetResolution deprecated in CameraX 1.3+ — fine for our static QR-scan use case
             val analysis = ImageAnalysis.Builder()
                 .setTargetResolution(Size(1280, 720))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
