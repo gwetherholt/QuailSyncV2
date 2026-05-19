@@ -151,6 +151,7 @@ pub(crate) async fn restore(State(state): State<AppState>) -> axum::response::Re
 /// backup file, or zero-byte stub). The caller short-circuits before
 /// touching the live DB, so a botched backup never leaves the database
 /// half-wiped.
+#[allow(clippy::result_large_err)]
 fn back_up_to_production(conn: &Connection) -> Result<(), axum::response::Response> {
     if std::path::Path::new(BACKUP_PATH).exists() {
         // Even when we're preserving an existing backup, verify it's not
@@ -179,6 +180,7 @@ fn back_up_to_production(conn: &Connection) -> Result<(), axum::response::Respon
 /// Treating it as a valid backup would mean a later Restore loads an empty
 /// DB and silently wipes the live data. Removing the stub here lets the
 /// next attempt run VACUUM INTO from a clean slate.
+#[allow(clippy::result_large_err)]
 fn verify_backup_file() -> Result<(), axum::response::Response> {
     let path = std::path::Path::new(BACKUP_PATH);
     match std::fs::metadata(path) {
@@ -332,8 +334,16 @@ fn insert_basic_seed_inner(conn: &Connection) -> rusqlite::Result<()> {
 
     // --- Lineages (5) ---
     let lineage_names = [
-        ("Pharaoh", "Stromberg's 2024", "Foundation flock — fast growth"),
-        ("Texas A&M", "University stock 2024", "White-feathered meat line"),
+        (
+            "Pharaoh",
+            "Stromberg's 2024",
+            "Foundation flock — fast growth",
+        ),
+        (
+            "Texas A&M",
+            "University stock 2024",
+            "White-feathered meat line",
+        ),
         ("Italian", "Hatchery Direct", "Goldspeckled, dual-purpose"),
         ("English White", "Private breeder", "Display line"),
         ("Tibetan", "Imported 2023", "Dark plumage, hardy"),
@@ -350,11 +360,51 @@ fn insert_basic_seed_inner(conn: &Connection) -> rusqlite::Result<()> {
     // --- Housing (5) ---
     // (name, lineage_id, life_stage, qr_code, notes, housing_type, camera_url)
     let housing = [
-        ("Incubator 1", None, "Chick", "INC-01", Some("Main hatchery incubator"), "incubator", None),
-        ("Brooder 1", Some(pharaoh), "Chick", "BRD-01", Some("Camera-equipped"), "brooder", Some("rtsp://192.168.1.50:8554/cam1")),
-        ("Brooder 2", Some(texas), "Chick", "BRD-02", None, "brooder", None),
-        ("Hutch A", Some(pharaoh), "Adult", "HUT-A", Some("South barn"), "hutch", None),
-        ("Hutch B", Some(italian), "Adult", "HUT-B", Some("North barn"), "hutch", None),
+        (
+            "Incubator 1",
+            None,
+            "Chick",
+            "INC-01",
+            Some("Main hatchery incubator"),
+            "incubator",
+            None,
+        ),
+        (
+            "Brooder 1",
+            Some(pharaoh),
+            "Chick",
+            "BRD-01",
+            Some("Camera-equipped"),
+            "brooder",
+            Some("rtsp://192.168.1.50:8554/cam1"),
+        ),
+        (
+            "Brooder 2",
+            Some(texas),
+            "Chick",
+            "BRD-02",
+            None,
+            "brooder",
+            None,
+        ),
+        (
+            "Hutch A",
+            Some(pharaoh),
+            "Adult",
+            "HUT-A",
+            Some("South barn"),
+            "hutch",
+            None,
+        ),
+        (
+            "Hutch B",
+            Some(italian),
+            "Adult",
+            "HUT-B",
+            Some("North barn"),
+            "hutch",
+            None,
+        ),
     ];
     for (name, lineage_id, stage, qr, notes, htype, camera) in &housing {
         conn.execute(
@@ -385,13 +435,49 @@ fn insert_basic_seed_inner(conn: &Connection) -> rusqlite::Result<()> {
     // (clutch_id, brooder_id, initial_count, current_count, hatch_date, status, notes, housing_id)
     let groups = [
         // 1: incubating — eggs still in incubator, no hatch yet (hatch_date in the future)
-        (Some(clutch_incubating), Some(incubator_1), 24, 24, ymd(-6), "Active", "Awaiting hatch", None),
+        (
+            Some(clutch_incubating),
+            Some(incubator_1),
+            24,
+            24,
+            ymd(-6),
+            "Active",
+            "Awaiting hatch",
+            None,
+        ),
         // 2: active in brooder (recently hatched)
-        (Some(clutch_hatched), Some(brooder_1), 25, 23, ymd(12), "Active", "2 mortality day 3", None),
+        (
+            Some(clutch_hatched),
+            Some(brooder_1),
+            25,
+            23,
+            ymd(12),
+            "Active",
+            "2 mortality day 3",
+            None,
+        ),
         // 3: ready to graduate (older, in second brooder)
-        (None, Some(brooder_2), 18, 17, ymd(35), "Active", "Banding scheduled", None),
+        (
+            None,
+            Some(brooder_2),
+            18,
+            17,
+            ymd(35),
+            "Active",
+            "Banding scheduled",
+            None,
+        ),
         // 4: graduated, housed in hutch
-        (None, None, 14, 14, ymd(70), "Graduated", "Moved to Hutch A", Some(hutch_a)),
+        (
+            None,
+            None,
+            14,
+            14,
+            ymd(70),
+            "Graduated",
+            "Moved to Hutch A",
+            Some(hutch_a),
+        ),
     ];
     for (clutch_id, brooder_id, initial, current, hatch, status, notes, housing_id) in &groups {
         conn.execute(
@@ -441,53 +527,188 @@ fn insert_basic_seed_inner(conn: &Connection) -> rusqlite::Result<()> {
     }
     let birds = vec![
         // --- Adults in Hutch A (Pharaoh foundation pair + 2 hens) ---
-        B { band: Some("Red"), sex: "Male", hatch_offset: 180, status: "Active",
-            nfc: Some("04A1B2C3D4E5F6"), current_brooder: None, housing: Some(hutch_a),
-            chick_group: None, lineages: vec![pharaoh], notes: Some("Foundation male") },
-        B { band: Some("Blue"), sex: "Female", hatch_offset: 180, status: "Active",
-            nfc: Some("04A1B2C3D4E501"), current_brooder: None, housing: Some(hutch_a),
-            chick_group: None, lineages: vec![pharaoh], notes: None },
-        B { band: Some("Blue"), sex: "Female", hatch_offset: 175, status: "Active",
-            nfc: None, current_brooder: None, housing: Some(hutch_a),
-            chick_group: None, lineages: vec![pharaoh], notes: None },
-        B { band: Some("Yellow"), sex: "Female", hatch_offset: 160, status: "Active",
-            nfc: Some("04A1B2C3D4E502"), current_brooder: None, housing: Some(hutch_a),
-            chick_group: None, lineages: vec![pharaoh, texas], notes: Some("Multi-lineage cross") },
+        B {
+            band: Some("Red"),
+            sex: "Male",
+            hatch_offset: 180,
+            status: "Active",
+            nfc: Some("04A1B2C3D4E5F6"),
+            current_brooder: None,
+            housing: Some(hutch_a),
+            chick_group: None,
+            lineages: vec![pharaoh],
+            notes: Some("Foundation male"),
+        },
+        B {
+            band: Some("Blue"),
+            sex: "Female",
+            hatch_offset: 180,
+            status: "Active",
+            nfc: Some("04A1B2C3D4E501"),
+            current_brooder: None,
+            housing: Some(hutch_a),
+            chick_group: None,
+            lineages: vec![pharaoh],
+            notes: None,
+        },
+        B {
+            band: Some("Blue"),
+            sex: "Female",
+            hatch_offset: 175,
+            status: "Active",
+            nfc: None,
+            current_brooder: None,
+            housing: Some(hutch_a),
+            chick_group: None,
+            lineages: vec![pharaoh],
+            notes: None,
+        },
+        B {
+            band: Some("Yellow"),
+            sex: "Female",
+            hatch_offset: 160,
+            status: "Active",
+            nfc: Some("04A1B2C3D4E502"),
+            current_brooder: None,
+            housing: Some(hutch_a),
+            chick_group: None,
+            lineages: vec![pharaoh, texas],
+            notes: Some("Multi-lineage cross"),
+        },
         // --- Adults in Hutch B (Italian + crosses) ---
-        B { band: Some("Green"), sex: "Male", hatch_offset: 200, status: "Active",
-            nfc: Some("04A1B2C3D4E503"), current_brooder: None, housing: Some(hutch_b),
-            chick_group: None, lineages: vec![italian], notes: None },
-        B { band: Some("Orange"), sex: "Female", hatch_offset: 195, status: "Active",
-            nfc: Some("04A1B2C3D4E504"), current_brooder: None, housing: Some(hutch_b),
-            chick_group: None, lineages: vec![italian, english], notes: None },
-        B { band: Some("Orange"), sex: "Female", hatch_offset: 190, status: "Active",
-            nfc: None, current_brooder: None, housing: Some(hutch_b),
-            chick_group: None, lineages: vec![italian], notes: None },
-        B { band: Some("White"), sex: "Male", hatch_offset: 220, status: "Active",
-            nfc: Some("04A1B2C3D4E505"), current_brooder: None, housing: Some(hutch_b),
-            chick_group: None, lineages: vec![english], notes: Some("Retired breeder") },
+        B {
+            band: Some("Green"),
+            sex: "Male",
+            hatch_offset: 200,
+            status: "Active",
+            nfc: Some("04A1B2C3D4E503"),
+            current_brooder: None,
+            housing: Some(hutch_b),
+            chick_group: None,
+            lineages: vec![italian],
+            notes: None,
+        },
+        B {
+            band: Some("Orange"),
+            sex: "Female",
+            hatch_offset: 195,
+            status: "Active",
+            nfc: Some("04A1B2C3D4E504"),
+            current_brooder: None,
+            housing: Some(hutch_b),
+            chick_group: None,
+            lineages: vec![italian, english],
+            notes: None,
+        },
+        B {
+            band: Some("Orange"),
+            sex: "Female",
+            hatch_offset: 190,
+            status: "Active",
+            nfc: None,
+            current_brooder: None,
+            housing: Some(hutch_b),
+            chick_group: None,
+            lineages: vec![italian],
+            notes: None,
+        },
+        B {
+            band: Some("White"),
+            sex: "Male",
+            hatch_offset: 220,
+            status: "Active",
+            nfc: Some("04A1B2C3D4E505"),
+            current_brooder: None,
+            housing: Some(hutch_b),
+            chick_group: None,
+            lineages: vec![english],
+            notes: Some("Retired breeder"),
+        },
         // --- Chicks linked to chick groups (current_brooder set, housing null) ---
-        B { band: None, sex: "Unknown", hatch_offset: 12, status: "Active",
-            nfc: None, current_brooder: Some(brooder_1), housing: None,
-            chick_group: Some(cg_brooder), lineages: vec![texas], notes: None },
-        B { band: None, sex: "Unknown", hatch_offset: 12, status: "Active",
-            nfc: None, current_brooder: Some(brooder_1), housing: None,
-            chick_group: Some(cg_brooder), lineages: vec![texas], notes: None },
-        B { band: None, sex: "Unknown", hatch_offset: 12, status: "Active",
-            nfc: None, current_brooder: Some(brooder_1), housing: None,
-            chick_group: Some(cg_brooder), lineages: vec![texas, italian], notes: None },
-        B { band: None, sex: "Unknown", hatch_offset: 35, status: "Active",
-            nfc: None, current_brooder: Some(brooder_2), housing: None,
-            chick_group: Some(cg_ready), lineages: vec![english], notes: None },
-        B { band: None, sex: "Unknown", hatch_offset: 35, status: "Active",
-            nfc: None, current_brooder: Some(brooder_2), housing: None,
-            chick_group: Some(cg_ready), lineages: vec![english], notes: None },
-        B { band: Some("Pink"), sex: "Female", hatch_offset: 70, status: "Active",
-            nfc: Some("04A1B2C3D4E506"), current_brooder: None, housing: Some(hutch_a),
-            chick_group: Some(cg_graduated), lineages: vec![tibetan], notes: Some("First-gen Tibetan") },
-        B { band: Some("Pink"), sex: "Male", hatch_offset: 70, status: "Active",
-            nfc: None, current_brooder: None, housing: Some(hutch_a),
-            chick_group: Some(cg_graduated), lineages: vec![tibetan, pharaoh], notes: None },
+        B {
+            band: None,
+            sex: "Unknown",
+            hatch_offset: 12,
+            status: "Active",
+            nfc: None,
+            current_brooder: Some(brooder_1),
+            housing: None,
+            chick_group: Some(cg_brooder),
+            lineages: vec![texas],
+            notes: None,
+        },
+        B {
+            band: None,
+            sex: "Unknown",
+            hatch_offset: 12,
+            status: "Active",
+            nfc: None,
+            current_brooder: Some(brooder_1),
+            housing: None,
+            chick_group: Some(cg_brooder),
+            lineages: vec![texas],
+            notes: None,
+        },
+        B {
+            band: None,
+            sex: "Unknown",
+            hatch_offset: 12,
+            status: "Active",
+            nfc: None,
+            current_brooder: Some(brooder_1),
+            housing: None,
+            chick_group: Some(cg_brooder),
+            lineages: vec![texas, italian],
+            notes: None,
+        },
+        B {
+            band: None,
+            sex: "Unknown",
+            hatch_offset: 35,
+            status: "Active",
+            nfc: None,
+            current_brooder: Some(brooder_2),
+            housing: None,
+            chick_group: Some(cg_ready),
+            lineages: vec![english],
+            notes: None,
+        },
+        B {
+            band: None,
+            sex: "Unknown",
+            hatch_offset: 35,
+            status: "Active",
+            nfc: None,
+            current_brooder: Some(brooder_2),
+            housing: None,
+            chick_group: Some(cg_ready),
+            lineages: vec![english],
+            notes: None,
+        },
+        B {
+            band: Some("Pink"),
+            sex: "Female",
+            hatch_offset: 70,
+            status: "Active",
+            nfc: Some("04A1B2C3D4E506"),
+            current_brooder: None,
+            housing: Some(hutch_a),
+            chick_group: Some(cg_graduated),
+            lineages: vec![tibetan],
+            notes: Some("First-gen Tibetan"),
+        },
+        B {
+            band: Some("Pink"),
+            sex: "Male",
+            hatch_offset: 70,
+            status: "Active",
+            nfc: None,
+            current_brooder: None,
+            housing: Some(hutch_a),
+            chick_group: Some(cg_graduated),
+            lineages: vec![tibetan, pharaoh],
+            notes: None,
+        },
     ];
     for b in &birds {
         conn.execute(
@@ -617,7 +838,9 @@ fn insert_stress_seed_inner(conn: &Connection) -> rusqlite::Result<()> {
         lcg = lcg.wrapping_mul(1664525).wrapping_add(1013904223);
         lcg
     };
-    let bands = ["Red", "Blue", "Yellow", "Green", "White", "Pink", "Orange", "Purple"];
+    let bands = [
+        "Red", "Blue", "Yellow", "Green", "White", "Pink", "Orange", "Purple",
+    ];
 
     for i in 0..60 {
         // 2-4 lineages per bird, drawn without replacement from the 10.

@@ -372,11 +372,7 @@ pub fn replace_bird_lineages(
 /// Errors during the query/update are swallowed: we'd rather let the
 /// subsequent INSERT/UPDATE surface a constraint error than blow up the
 /// caller on a transient SELECT failure.
-pub fn clear_nfc_tag_from_others(
-    conn: &Connection,
-    tag_id: &str,
-    except_id: Option<i64>,
-) {
+pub fn clear_nfc_tag_from_others(conn: &Connection, tag_id: &str, except_id: Option<i64>) {
     // Look up the prior owner (if any) so we can name it in the log line.
     // The query is also the existence check — if no other bird holds the
     // tag, we have nothing to do and skip the UPDATE entirely.
@@ -409,9 +405,9 @@ pub fn clear_nfc_tag_from_others(
     };
     if cleared.is_ok() {
         match except_id {
-            Some(new_id) => println!(
-                "[nfc] tag {tag_id} reassigned from bird {old_id} to bird {new_id}"
-            ),
+            Some(new_id) => {
+                println!("[nfc] tag {tag_id} reassigned from bird {old_id} to bird {new_id}")
+            }
             None => println!("[nfc] tag {tag_id} reassigned from bird {old_id} to new bird"),
         }
     }
