@@ -65,6 +65,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -345,6 +346,23 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
 
     fun startWriteMode(birdId: Int) { nfcService.enterWriteMode("BIRD-$birdId") }
     fun cancelWriteMode() { nfcService.cancelWriteMode() }
+
+    /**
+     * Dev-mode simulator: routes a synthetic scan through the same code
+     * path MainActivity.handleNfcIntent uses for real NFC intents, minus
+     * the hardware extraction step. Lets the developer-tools UI on
+     * NfcMainScreen exercise lookup / write / conflict branches without a
+     * physical tag. Never invoked in production (UI gated on 5x long-press).
+     */
+    fun simulateNfcScan(tagId: String, payload: String?) {
+        val (scanResult, attempt) = nfcService.simulateScan(tagId, payload)
+        when (attempt) {
+            is NfcService.WriteAttemptResult.Conflict -> lookupConflictBird(attempt.conflict)
+            is NfcService.WriteAttemptResult.Written -> lookupBirdByNfc(scanResult.tagId, scanResult.payload)
+            is NfcService.WriteAttemptResult.Failed -> { /* simulator never produces Failed */ }
+            null -> lookupBirdByNfc(scanResult.tagId, scanResult.payload)
+        }
+    }
 
     // --- Tag conflict handling ---
 
@@ -809,6 +827,9 @@ fun NfcMainScreen(nfcService: NfcService, viewModel: NfcViewModel) {
     val isAvailable by nfcService.isAvailable.collectAsState()
     val birds by viewModel.birds.collectAsState()
 
+    // Debug aid — surfaces NfcSimulatorCard for synthetic scans. Remove when no longer needed.
+    var simulatorEnabled by remember { mutableStateOf(false) }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -823,6 +844,16 @@ fun NfcMainScreen(nfcService: NfcService, viewModel: NfcViewModel) {
                     Text("Graduate Batch")
                 }
             }
+        }
+        item {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = simulatorEnabled, onCheckedChange = { simulatorEnabled = it })
+                Spacer(Modifier.width(8.dp))
+                Text("NFC simulator (debug)", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        if (simulatorEnabled) {
+            item { NfcSimulatorCard(viewModel) }
         }
         if (!isAvailable) {
             item {
@@ -855,6 +886,78 @@ fun NfcMainScreen(nfcService: NfcService, viewModel: NfcViewModel) {
             items(scanHistory.drop(1)) { NfcHistoryItem(it) }
         }
         item { Spacer(Modifier.height(8.dp)) }
+    }
+}
+
+// =====================================================================
+// NFC tag simulator (debug — toggled via the switch above the scan area)
+// =====================================================================
+
+/**
+ * Three buttons that drive `viewModel.simulateNfcScan(tagId, payload)`,
+ * which routes through the same lookup / write / conflict branches a real
+ * NFC intent would take. Only rendered when the developer has flipped the
+ * simulator toggle on the NFC screen.
+ *
+ * - **Blank**: synthetic tag with no payload. Read path → "no bird found".
+ *   In write mode → immediate "successful" simulated write of the active
+ *   payload.
+ * - **Written (BIRD-1)**: synthetic tag claiming BIRD-1. Read path → bird
+ *   lookup (or orphan dialog if no bird id=1). In write mode → conflict
+ *   dialog because the simulated payload differs from the active write.
+ * - **Duplicate**: synthetic tag with the SAME payload as the active
+ *   write. Read path → bird lookup. In write mode → no conflict (the
+ *   service treats matching payloads as a no-op success).
+ */
+@Composable
+fun NfcSimulatorCard(viewModel: NfcViewModel) {
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1)),
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Info, null, tint = Color(0xFF6D4C00), modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "NFC Simulator (debug)",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFF6D4C00),
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Injects synthetic taps through the same pipeline a real tag would. " +
+                    "Behavior depends on whether write mode is active.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedButton(
+                    onClick = { viewModel.simulateNfcScan("04SIMBLNK000001", null) },
+                    modifier = Modifier.weight(1f),
+                ) { Text("Blank", fontSize = 12.sp) }
+                OutlinedButton(
+                    onClick = { viewModel.simulateNfcScan("04SIMWRIT000001", "BIRD-1") },
+                    modifier = Modifier.weight(1f),
+                ) { Text("Written", fontSize = 12.sp) }
+                OutlinedButton(
+                    onClick = {
+                        // "Duplicate" only meaningfully differs from "Written" in
+                        // write mode: it tags with the active pendingWriteData so
+                        // the conflict check sees a match and the write is a no-op
+                        // success. Outside write mode, we still pick a BIRD-X
+                        // payload so the lookup path runs.
+                        val payload = viewModel.nfcService.pendingWriteData.value ?: "BIRD-1"
+                        viewModel.simulateNfcScan("04SIMDUPE000001", payload)
+                    },
+                    modifier = Modifier.weight(1f),
+                ) { Text("Duplicate", fontSize = 12.sp) }
+            }
+        }
     }
 }
 

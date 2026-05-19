@@ -61,7 +61,7 @@ async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
 pub fn build_app(state: AppState) -> Router {
     use routes::*;
 
-    Router::new()
+    let router = Router::new()
         .route("/health", get(telemetry::health))
         .route("/metrics", get(metrics_handler))
         .route("/ws", get(ws::ws_handler))
@@ -254,7 +254,26 @@ pub fn build_app(state: AppState) -> Router {
         )
         .route("/api/backup", axum::routing::post(backup::create_backup))
         .route("/api/backups", get(backup::list_backups))
-        .route("/api/restore", axum::routing::post(backup::restore_backup))
+        .route("/api/restore", axum::routing::post(backup::restore_backup));
+
+    // Dev/test endpoints — only registered when DEV_MODE=true. When the env
+    // var is absent these routes don't exist (fall through to the static
+    // handler's 404 / index.html), keeping prod surface area unchanged.
+    let router = if dev::dev_mode_enabled() {
+        println!("[dev] DEV_MODE=true — registering /api/dev/* routes");
+        router
+            .route("/api/dev/status", get(dev::status))
+            .route("/api/dev/seed", axum::routing::post(dev::seed))
+            .route(
+                "/api/dev/stress-seed",
+                axum::routing::post(dev::stress_seed),
+            )
+            .route("/api/dev/restore", axum::routing::post(dev::restore))
+    } else {
+        router
+    };
+
+    router
         .fallback(static_handler)
         .layer(middleware::from_fn(request_counter))
         .with_state(state)

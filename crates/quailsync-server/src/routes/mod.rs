@@ -6,5 +6,6 @@ pub mod brooders;
 pub mod cameras;
 pub mod chick_groups;
 pub mod clutches;
+pub mod dev;
 pub mod processing;
 pub mod telemetry;

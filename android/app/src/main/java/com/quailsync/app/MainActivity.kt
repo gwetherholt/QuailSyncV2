@@ -19,7 +19,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Egg
@@ -80,6 +82,7 @@ import com.quailsync.app.ui.screens.NfcViewModel
 import com.quailsync.app.ui.theme.QuailSyncTheme
 import com.quailsync.app.ui.theme.SageGreen
 import com.quailsync.app.ui.theme.SageGreenLight
+import kotlinx.coroutines.launch
 
 sealed class Screen(val route: String, val label: String, val icon: ImageVector, val iconRes: Int? = null) {
     data object Dashboard : Screen("dashboard", "Dashboard", Icons.Default.Dashboard)
@@ -387,7 +390,12 @@ fun SettingsScreen() {
     }
     var serverUrlSaved by remember { mutableStateOf(true) }
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
+    ) {
         Text("Settings", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(16.dp))
 
@@ -468,6 +476,184 @@ fun SettingsScreen() {
                 Spacer(Modifier.height(4.dp))
                 Text("Daily check at 8am for incubating clutches.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("Alerts at: Day 7 (candle), Day 14 (lockdown), Day 16, Day 17+ (hatch)", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // Developer tools — only rendered when the server reports DEV_MODE=true.
+        // On a production server the /api/dev/status route returns 404 and
+        // the card never appears, so this is invisible to end users.
+        DeveloperToolsCard()
+    }
+}
+
+/**
+ * Probes /api/dev/status on first composition. A 200 response with
+ * dev_mode=true renders the dev tools card; anything else (404, network
+ * error, dev_mode=false) keeps it hidden, so production builds never see it.
+ *
+ * `has_backup` distinguishes "currently running production data" from
+ * "currently running test data" — once seed has run, a backup exists, so
+ * has_backup=true ≈ "test data active, original is preserved".
+ */
+@Composable
+fun DeveloperToolsCard() {
+    val context = LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val api = remember { com.quailsync.app.data.QuailSyncApi.create(com.quailsync.app.data.ServerConfig.getServerUrl(context)) }
+
+    // null = not yet checked; absent = server returned 404 / errored;
+    // present = dev mode is on, render UI.
+    var status by remember { mutableStateOf<com.quailsync.app.data.DevStatusResponse?>(null) }
+    var statusChecked by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var lastMessage by remember { mutableStateOf<String?>(null) }
+
+    suspend fun refreshStatus() {
+        try {
+            val resp = api.getDevStatus()
+            status = if (resp.isSuccessful) resp.body() else null
+        } catch (e: Exception) {
+            android.util.Log.d("QuailSync", "DevTools: /api/dev/status unreachable — hiding card (${e.message})")
+            status = null
+        } finally {
+            statusChecked = true
+        }
+    }
+
+    androidx.compose.runtime.LaunchedEffect(Unit) { refreshStatus() }
+
+    if (!statusChecked || status?.devMode != true) return
+
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        // Distinct accent so the dev card never looks like a normal user-facing
+        // setting (which historically led to users tapping "Restore" thinking
+        // it was a recovery feature).
+        colors = CardDefaults.cardColors(containerColor = androidx.compose.ui.graphics.Color(0xFFFFF8E1)),
+        elevation = CardDefaults.cardElevation(2.dp),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                Text("Developer Tools", style = MaterialTheme.typography.titleMedium)
+                val (label, color) = if (status?.hasBackup == true)
+                    "TEST DATA ACTIVE" to androidx.compose.ui.graphics.Color(0xFFC62828)
+                else
+                    "PRODUCTION DATA" to androidx.compose.ui.graphics.Color(0xFF2E7D32)
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = color,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Server DEV_MODE is on. Seeding replaces the current DB with fixture data " +
+                    "after backing it up; Restore swaps the backup back in.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            busy = true
+                            lastMessage = null
+                            try {
+                                val resp = api.seedDevData()
+                                lastMessage = if (resp.isSuccessful) {
+                                    "Test data loaded. Backup at ${resp.body()?.backup ?: "?"}."
+                                } else "Seed failed: HTTP ${resp.code()}"
+                                refreshStatus()
+                            } catch (e: Exception) {
+                                lastMessage = "Seed failed: ${e.message}"
+                            } finally {
+                                busy = false
+                            }
+                        }
+                    },
+                    enabled = !busy,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
+                ) { Text("Load Test", fontSize = 12.sp) }
+
+                Button(
+                    onClick = {
+                        scope.launch {
+                            busy = true
+                            lastMessage = null
+                            try {
+                                val resp = api.stressSeedDevData()
+                                lastMessage = if (resp.isSuccessful) {
+                                    "Stress test data loaded (60 birds, 10 lineages)."
+                                } else "Stress seed failed: HTTP ${resp.code()}"
+                                refreshStatus()
+                            } catch (e: Exception) {
+                                lastMessage = "Stress seed failed: ${e.message}"
+                            } finally {
+                                busy = false
+                            }
+                        }
+                    },
+                    enabled = !busy,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
+                ) { Text("Stress Test", fontSize = 12.sp) }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            Button(
+                onClick = {
+                    scope.launch {
+                        busy = true
+                        lastMessage = null
+                        try {
+                            val resp = api.restoreDevData()
+                            lastMessage = when {
+                                resp.isSuccessful -> "Production data restored."
+                                resp.code() == 404 -> "No backup to restore — seed first."
+                                else -> "Restore failed: HTTP ${resp.code()}"
+                            }
+                            refreshStatus()
+                        } catch (e: Exception) {
+                            lastMessage = "Restore failed: ${e.message}"
+                        } finally {
+                            busy = false
+                        }
+                    }
+                },
+                enabled = !busy && status?.hasBackup == true,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = androidx.compose.ui.graphics.Color(0xFFC62828),
+                ),
+            ) { Text(if (status?.hasBackup == true) "Restore Production Data" else "No Backup To Restore") }
+
+            if (busy) {
+                Spacer(Modifier.height(8.dp))
+                androidx.compose.material3.LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = SageGreen,
+                )
+            }
+
+            lastMessage?.let { msg ->
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    msg,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

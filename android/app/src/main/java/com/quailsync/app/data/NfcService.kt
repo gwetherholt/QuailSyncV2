@@ -498,6 +498,48 @@ class NfcService {
         _writeResult.value = null
     }
 
+    /**
+     * Dev-mode simulator entry: injects a synthetic tag tap into the same
+     * `_lastScan` / `_scanHistory` / write-mode / conflict pipeline that
+     * `handleIntent` produces from a real NFC intent — minus the hardware
+     * read/write (we can't safely synthesize a real `android.nfc.Tag`).
+     *
+     * Caller (NfcViewModel.simulateNfcScan) routes the returned
+     * WriteAttemptResult through the same branches MainActivity uses for
+     * real intents, so this exercises the standalone lookup, the bird-not-
+     * found / orphan path, the write-success path, and the conflict dialog
+     * without needing a physical tag.
+     */
+    fun simulateScan(tagId: String, payload: String?): Pair<NfcScanResult, WriteAttemptResult?> {
+        if (_writeMode.value && _pendingWriteData.value != null) {
+            val writeData = _pendingWriteData.value!!
+            val scanResult = NfcScanResult(tagId, payload)
+            if (payload != null && payload.startsWith("BIRD-")) {
+                val existingBirdId = payload.removePrefix("BIRD-").toIntOrNull()
+                if (existingBirdId != null && payload != writeData) {
+                    val conflict = TagConflict(tagId, payload, existingBirdId, writeData)
+                    _pendingConflict.value = conflict
+                    // Note: conflictTag stays null — there's no real Tag to
+                    // hold onto. If the user confirms overwrite, the write
+                    // will fail safely with "Tag lost" (which is correct UX
+                    // because no actual write happened).
+                    return scanResult to WriteAttemptResult.Conflict(conflict)
+                }
+            }
+            _writeMode.value = false
+            _pendingWriteData.value = null
+            _writeResult.value = WriteResult(true, "[Simulated] wrote '$writeData' to tag $tagId")
+            val written = NfcScanResult(tagId, writeData)
+            _lastScan.value = written
+            _scanHistory.value = listOf(written) + _scanHistory.value.take(19)
+            return written to WriteAttemptResult.Written(tagId)
+        }
+        val result = NfcScanResult(tagId, payload)
+        _lastScan.value = result
+        _scanHistory.value = listOf(result) + _scanHistory.value.take(19)
+        return result to null
+    }
+
     fun updateScanWithBird(tagId: String, bird: Bird) {
         val current = _lastScan.value
         if (current != null && current.tagId == tagId) {

@@ -453,6 +453,25 @@ data class SystemAlertDto(
     @SerializedName("is_active") val isActive: Boolean = true,
 )
 
+// =====================================================================
+// Dev/test endpoint DTOs (only used when the server is built with
+// DEV_MODE=true). See routes/dev.rs on the server side.
+// =====================================================================
+
+data class DevStatusResponse(
+    @SerializedName("dev_mode") val devMode: Boolean,
+    @SerializedName("has_backup") val hasBackup: Boolean,
+)
+
+data class DevSeedResponse(
+    @SerializedName("status") val status: String,
+    @SerializedName("backup") val backup: String,
+)
+
+data class DevRestoreResponse(
+    @SerializedName("status") val status: String,
+)
+
 @Suppress("unused")
 interface QuailSyncApi {
 
@@ -642,6 +661,25 @@ interface QuailSyncApi {
 
     @POST("api/alerts/{id}/dismiss")
     suspend fun dismissAlert(@Path("id") id: Long): SystemAlertDto
+
+    // ---------------------------------------------------------------------
+    // Dev/test endpoints — only exist server-side when DEV_MODE=true. The
+    // status endpoint is the discovery probe: a 404 means dev mode is off
+    // (or we're talking to a prod build), so callers use Response<T> and
+    // treat null/non-2xx as "hide the dev UI".
+    // ---------------------------------------------------------------------
+
+    @GET("api/dev/status")
+    suspend fun getDevStatus(): retrofit2.Response<DevStatusResponse>
+
+    @POST("api/dev/seed")
+    suspend fun seedDevData(): retrofit2.Response<DevSeedResponse>
+
+    @POST("api/dev/stress-seed")
+    suspend fun stressSeedDevData(): retrofit2.Response<DevSeedResponse>
+
+    @POST("api/dev/restore")
+    suspend fun restoreDevData(): retrofit2.Response<DevRestoreResponse>
 
     companion object {
         fun create(baseUrl: String): QuailSyncApi {
