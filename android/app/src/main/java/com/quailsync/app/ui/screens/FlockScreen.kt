@@ -82,6 +82,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -354,7 +355,10 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
                 } else {
                     IconButton(onClick = { viewModel.refresh() }) { Icon(Icons.Default.Refresh, "Refresh") }
                 }
-                IconButton(onClick = { showAddBird = true }) { Icon(Icons.Default.Add, "Add Bird", tint = SageGreen) }
+                IconButton(
+                    onClick = { showAddBird = true },
+                    modifier = Modifier.testTag("flock_add_bird"),
+                ) { Icon(Icons.Default.Add, "Add Bird", tint = SageGreen) }
             }
         }
 
@@ -376,9 +380,17 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
                 }
             }
             else -> {
-                LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                LazyColumn(
+                    modifier = Modifier.testTag("flock_bird_list"),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     items(filteredBirds, key = { it.id }) { bird ->
-                        BirdCard(bird, com.quailsync.app.data.formatLineages(bird.lineages, emptyText = "").ifEmpty { null }) { selectedBird = bird }
+                        BirdCard(
+                            bird,
+                            com.quailsync.app.data.formatLineages(bird.lineages, emptyText = "").ifEmpty { null },
+                            modifier = Modifier.testTag("flock_bird_row_${bird.id}"),
+                        ) { selectedBird = bird }
                     }
                     item { Spacer(Modifier.height(8.dp)) }
                 }
@@ -416,11 +428,11 @@ fun FlockFilterChips(lineages: List<Lineage>, selectedFilter: FlockFilter, onFil
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         val chipColors = FilterChipDefaults.filterChipColors(selectedContainerColor = SageGreen, selectedLabelColor = Color.White)
-        FilterChip(selectedFilter is FlockFilter.Active, { onFilterSelected(FlockFilter.Active) }, { Text("Active") }, colors = chipColors)
-        FilterChip(selectedFilter is FlockFilter.All, { onFilterSelected(FlockFilter.All) }, { Text("All") }, colors = chipColors)
+        FilterChip(selectedFilter is FlockFilter.Active, { onFilterSelected(FlockFilter.Active) }, { Text("Active") }, colors = chipColors, modifier = Modifier.testTag("flock_filter_active"))
+        FilterChip(selectedFilter is FlockFilter.All, { onFilterSelected(FlockFilter.All) }, { Text("All") }, colors = chipColors, modifier = Modifier.testTag("flock_filter_all"))
         FilterChip(selectedFilter is FlockFilter.Records, { onFilterSelected(FlockFilter.Records) }, { Text("Records") }, colors = chipColors)
-        FilterChip(selectedFilter is FlockFilter.Males, { onFilterSelected(FlockFilter.Males) }, { Text("Males") }, colors = chipColors)
-        FilterChip(selectedFilter is FlockFilter.Females, { onFilterSelected(FlockFilter.Females) }, { Text("Females") }, colors = chipColors)
+        FilterChip(selectedFilter is FlockFilter.Males, { onFilterSelected(FlockFilter.Males) }, { Text("Males") }, colors = chipColors, modifier = Modifier.testTag("flock_filter_males"))
+        FilterChip(selectedFilter is FlockFilter.Females, { onFilterSelected(FlockFilter.Females) }, { Text("Females") }, colors = chipColors, modifier = Modifier.testTag("flock_filter_females"))
         lineages.forEach { bl ->
             FilterChip(
                 selectedFilter is FlockFilter.ByLineage && selectedFilter.lineageId == bl.id,
@@ -436,11 +448,11 @@ fun FlockFilterChips(lineages: List<Lineage>, selectedFilter: FlockFilter, onFil
 // =====================================================================
 
 @Composable
-fun BirdCard(bird: Bird, lineageName: String?, onClick: () -> Unit) {
+fun BirdCard(bird: Bird, lineageName: String?, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val photo = rememberBirdPhoto(bird.id)
 
     Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier = modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),

@@ -53,6 +53,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -288,7 +289,15 @@ fun QuailSyncApp(
         bottomBar = {
             NavigationBar {
                 bottomNavItems.forEach { screen ->
+                    // Test-tag slug derived from the screen's stable route so
+                    // the nav_* identifiers stay consistent with Screen.<>.route.
+                    // ("clutches" maps to "hatchery" to match the visible label.)
+                    val navTag = when (screen) {
+                        Screen.Clutches -> "nav_hatchery"
+                        else -> "nav_${screen.route}"
+                    }
                     NavigationBarItem(
+                        modifier = Modifier.testTag(navTag),
                         icon = {
                             if (screen.iconRes != null) {
                                 Icon(androidx.compose.ui.res.painterResource(screen.iconRes), contentDescription = screen.label)

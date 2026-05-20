@@ -82,6 +82,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -838,7 +839,11 @@ fun NfcMainScreen(nfcService: NfcService, viewModel: NfcViewModel) {
         item {
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                 Text("NFC Scanner", style = MaterialTheme.typography.headlineMedium)
-                Button(onClick = { viewModel.openBatchSetup() }, colors = ButtonDefaults.buttonColors(containerColor = SageGreen)) {
+                Button(
+                    onClick = { viewModel.openBatchSetup() },
+                    colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
+                    modifier = Modifier.testTag("nfc_graduate_batch"),
+                ) {
                     Icon(Icons.Default.Group, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("Graduate Batch")
@@ -847,7 +852,11 @@ fun NfcMainScreen(nfcService: NfcService, viewModel: NfcViewModel) {
         }
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Switch(checked = simulatorEnabled, onCheckedChange = { simulatorEnabled = it })
+                Switch(
+                    checked = simulatorEnabled,
+                    onCheckedChange = { simulatorEnabled = it },
+                    modifier = Modifier.testTag("nfc_debug_toggle"),
+                )
                 Spacer(Modifier.width(8.dp))
                 Text("NFC simulator (debug)", style = MaterialTheme.typography.bodyMedium)
             }
@@ -938,11 +947,11 @@ fun NfcSimulatorCard(viewModel: NfcViewModel) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedButton(
                     onClick = { viewModel.simulateNfcScan("04SIMBLNK000001", null) },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).testTag("nfc_sim_blank"),
                 ) { Text("Blank", fontSize = 12.sp) }
                 OutlinedButton(
                     onClick = { viewModel.simulateNfcScan("04SIMWRIT000001", "BIRD-1") },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).testTag("nfc_sim_written"),
                 ) { Text("Written", fontSize = 12.sp) }
                 OutlinedButton(
                     onClick = {
@@ -954,7 +963,7 @@ fun NfcSimulatorCard(viewModel: NfcViewModel) {
                         val payload = viewModel.nfcService.pendingWriteData.value ?: "BIRD-1"
                         viewModel.simulateNfcScan("04SIMDUPE000001", payload)
                     },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).testTag("nfc_sim_duplicate"),
                 ) { Text("Duplicate", fontSize = 12.sp) }
             }
         }
@@ -973,7 +982,7 @@ fun BatchSetupScreen(viewModel: NfcViewModel) {
     var birdCount by remember { mutableStateOf("") }
     var expanded by remember { mutableStateOf(false) }
 
-    Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()).testTag("graduation_dialog"), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
             Text("Graduate Batch", style = MaterialTheme.typography.headlineMedium)
             IconButton(onClick = { viewModel.cancelBatch() }) { Icon(Icons.Default.Close, "Cancel") }
@@ -1006,7 +1015,7 @@ fun BatchSetupScreen(viewModel: NfcViewModel) {
         Button(
             onClick = { selectedLineageId?.let { viewModel.startBatchTagging(count, it) } },
             enabled = count > 0 && selectedLineageId != null,
-            modifier = Modifier.fillMaxWidth().height(52.dp),
+            modifier = Modifier.fillMaxWidth().height(52.dp).testTag("graduation_submit"),
             colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
         ) {
             Icon(Icons.Default.Nfc, null, Modifier.size(20.dp))
@@ -1757,7 +1766,7 @@ fun WriteTagSection(birds: List<Bird>, writeMode: Boolean, onStartWrite: (Int) -
                     value = selectedBirdId?.let { id -> birds.find { it.id == id }?.let { b -> "${b.bandId ?: "Bird #${b.id}"} — ${com.quailsync.app.data.formatLineages(b.lineages, emptyText = "").ifEmpty { b.sex ?: "" }}" } ?: "Bird #$id" } ?: "",
                     onValueChange = {}, readOnly = true, label = { Text("Select bird to write") },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
-                    modifier = Modifier.menuAnchor().fillMaxWidth(),
+                    modifier = Modifier.menuAnchor().fillMaxWidth().testTag("nfc_bird_selector"),
                 )
                 ExposedDropdownMenu(expanded, { expanded = false }) {
                     birds.forEach { bird ->
@@ -1766,7 +1775,7 @@ fun WriteTagSection(birds: List<Bird>, writeMode: Boolean, onStartWrite: (Int) -
                 }
             }
             Spacer(Modifier.height(8.dp))
-            Button(onClick = { selectedBirdId?.let { onStartWrite(it) } }, enabled = selectedBirdId != null, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = SageGreen)) {
+            Button(onClick = { selectedBirdId?.let { onStartWrite(it) } }, enabled = selectedBirdId != null, modifier = Modifier.fillMaxWidth().testTag("nfc_write_tag_button"), colors = ButtonDefaults.buttonColors(containerColor = SageGreen)) {
                 Icon(Icons.Default.Edit, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Write BIRD-${selectedBirdId ?: "?"} to Tag")
             }
         }

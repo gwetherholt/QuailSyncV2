@@ -15,6 +15,8 @@ android {
         versionName = "1.0"
 
         buildConfigField("String", "BASE_URL", "\"https://quailsync.tail01d133.ts.net\"")
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -114,4 +116,19 @@ dependencies {
 
     // Debug
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // Instrumented UI tests (Compose) — versions pinned explicitly because
+    // reusing `composeBom` in the androidTest configuration doesn't reliably
+    // propagate versions in this AGP build, leaving the test artifacts
+    // unresolved at compile time. 1.6.8 matches Compose BOM 2024.06.00.
+    val composeTestVersion = "1.6.8"
+    androidTestImplementation("androidx.compose.ui:ui-test:$composeTestVersion")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4:$composeTestVersion")
+    debugImplementation("androidx.compose.ui:ui-test-manifest:$composeTestVersion")
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.test:runner:1.5.2")
+    // ext:junit *should* pull JUnit 4 in transitively, but it doesn't here —
+    // declare it explicitly so org.junit.* resolves in TestHelper.kt.
+    androidTestImplementation("junit:junit:4.13.2")
+    androidTestImplementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

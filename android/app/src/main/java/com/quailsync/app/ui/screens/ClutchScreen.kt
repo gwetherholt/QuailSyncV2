@@ -265,7 +265,11 @@ fun ClutchScreen(
                 }
             }
             else -> {
-                LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                LazyColumn(
+                    modifier = Modifier.testTag("hatchery_list"),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
                     if (sortedClutches.isNotEmpty()) {
                         item { Text("Clutches", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                         items(sortedClutches, key = { "clutch-${it.id}" }) { clutch ->
@@ -275,11 +279,12 @@ fun ClutchScreen(
                                 onCandle = { candlingClutch = clutch },
                                 onRecordHatch = { hatchClutch = clutch },
                                 onEdit = { editClutch = clutch },
-                                onDelete = { deleteClutch = clutch })
+                                onDelete = { deleteClutch = clutch },
+                                modifier = Modifier.testTag("hatchery_clutch_card_${clutch.id}"))
                         }
                     }
                     if (activeGroups.isNotEmpty()) {
-                        item { Spacer(Modifier.height(4.dp)); HorizontalDivider(); Spacer(Modifier.height(4.dp)); Text("Chick Groups", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        item { Spacer(Modifier.height(4.dp)); HorizontalDivider(); Spacer(Modifier.height(4.dp)); Text("Chick Groups", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("hatchery_chick_groups")) }
                         items(activeGroups, key = { "group-${it.id}" }) { group ->
                             ChickGroupCard(group, group.brooderId?.let { brooderMap[it]?.name },
                                 onEdit = { editGroup = group }, onDelete = { deleteGroup = group },
@@ -305,9 +310,13 @@ fun ClutchScreen(
             title = { Text("What would you like to add?") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // The Hatchery "+" toolbar button opens this chooser dialog
+                    // first; the tagged button below is the actual "Add Clutch"
+                    // entry point that opens the form. E2e tests tap "+", then
+                    // tap this tagged button to reach AddClutchDialog.
                     Button(
                         onClick = { showAddChooser = false; showAddClutch = true },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().testTag("hatchery_add_clutch"),
                         colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
                     ) {
                         Icon(Icons.Default.Egg, null, Modifier.size(18.dp))
@@ -803,7 +812,7 @@ fun CreateChickGroupDialog(
 // =====================================================================
 
 @Composable
-fun ClutchCard(clutch: Clutch, lineageName: String?, brooderName: String? = null, onCandle: () -> Unit = {}, onRecordHatch: () -> Unit = {}, onEdit: () -> Unit = {}, onDelete: () -> Unit = {}) {
+fun ClutchCard(clutch: Clutch, lineageName: String?, brooderName: String? = null, onCandle: () -> Unit = {}, onRecordHatch: () -> Unit = {}, onEdit: () -> Unit = {}, onDelete: () -> Unit = {}, modifier: Modifier = Modifier) {
     val today = remember { LocalDate.now() }
     val setDate = remember(clutch.setDate) { parseDate(clutch.setDate) }
     val daysElapsed = remember(setDate, today) { setDate?.let { ChronoUnit.DAYS.between(it, today).toInt() } }
@@ -814,7 +823,7 @@ fun ClutchCard(clutch: Clutch, lineageName: String?, brooderName: String? = null
     val isHatching = daysElapsed != null && daysElapsed >= INCUBATION_DAYS && !isComplete
     val isIncubating = clutch.status?.lowercase() in listOf("incubating", "active", "set")
 
-    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(2.dp)) {
+    Card(modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(2.dp)) {
         Column(Modifier.padding(16.dp)) {
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {

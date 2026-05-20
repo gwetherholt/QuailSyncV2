@@ -56,6 +56,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -349,8 +350,19 @@ fun DashboardScreen(
                 val firstNonEmpty = sections.firstOrNull { it.third.isNotEmpty() }?.first
                 sections.forEach { (key, label, entries) ->
                     if (entries.isEmpty()) return@forEach
+                    // Map housing-type key to the test-tag the e2e tests look for.
+                    val headerTag = when (key) {
+                        "incubator" -> "dashboard_incubators_header"
+                        "brooder" -> "dashboard_brooders_header"
+                        "hutch" -> "dashboard_hutches_header"
+                        else -> "dashboard_${key}_header"
+                    }
                     item(key = "section-header-$key") {
-                        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                        Row(
+                            Modifier.fillMaxWidth().testTag(headerTag),
+                            Arrangement.SpaceBetween,
+                            Alignment.CenterVertically,
+                        ) {
                             Text("$label (${entries.size})", style = MaterialTheme.typography.titleMedium)
                             if (key == firstNonEmpty) {
                                 TextButton(onClick = onTelemetryClick) {
@@ -390,6 +402,7 @@ fun DashboardScreen(
                             residentCount = residentCount,
                             isOccupied = isOccupied,
                             onClick = { onBrooderClick(state.brooder.id) },
+                            modifier = Modifier.testTag("dashboard_housing_card_${state.brooder.id}"),
                         )
                     }
                 }
@@ -703,6 +716,7 @@ private fun CompactBrooderCard(
     residentCount: Int,
     isOccupied: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val currentTemp = liveReading?.temperature
         ?: state.readings.firstOrNull()?.temperature
@@ -745,7 +759,7 @@ private fun CompactBrooderCard(
     }
 
     Card(
-        Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(10.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(1.dp),
