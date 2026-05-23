@@ -11,6 +11,7 @@ package com.quailsync.app.ui.screens
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,6 +38,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Egg
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Nfc
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
@@ -212,11 +215,49 @@ fun ClutchScreen(
     val brooderMap = remember(broodersList) { broodersList.associateBy { it.id } }
     val clutchGroupMap = remember(chickGroups) { chickGroups.filter { it.clutchId != null }.associateBy { it.clutchId } }
 
-    val sortedClutches = remember(clutches) {
-        clutches.sortedWith(compareBy<Clutch> { when (it.status?.lowercase()) { "incubating", "active", "set" -> 0; "hatching" -> 1; else -> 2 } }.thenByDescending { it.setDate })
+    // Split clutches into "still relevant" (incubating, hatching, or hatched
+    // within the last 14 days) and "old hatched" (>14 days since hatch). The
+    // recently-hatched ones stay in the main list so users can review them
+    // briefly after hatch day; the rest collapse into a "Completed Clutches"
+    // expandable so the active list stays focused.
+    val today = remember { LocalDate.now() }
+    val clutchPartition = remember(clutches, today) {
+        val active = mutableListOf<Clutch>()
+        val oldHatched = mutableListOf<Clutch>()
+        for (c in clutches) {
+            val isHatched = c.status?.lowercase() in listOf("hatched", "completed", "complete")
+            if (!isHatched) {
+                active.add(c)
+                continue
+            }
+            val hatchDate = effectiveHatchDate(c)
+            val daysSinceHatch = hatchDate?.let { ChronoUnit.DAYS.between(it, today) }
+            if (daysSinceHatch != null && daysSinceHatch <= 14) active.add(c) else oldHatched.add(c)
+        }
+        // Within the active list: incubating/hatching first (soonest expected
+        // hatch first), then recently-hatched (most recent hatch first).
+        active.sortWith(
+            compareBy<Clutch> { if (it.status?.lowercase() in listOf("hatched", "completed", "complete")) 1 else 0 }
+                .thenBy { c ->
+                    if (c.status?.lowercase() in listOf("hatched", "completed", "complete")) {
+                        // Sort recently-hatched descending by hatch date (most recent first).
+                        // Negate epoch-day so ascending sort yields descending dates.
+                        effectiveHatchDate(c)?.toEpochDay()?.let { -it } ?: Long.MAX_VALUE
+                    } else {
+                        // Sort incubating ascending by expected hatch date (soonest first).
+                        effectiveHatchDate(c)?.toEpochDay() ?: Long.MAX_VALUE
+                    }
+                }
+        )
+        oldHatched.sortByDescending { effectiveHatchDate(it)?.toEpochDay() ?: Long.MIN_VALUE }
+        active to oldHatched
     }
+    val activeClutches = clutchPartition.first
+    val oldHatchedClutches = clutchPartition.second
     val activeGroups = remember(chickGroups) { chickGroups.filter { it.status == "Active" }.sortedByDescending { it.hatchDate } }
     val graduatedGroups = remember(chickGroups) { chickGroups.filter { it.status != "Active" }.sortedByDescending { it.hatchDate } }
+    var showCompletedClutches by remember { mutableStateOf(false) }
+    var showGraduatedGroups by remember { mutableStateOf(false) }
 
     var showAddClutch by remember { mutableStateOf(false) }
     var candlingClutch by remember { mutableStateOf<Clutch?>(null) }
@@ -270,9 +311,9 @@ fun ClutchScreen(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    if (sortedClutches.isNotEmpty()) {
+                    if (activeClutches.isNotEmpty()) {
                         item { Text("Clutches", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                        items(sortedClutches, key = { "clutch-${it.id}" }) { clutch ->
+                        items(activeClutches, key = { "clutch-${it.id}" }) { clutch ->
                             val group = clutchGroupMap[clutch.id]
                             val brooderName = group?.brooderId?.let { brooderMap[it]?.name }
                             ClutchCard(clutch, clutch.lineageName ?: lineageMap[clutch.lineageId]?.name, brooderName,
@@ -292,9 +333,46 @@ fun ClutchScreen(
                                 onBandGroup = { onBandGroup(group) })
                         }
                     }
+                    if (oldHatchedClutches.isNotEmpty()) {
+                        item {
+                            Spacer(Modifier.height(4.dp)); HorizontalDivider(); Spacer(Modifier.height(4.dp))
+                            CollapsibleSectionHeader(
+                                title = "Completed Clutches",
+                                count = oldHatchedClutches.size,
+                                expanded = showCompletedClutches,
+                                onToggle = { showCompletedClutches = !showCompletedClutches },
+                                testTag = "hatchery_completed_clutches_header",
+                            )
+                        }
+                        if (showCompletedClutches) {
+                            items(oldHatchedClutches, key = { "old-clutch-${it.id}" }) { clutch ->
+                                val group = clutchGroupMap[clutch.id]
+                                val brooderName = group?.brooderId?.let { brooderMap[it]?.name }
+                                ClutchCard(clutch, clutch.lineageName ?: lineageMap[clutch.lineageId]?.name, brooderName,
+                                    onCandle = { candlingClutch = clutch },
+                                    onRecordHatch = { hatchClutch = clutch },
+                                    onEdit = { editClutch = clutch },
+                                    onDelete = { deleteClutch = clutch },
+                                    modifier = Modifier.testTag("hatchery_clutch_card_${clutch.id}"))
+                            }
+                        }
+                    }
                     if (graduatedGroups.isNotEmpty()) {
-                        item { Spacer(Modifier.height(4.dp)); HorizontalDivider(); Spacer(Modifier.height(4.dp)); Text("Completed", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                        items(graduatedGroups, key = { "done-${it.id}" }) { group -> GraduatedGroupCard(group) }
+                        item {
+                            Spacer(Modifier.height(4.dp)); HorizontalDivider(); Spacer(Modifier.height(4.dp))
+                            CollapsibleSectionHeader(
+                                title = "Graduated Groups",
+                                count = graduatedGroups.size,
+                                expanded = showGraduatedGroups,
+                                onToggle = { showGraduatedGroups = !showGraduatedGroups },
+                                testTag = "hatchery_graduated_groups_header",
+                            )
+                        }
+                        if (showGraduatedGroups) {
+                            items(graduatedGroups, key = { "done-${it.id}" }) { group ->
+                                GraduatedGroupCard(group, group.housingId?.let { brooderMap[it]?.name })
+                            }
+                        }
                     }
                     item { Spacer(Modifier.height(8.dp)) }
                 }
@@ -1022,7 +1100,7 @@ fun ChickGroupCard(group: ChickGroupDto, brooderName: String?, onEdit: () -> Uni
 // =====================================================================
 
 @Composable
-fun GraduatedGroupCard(group: ChickGroupDto) {
+fun GraduatedGroupCard(group: ChickGroupDto, hutchName: String? = null) {
     val mortalityPct = if (group.initialCount > 0) ((group.initialCount - group.currentCount).toFloat() / group.initialCount * 100) else 0f
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)), elevation = CardDefaults.cardElevation(0.dp)) {
         Row(Modifier.fillMaxWidth().padding(14.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
@@ -1034,10 +1112,55 @@ fun GraduatedGroupCard(group: ChickGroupDto) {
                 }
                 Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("${group.currentCount}/${group.initialCount} chicks · ${group.status} · Hatched ${group.hatchDate}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val destination = hutchName ?: group.housingId?.let { "Hutch #$it" }
+                if (destination != null) {
+                    Text("Graduated to: $destination", style = MaterialTheme.typography.labelMedium, color = SageGreen)
+                }
             }
             if (mortalityPct > 0) Text("%.0f%% loss".format(mortalityPct), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+}
+
+@Composable
+fun CollapsibleSectionHeader(
+    title: String,
+    count: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    testTag: String,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onToggle() }
+            .padding(vertical = 6.dp)
+            .testTag(testTag),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "$title ($count)",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(
+            if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+            contentDescription = if (expanded) "Collapse" else "Expand",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+// Server-provided `expectedHatchDate` if set, else derived from setDate. Used
+// both as the "expected hatch" for incubating clutches (sort key) and as the
+// best-effort actual hatch date for Hatched clutches (the entity has no
+// dedicated actual-hatch field, so this is the closest stand-in for the
+// 14-day "still recent" cutoff).
+private fun effectiveHatchDate(clutch: Clutch): LocalDate? {
+    parseDate(clutch.expectedHatchDate)?.let { return it }
+    return parseDate(clutch.setDate)?.plusDays(INCUBATION_DAYS)
 }
 
 // =====================================================================
