@@ -128,7 +128,6 @@ pub(crate) async fn list_processing_queue(
 // --- Batch Cull ---
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 pub(crate) struct CullBatchRequest {
     bird_ids: Vec<i64>,
     reason: String,
@@ -141,18 +140,29 @@ pub(crate) async fn cull_batch(
     State(state): State<AppState>,
     Json(body): Json<CullBatchRequest>,
 ) -> impl IntoResponse {
-    // Section 6: Validate status value
-    let valid_statuses = ["Culled", "Deceased", "Sold"];
-    if !valid_statuses.contains(&body.method.as_str()) {
-        return (
-            StatusCode::BAD_REQUEST,
-            "Invalid status. Must be: Culled, Deceased, or Sold",
-        )
-            .into_response();
-    }
+    // "Butchered" is a UI affordance — the bird was processed for meat — but
+    // it maps to the same persistent BirdStatus::Culled, since the bird is no
+    // longer in the active flock. Keeping the synonym here lets the Android
+    // cull dialog default to "Butchered" without tripping the validation.
+    let status = match body.method.as_str() {
+        "Butchered" | "Culled" => "Culled",
+        "Deceased" => "Deceased",
+        "Sold" => "Sold",
+        other => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "invalid_status",
+                    "message": format!(
+                        "Invalid method '{other}'. Must be: Butchered, Culled, Deceased, or Sold"
+                    ),
+                })),
+            )
+                .into_response();
+        }
+    };
 
     let conn = acquire_db(&state);
-    let status = body.method.as_str();
     let mut count = 0i64;
     for bird_id in &body.bird_ids {
         let rows = conn
@@ -162,6 +172,20 @@ pub(crate) async fn cull_batch(
             )
             .unwrap_or(0);
         count += rows as i64;
+
+        // Record an audit trail so the cull reason/notes/date aren't lost.
+        // Best-effort: if this insert fails we still report the status update
+        // as successful (the bird is correctly off Active).
+        let _ = conn.execute(
+            "INSERT INTO processing_records (bird_id, reason, scheduled_date, processed_date, status, notes)
+             VALUES (?1, ?2, ?3, ?3, 'Completed', ?4)",
+            params![
+                bird_id,
+                body.reason,
+                body.processed_date,
+                body.notes,
+            ],
+        );
     }
     Json(serde_json::json!({"updated": count})).into_response()
 }

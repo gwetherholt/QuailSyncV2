@@ -454,9 +454,19 @@ pub struct CreateBreedingGroup {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CullReason {
-    ExcessMale,
-    LowWeight { weight_grams: f64 },
-    HighInbreeding { coefficient: f64 },
+    /// Male is beyond the ideal sex ratio. `safe_pairings` is how many of the
+    /// `total_females` active females this male can breed with at a
+    /// relatedness coefficient below 0.0625 — fewer = lower breeding utility =
+    /// stronger cull candidate. Used by the server to sort the cull list, and
+    /// by clients to surface the trade-off ("Excess Male · 2 of 8 safe
+    /// pairings") instead of a flat "Excess Male" label.
+    ExcessMale {
+        safe_pairings: u32,
+        total_females: u32,
+    },
+    LowWeight {
+        weight_grams: f64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

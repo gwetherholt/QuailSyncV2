@@ -802,10 +802,14 @@
   }
 
   function formatCullReason(reason){
-    if(reason === 'ExcessMale') return 'Excess male';
-    if(typeof reason === 'object'){
+    if(typeof reason === 'object' && reason){
+      if(reason.ExcessMale){
+        var sp = reason.ExcessMale.safe_pairings;
+        var tot = reason.ExcessMale.total_females;
+        if(sp === 0) return 'Excess Male · No safe pairings';
+        return 'Excess Male · '+sp+' of '+tot+' safe pairings';
+      }
       if(reason.LowWeight) return 'Low weight ('+reason.LowWeight.weight_grams.toFixed(0)+'g)';
-      if(reason.HighInbreeding) return 'High inbreeding ('+reason.HighInbreeding.coefficient.toFixed(3)+')';
     }
     return escapeHtml(String(reason));
   }

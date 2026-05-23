@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit
  * before invoking the test runner — the simplest approach is to edit the
  * constant temporarily, since AndroidJUnitRunner doesn't expose env vars.
  */
-const val SERVER_URL: String = "http://10.0.2.2:3000"
+const val SERVER_URL: String = "http://100.109.222.48:3000"
 
 private val httpClient: OkHttpClient by lazy {
     OkHttpClient.Builder()

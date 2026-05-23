@@ -363,36 +363,49 @@ pub(crate) async fn cull_recommendations(
     let conn = acquire_db(&state);
     let mut recs: Vec<CullRecommendation> = Vec::new();
 
-    let active_females: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM birds WHERE sex = 'Female' AND status = 'Active'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    let ideal_males = if active_females > 0 {
-        ((active_females as f64) / (MAX_FEMALES_PER_MALE as f64)).ceil() as i64
+    // Load every active bird once so we can compute relatedness scores for
+    // the excess-male ranking below. Done up front because we need the female
+    // count for the ideal-male math anyway.
+    let all_birds = load_bird_records(&conn);
+    let males: Vec<&BirdRecord> = all_birds.iter().filter(|b| b.sex == Sex::Male).collect();
+    let females: Vec<&BirdRecord> = all_birds.iter().filter(|b| b.sex == Sex::Female).collect();
+    let total_females = females.len() as u32;
+
+    let ideal_males = if total_females > 0 {
+        ((total_females as f64) / (MAX_FEMALES_PER_MALE as f64)).ceil() as usize
     } else {
         0
     };
 
-    let mut male_stmt = conn
-        .prepare("SELECT id FROM birds WHERE sex = 'Male' AND status = 'Active' ORDER BY id DESC")
-        .expect("prepare failed");
-    let active_male_ids: Vec<i64> = male_stmt
-        .query_map([], |row| row.get(0))
-        .unwrap()
-        .filter_map(|r| r.ok())
+    // For each male, count how many females he can breed with safely
+    // (coefficient < 0.0625). This is his breeding utility — the lower it
+    // is, the stronger his cull candidacy. Two genetically-identical males
+    // share the same count, so the cull list orders them identically rather
+    // than (as the old code did) randomly anointing one of them with a
+    // separate "Inbreeding Risk" badge based on id-sort ordering.
+    let mut ranked: Vec<(&&BirdRecord, u32)> = males
+        .iter()
+        .map(|m| {
+            let safe = females
+                .iter()
+                .filter(|f| compute_relatedness(m, f) < 0.0625)
+                .count() as u32;
+            (m, safe)
+        })
         .collect();
+    // Ascending safe-pairings: fewer pairings → higher cull priority.
+    // Stable tiebreak on bird id so ordering is deterministic across runs.
+    ranked.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.id.cmp(&b.0.id)));
 
-    let surplus = (active_male_ids.len() as i64) - ideal_males;
-    if surplus > 0 {
-        for &mid in active_male_ids.iter().take(surplus as usize) {
-            recs.push(CullRecommendation {
-                bird_id: mid,
-                reason: CullReason::ExcessMale,
-            });
-        }
+    let surplus = males.len().saturating_sub(ideal_males);
+    for (m, safe_pairings) in ranked.iter().take(surplus) {
+        recs.push(CullRecommendation {
+            bird_id: m.id,
+            reason: CullReason::ExcessMale {
+                safe_pairings: *safe_pairings,
+                total_females,
+            },
+        });
     }
 
     let mut fw_stmt = conn.prepare(
@@ -411,41 +424,6 @@ pub(crate) async fn cull_recommendations(
             bird_id: bid,
             reason: CullReason::LowWeight { weight_grams: w },
         });
-    }
-
-    let all_birds = load_bird_records(&conn);
-    let males: Vec<&BirdRecord> = all_birds.iter().filter(|b| b.sex == Sex::Male).collect();
-    let females: Vec<&BirdRecord> = all_birds.iter().filter(|b| b.sex == Sex::Female).collect();
-
-    for m in &males {
-        let has_safe = females.iter().any(|f| compute_relatedness(m, f) < 0.0625);
-        if !has_safe && !females.is_empty() {
-            let worst = females
-                .iter()
-                .map(|f| compute_relatedness(m, f))
-                .fold(0.0_f64, f64::max);
-            if !recs.iter().any(|r| r.bird_id == m.id) {
-                recs.push(CullRecommendation {
-                    bird_id: m.id,
-                    reason: CullReason::HighInbreeding { coefficient: worst },
-                });
-            }
-        }
-    }
-    for f in &females {
-        let has_safe = males.iter().any(|m| compute_relatedness(m, f) < 0.0625);
-        if !has_safe && !males.is_empty() {
-            let worst = males
-                .iter()
-                .map(|m| compute_relatedness(m, f))
-                .fold(0.0_f64, f64::max);
-            if !recs.iter().any(|r| r.bird_id == f.id) {
-                recs.push(CullRecommendation {
-                    bird_id: f.id,
-                    reason: CullReason::HighInbreeding { coefficient: worst },
-                });
-            }
-        }
     }
 
     Json(recs)

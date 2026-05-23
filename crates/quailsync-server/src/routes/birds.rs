@@ -21,6 +21,24 @@ pub(crate) async fn create_bird(
             .into_response();
     }
     let conn = acquire_db(&state);
+    // When the bird is being banded out of a chick group, the group's
+    // hatch_date is the authoritative birthday — the per-bird payload
+    // currently fills body.hatch_date with `LocalDate.now()` from the NFC /
+    // batch-band flow on Android. Without this override, every banded bird
+    // shows up as "0d old" on the cull list and elsewhere.
+    let hatch_date = body
+        .chick_group_id
+        .and_then(|gid| {
+            conn.query_row(
+                "SELECT hatch_date FROM chick_groups WHERE id = ?1",
+                params![gid],
+                |row| row.get::<_, String>(0),
+            )
+            .ok()
+            .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
+        })
+        .unwrap_or(body.hatch_date);
+
     // Re-tagging guard: NFC tags get re-used across batches. If this tag is
     // already on another bird, clear it from that bird first so our INSERT
     // doesn't trip the UNIQUE(nfc_tag_id) constraint and surface as a 500.
@@ -34,7 +52,7 @@ pub(crate) async fn create_bird(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             body.band_color, sex_to_str(&body.sex),
-            body.hatch_date.to_string(), body.mother_id, body.father_id,
+            hatch_date.to_string(), body.mother_id, body.father_id,
             body.generation, bird_status_to_str(&body.status), body.notes, body.nfc_tag_id,
             // Issue #14: stamp the chick group back-link when caller supplies
             // it. Android's batch-band flow uses this to preserve the
@@ -55,7 +73,7 @@ pub(crate) async fn create_bird(
             id,
             band_color: body.band_color,
             sex: body.sex,
-            hatch_date: body.hatch_date,
+            hatch_date,
             mother_id: body.mother_id,
             father_id: body.father_id,
             generation: body.generation,

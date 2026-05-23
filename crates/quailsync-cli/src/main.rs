@@ -1562,21 +1562,28 @@ async fn cmd_flock_cull_review(base: &str) -> anyhow::Result<()> {
     // Group by reason type
     let excess: Vec<&CullRecommendation> = recs
         .iter()
-        .filter(|r| matches!(r.reason, CullReason::ExcessMale))
+        .filter(|r| matches!(r.reason, CullReason::ExcessMale { .. }))
         .collect();
     let low_weight: Vec<&CullRecommendation> = recs
         .iter()
         .filter(|r| matches!(r.reason, CullReason::LowWeight { .. }))
         .collect();
-    let inbreeding: Vec<&CullRecommendation> = recs
-        .iter()
-        .filter(|r| matches!(r.reason, CullReason::HighInbreeding { .. }))
-        .collect();
 
     if !excess.is_empty() {
         println!("  {}", "EXCESS MALES".red().bold());
         for r in &excess {
-            println!("    {} — surplus male", bird_label(r.bird_id).red());
+            if let CullReason::ExcessMale {
+                safe_pairings,
+                total_females,
+            } = &r.reason
+            {
+                let detail = if *safe_pairings == 0 {
+                    "no safe pairings".to_string()
+                } else {
+                    format!("{safe_pairings} of {total_females} safe pairings")
+                };
+                println!("    {} — {detail}", bird_label(r.bird_id).red());
+            }
         }
         println!();
     }
@@ -1589,20 +1596,6 @@ async fn cmd_flock_cull_review(base: &str) -> anyhow::Result<()> {
                     "    {} — {:.1}g (min 200g)",
                     bird_label(r.bird_id).red(),
                     weight_grams,
-                );
-            }
-        }
-        println!();
-    }
-
-    if !inbreeding.is_empty() {
-        println!("  {}", "HIGH INBREEDING RISK".red().bold());
-        for r in &inbreeding {
-            if let CullReason::HighInbreeding { coefficient } = &r.reason {
-                println!(
-                    "    {} — no safe pairings (worst coeff: {:.3})",
-                    bird_label(r.bird_id).red(),
-                    coefficient,
                 );
             }
         }

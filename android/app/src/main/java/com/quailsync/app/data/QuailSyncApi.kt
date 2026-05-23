@@ -77,6 +77,7 @@ data class Bird(
     @SerializedName("sire_id") val sireId: Int? = null,
     @SerializedName("dam_id") val damId: Int? = null,
     @SerializedName("latest_weight") val latestWeight: Double? = null,
+    @SerializedName("nfc_tag_id") val nfcTagId: String? = null,
     /** Issue #13: permanent housing assignment for adult birds. `null` = unhoused. */
     @SerializedName("housing_id") val housingId: Int? = null,
     /** Issue #14: back-link to the chick group the bird graduated from.
@@ -371,41 +372,53 @@ data class CullRecommendation(
     @SerializedName("bird_id") val birdId: Int,
     @SerializedName("reason") val reason: com.google.gson.JsonElement? = null,
 ) {
-    /** Parse the Rust serde-tagged enum: "ExcessMale" or {"LowWeight": {"weight_grams": N}} */
+    /** Parse the Rust serde-tagged enum:
+     *    {"ExcessMale": {"safe_pairings": N, "total_females": M}}
+     *    {"LowWeight":  {"weight_grams": N}}
+     *  ExcessMale folds breeding utility into the label — fewer safe pairings
+     *  = stronger cull candidate. Zero pairings gets its own phrasing.
+     */
     val reasonLabel: String get() {
         val r = reason ?: return "Unknown"
-        if (r.isJsonPrimitive) return when (r.asString) {
-            "ExcessMale" -> "Excess Male"
-            else -> r.asString
-        }
         if (r.isJsonObject) {
             val obj = r.asJsonObject
+            if (obj.has("ExcessMale")) {
+                val em = obj.getAsJsonObject("ExcessMale")
+                val safe = em.get("safe_pairings")?.asInt ?: 0
+                val total = em.get("total_females")?.asInt ?: 0
+                return if (safe == 0) "Excess Male · No safe pairings"
+                else "Excess Male · $safe of $total safe pairings"
+            }
             if (obj.has("LowWeight")) {
                 val w = obj.getAsJsonObject("LowWeight").get("weight_grams")?.asDouble ?: 0.0
                 return "Underweight (${w.toInt()}g)"
-            }
-            if (obj.has("HighInbreeding")) {
-                val c = obj.getAsJsonObject("HighInbreeding").get("coefficient")?.asDouble ?: 0.0
-                return "Inbreeding Risk (${"%.0f".format(c * 100)}%)"
             }
         }
         return "Unknown"
     }
     val reasonKey: String get() {
         val r = reason ?: return "unknown"
-        if (r.isJsonPrimitive && r.asString == "ExcessMale") return "excess_male"
         if (r.isJsonObject) {
             val obj = r.asJsonObject
+            if (obj.has("ExcessMale")) return "excess_male"
             if (obj.has("LowWeight")) return "underweight"
-            if (obj.has("HighInbreeding")) return "inbreeding"
         }
         return "unknown"
     }
-    val priority: String get() = when (reasonKey) {
-        "inbreeding" -> "high"
-        "excess_male" -> "medium"
-        "underweight" -> "low"
-        else -> "low"
+    /** Cull-list color priority. Zero-safe-pairings males get the high tier
+     *  (strongest cull candidate); any male with at least one safe pairing
+     *  is medium; underweight females are low. */
+    val priority: String get() {
+        val r = reason
+        if (r != null && r.isJsonObject) {
+            val obj = r.asJsonObject
+            if (obj.has("ExcessMale")) {
+                val safe = obj.getAsJsonObject("ExcessMale").get("safe_pairings")?.asInt ?: 0
+                return if (safe == 0) "high" else "medium"
+            }
+            if (obj.has("LowWeight")) return "low"
+        }
+        return "low"
     }
 }
 

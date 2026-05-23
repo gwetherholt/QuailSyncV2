@@ -65,8 +65,24 @@ android {
     }
 }
 
+// Force AndroidX Test artifacts to Android 15-compatible versions, including
+// any transitive copies pulled in by older libraries (Compose BOM, etc.). The
+// `InputManager.getInstance` crash on API 35 happens when an older espresso
+// sneaks in transitively; pinning here overrides that resolution.
+//
+// Note: this block lives at the top level rather than inside `android { }`
+// because `configurations` is on Project, not on the AndroidExtension —
+// putting it inside the android block doesn't compile.
+configurations.all {
+    resolutionStrategy {
+        force("androidx.test.espresso:espresso-core:3.6.1")
+        force("androidx.test:runner:1.6.2")
+        force("androidx.test:core:1.6.1")
+    }
+}
+
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2024.06.00")
+    val composeBom = platform("androidx.compose:compose-bom:2024.09.00")
     implementation(composeBom)
 
     // Compose
@@ -125,8 +141,12 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test:$composeTestVersion")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4:$composeTestVersion")
     debugImplementation("androidx.compose.ui:ui-test-manifest:$composeTestVersion")
-    androidTestImplementation("androidx.test.ext:junit:1.1.5")
-    androidTestImplementation("androidx.test:runner:1.5.2")
+    // AndroidX Test — versions bumped to Android 15 (API 35) compatible
+    // releases. Older 1.1.5 / 1.5.2 pulls in a manifest that fails to merge
+    // on API 35.
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
     // ext:junit *should* pull JUnit 4 in transitively, but it doesn't here —
     // declare it explicitly so org.junit.* resolves in TestHelper.kt.
     androidTestImplementation("junit:junit:4.13.2")

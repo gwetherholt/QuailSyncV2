@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -195,6 +196,8 @@ private fun CullListTab(viewModel: BreedingViewModel) {
     // the Kotlin flow-analyser otherwise flags the lambda assignments below
     // as `UNUSED_VALUE` (it can't see Compose's recomposition-time reads).
     val showCullDialog = remember { mutableStateOf(false) }
+    // Which row is expanded to show full bird details. Null = none expanded.
+    val expandedBirdId = remember { mutableStateOf<Int?>(null) }
 
     val birdMap = birds.associateBy { it.id }
     val today = LocalDate.now()
@@ -217,13 +220,13 @@ private fun CullListTab(viewModel: BreedingViewModel) {
             ) {
                 items(cullRecs, key = { it.birdId }) { rec ->
                     val bird = birdMap[rec.birdId]
-                    val lineage = bird?.lineages?.firstOrNull()
                     val age = bird?.hatchDate?.let {
                         try {
                             ChronoUnit.DAYS.between(LocalDate.parse(it.take(10)), today).toInt()
                         } catch (_: Exception) { null }
                     }
                     val isSelected = rec.birdId in selectedIds
+                    val isExpanded = expandedBirdId.value == rec.birdId
 
                     val priorityColor = when (rec.priority) {
                         "high" -> AlertRed
@@ -237,51 +240,95 @@ private fun CullListTab(viewModel: BreedingViewModel) {
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                         elevation = CardDefaults.cardElevation(1.dp),
                     ) {
-                        Row(
-                            Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Checkbox(
-                                checked = isSelected,
-                                onCheckedChange = {
-                                    if (it) selectedIds.add(rec.birdId) else selectedIds.remove(rec.birdId)
-                                },
-                                colors = CheckboxDefaults.colors(checkedColor = SageGreen),
-                            )
-                            // Priority dot
-                            Box(Modifier.size(8.dp).clip(CircleShape).background(priorityColor))
-                            Spacer(Modifier.width(10.dp))
-                            Column(Modifier.weight(1f)) {
-                                Row {
-                                    Text(
-                                        bird?.bandColor?.let { "[$it]" } ?: "Bird #${rec.birdId}",
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.SemiBold,
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(
-                                        bird?.sex ?: "",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                                Text(
-                                    rec.reasonLabel,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = priorityColor,
+                        Column {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        expandedBirdId.value = if (isExpanded) null else rec.birdId
+                                    }
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Checkbox(
+                                    checked = isSelected,
+                                    onCheckedChange = {
+                                        if (it) selectedIds.add(rec.birdId) else selectedIds.remove(rec.birdId)
+                                    },
+                                    colors = CheckboxDefaults.colors(checkedColor = SageGreen),
                                 )
-                                Row {
-                                    if (lineage != null) {
-                                        Text(lineage.name, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                // Priority dot
+                                Box(Modifier.size(8.dp).clip(CircleShape).background(priorityColor))
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            "#${rec.birdId}",
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            fontWeight = FontWeight.SemiBold,
+                                        )
+                                        if (!bird?.bandColor.isNullOrBlank()) {
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(
+                                                "[${bird?.bandColor}]",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
                                         Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            bird?.sex ?: "",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
                                     }
-                                    if (age != null) {
-                                        Text("${age}d old", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(
+                                        rec.reasonLabel,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = priorityColor,
+                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        val lineageText = com.quailsync.app.data.formatLineages(
+                                            bird?.lineages ?: emptyList(),
+                                            emptyText = "",
+                                        )
+                                        if (lineageText.isNotBlank()) {
+                                            Text(lineageText, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Spacer(Modifier.width(8.dp))
+                                        }
+                                        if (age != null) {
+                                            Text("${age}d old", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                        bird?.latestWeight?.let { w ->
+                                            Spacer(Modifier.width(8.dp))
+                                            Text("${w.toInt()}g", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                        if (!bird?.nfcTagId.isNullOrBlank()) {
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(
+                                                "NFC ${bird?.nfcTagId?.takeLast(6)}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = SageGreen,
+                                            )
+                                        }
                                     }
-                                    bird?.latestWeight?.let { w ->
-                                        Spacer(Modifier.width(8.dp))
-                                        Text("${w.toInt()}g", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
+                                }
+                            }
+
+                            if (isExpanded && bird != null) {
+                                Column(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 56.dp, end = 12.dp, bottom = 12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                ) {
+                                    bird.hatchDate?.let { DetailLine("Hatched", it.take(10)) }
+                                    bird.nfcTagId?.let { DetailLine("NFC Tag", it) }
+                                    val lineageList = bird.lineages.joinToString(", ") { it.name }
+                                    if (lineageList.isNotBlank()) DetailLine("Lineage", lineageList)
+                                    bird.housingId?.let { DetailLine("Housing", "#$it") }
+                                    bird.chickGroupId?.let { DetailLine("Chick Group", "#$it") }
+                                    bird.notes?.takeIf { it.isNotBlank() }?.let { DetailLine("Notes", it) }
                                 }
                             }
                         }
@@ -337,6 +384,23 @@ private fun CullListTab(viewModel: BreedingViewModel) {
                 }
             },
             onDismiss = { showCullDialog.value = false },
+        )
+    }
+}
+
+@Composable
+private fun DetailLine(label: String, value: String) {
+    Row {
+        Text(
+            "$label: ",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface,
         )
     }
 }
