@@ -153,6 +153,10 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/inbreeding-check", get(breeding::inbreeding_check))
         .route("/api/breeding/suggest", get(breeding::breeding_suggest))
         .route(
+            "/api/settings",
+            get(settings::get_settings).put(settings::update_settings),
+        )
+        .route(
             "/api/brooders",
             get(brooders::list_brooders).post(brooders::create_brooder),
         )

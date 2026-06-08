@@ -2696,7 +2696,7 @@
      PROCESSING PAGE (Kanban)
      --------------------------------------------------------- */
   Page.Processing = {
-    _cullRecs: [],
+    _flockStats: null,
     _processing: [],
     render: function(app){
       app.innerHTML =
@@ -2713,7 +2713,11 @@
       if(bl) _lineages = bl;
       var birds = await API.get('/api/birds');
       if(birds) _birds = birds;
-      this._cullRecs = await API.get('/api/flock/cull-recommendations') || [];
+      // The cull-recommendations endpoint now returns a flock-stats snapshot
+      // rather than a prescribed list — the cull workflow moved to the
+      // Android Flock screen's Cull Mode. We fetch the stats just to render
+      // a small breeding-capacity summary at the top of the board.
+      this._flockStats = await API.get('/api/flock/cull-recommendations');
       this._processing = await API.get('/api/processing') || [];
       this._renderBoard();
     },
@@ -2721,37 +2725,26 @@
       var el = document.getElementById('processing-board');
       if(!el) return;
 
-      // Separate processing into scheduled and completed
       var scheduled = this._processing.filter(function(p){ return p.status === 'Scheduled'; });
       var completed = this._processing.filter(function(p){ return p.status === 'Completed'; });
 
-      // Filter cull recs to exclude birds already in processing
-      var processedBirdIds = {};
-      this._processing.forEach(function(p){ processedBirdIds[p.bird_id] = true; });
-      var recommended = this._cullRecs.filter(function(r){ return !processedBirdIds[r.bird_id]; });
-
-      var html = '<div class="kanban">';
-
-      // Recommended column
-      html += '<div class="kanban-col">';
-      html += '<div class="kanban-col-header" style="color:var(--warning)">&#x26A0;&#xFE0F; Recommended <span class="col-count">'+recommended.length+'</span></div>';
-      if(recommended.length === 0){
-        html += '<div class="no-data" style="padding:.5rem;font-size:.8rem">No recommendations</div>';
+      var html = '';
+      // Breeding-capacity summary banner. Replaces the old "Recommended"
+      // kanban column — there's no prescribed list any more; the user picks
+      // cull candidates manually via the Android app's Cull Mode.
+      if(this._flockStats){
+        var s = this._flockStats;
+        var safeColor = s.safe_to_cull > 0 ? 'var(--safe)' : 'var(--warning)';
+        html +=
+          '<div class="panel" style="margin-bottom:1rem"><div class="panel-body" style="display:flex;gap:1.5rem;flex-wrap:wrap;font-size:.9rem">' +
+          '<div><strong>'+s.total_males+'</strong> male'+(s.total_males===1?'':'s')+'</div>' +
+          '<div><strong>'+s.total_females+'</strong> female'+(s.total_females===1?'':'s')+'</div>' +
+          '<div>Minimum needed: <strong>'+s.minimum_males_needed+'</strong></div>' +
+          '<div>Safe to cull: <strong style="color:'+safeColor+'">'+s.safe_to_cull+'</strong></div>' +
+          '</div></div>';
       }
-      recommended.forEach(function(r){
-        var bird = findBird(r.bird_id);
-        var reason = formatCullReason(r.reason);
-        html += '<div class="kanban-card">';
-        html += '<div class="kanban-card-header">';
-        if(bird) html += bandDot(bird.band_color, 12)+' ';
-        html += birdLink(r.bird_id);
-        if(bird) html += ' <span style="font-size:.72rem;color:#888">'+formatLineages(bird.lineages)+'</span>';
-        html += '</div>';
-        html += '<div class="kanban-card-reason">'+escapeHtml(reason)+'</div>';
-        html += '<div class="kanban-card-actions"><button class="btn-primary" style="font-size:.72rem;padding:.2rem .5rem" onclick="Page.Processing.scheduleFromRec('+r.bird_id+',\''+escapeHtml(reason).replace(/'/g,"\\'")+'\')">Schedule</button></div>';
-        html += '</div>';
-      });
-      html += '</div>';
+
+      html += '<div class="kanban">';
 
       // Scheduled column
       html += '<div class="kanban-col">';
@@ -3706,8 +3699,15 @@
      --------------------------------------------------------- */
   Page.Settings = {
     _backups: [],
+    _breedingConfig: null,
     render: function(app){
       app.innerHTML = '<div class="page-top-bar"><h2>Settings</h2></div>' +
+        // Breeding Configuration. Drives the Flock-screen cull-mode guardrail
+        // (in the Android app) and the server-computed minimum_males_needed.
+        '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F423; Breeding Configuration</span></div><div class="panel-body">' +
+        '<p style="margin-top:0;color:#666;font-size:.9rem">Used to compute the minimum males the flock needs. Minimum&nbsp;=&nbsp;ceil(females&nbsp;&divide;&nbsp;max-per-male)&nbsp;&times;&nbsp;males-per-group.</p>' +
+        '<div id="breeding-config">'+loadingHTML()+'</div>' +
+        '</div></div>' +
         '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F4BE; Database Backups</span></div><div class="panel-body">' +
         '<button class="btn-primary" onclick="Page.Settings.createBackup()" style="margin-bottom:1rem">Create Backup Now</button>' +
         '<div id="backup-list">'+loadingHTML()+'</div>' +
@@ -3716,8 +3716,45 @@
     start: function(){ this._load(); },
     stop: function(){},
     _load: async function(){
+      this._breedingConfig = await API.get('/api/settings');
+      this._renderBreedingConfig();
       this._backups = await API.get('/api/backups') || [];
       this._renderList();
+    },
+    _renderBreedingConfig: function(){
+      var el = document.getElementById('breeding-config');
+      if(!el) return;
+      var s = this._breedingConfig;
+      if(!s){
+        el.innerHTML = '<div class="no-data">Couldn\'t load settings.</div>';
+        return;
+      }
+      el.innerHTML =
+        '<div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-end">' +
+        '<label style="display:flex;flex-direction:column;gap:.25rem;font-size:.85rem">Males per breeding group' +
+        '<input id="settings-males-per-group" type="number" min="1" max="100" value="'+s.desired_males_per_group+'" style="padding:.4rem;width:6rem"></label>' +
+        '<label style="display:flex;flex-direction:column;gap:.25rem;font-size:.85rem">Max females per male' +
+        '<input id="settings-max-females-per-male" type="number" min="1" max="100" value="'+s.max_females_per_male+'" style="padding:.4rem;width:6rem"></label>' +
+        '<button class="btn-primary" onclick="Page.Settings.saveBreedingConfig()">Save</button>' +
+        '</div>';
+    },
+    saveBreedingConfig: async function(){
+      var males = parseInt(document.getElementById('settings-males-per-group').value, 10);
+      var maxF = parseInt(document.getElementById('settings-max-females-per-male').value, 10);
+      if(!(males >= 1 && males <= 100) || !(maxF >= 1 && maxF <= 100)){
+        toast('Values must be between 1 and 100','error');
+        return;
+      }
+      var resp = await API.put('/api/settings', {
+        desired_males_per_group: males,
+        max_females_per_male: maxF,
+      });
+      if(resp){
+        this._breedingConfig = resp;
+        toast('Breeding settings saved');
+      } else {
+        toast('Save failed','error');
+      }
     },
     _renderList: function(){
       var el = document.getElementById('backup-list');

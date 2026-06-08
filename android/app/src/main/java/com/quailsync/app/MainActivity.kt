@@ -44,11 +44,15 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -60,15 +64,19 @@ import androidx.core.content.ContextCompat
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.quailsync.app.data.HatchCountdownWorker
 import com.quailsync.app.data.MonitoringService
 import com.quailsync.app.data.NfcService
 import com.quailsync.app.data.NotificationHelper
+import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.ServerConfig
+import com.quailsync.app.data.UpdateAppSettings
 import com.quailsync.app.ui.screens.AlertsScreen
 import com.quailsync.app.ui.screens.BatchState
 import com.quailsync.app.ui.screens.BrooderManageScreen
@@ -332,7 +340,6 @@ fun QuailSyncApp(
                 DashboardScreen(
                     onBrooderClick = { id -> navController.navigate("brooder/$id") },
                     onTelemetryClick = { navController.navigate(Screen.Telemetry.route) { launchSingleTop = true } },
-                    onBreedingClick = { navController.navigate(Screen.Breeding.route) { launchSingleTop = true } },
                     onAlertsClick = { navController.navigate(Screen.Alerts.route) { launchSingleTop = true } },
                 )
             }
@@ -345,11 +352,29 @@ fun QuailSyncApp(
                     onBack = { navController.popBackStack() },
                 )
             }
-            composable(Screen.Breeding.route) {
-                BreedingScreen(onBack = { navController.popBackStack() })
+            // Route accepts an optional `?tab=N` query so callers can deep-link
+            // directly to a tab (Flock's Cull and Breeding buttons do this).
+            // The bare "breeding" path keeps working via the default value.
+            composable(
+                route = "${Screen.Breeding.route}?tab={tab}",
+                arguments = listOf(navArgument("tab") { type = NavType.IntType; defaultValue = 0 }),
+            ) { backStackEntry ->
+                BreedingScreen(
+                    initialTab = backStackEntry.arguments?.getInt("tab") ?: 0,
+                    onBack = { navController.popBackStack() },
+                )
             }
             composable(Screen.Cameras.route) { CameraScreen() }
-            composable(Screen.Flock.route) { FlockScreen() }
+            composable(Screen.Flock.route) {
+                FlockScreen(
+                    // Cull List was retired in favour of Flock's local Cull
+                    // Mode, so we only deep-link to Breeding Groups now.
+                    // Breeding Groups slid up to tab=0 after the removal.
+                    onBreedingClick = {
+                        navController.navigate("${Screen.Breeding.route}?tab=0") { launchSingleTop = true }
+                    },
+                )
+            }
             composable(Screen.Nfc.route) { NfcScreen(nfcService = nfcService, viewModel = nfcViewModel) }
             composable(Screen.Clutches.route) {
                 ClutchScreen(
@@ -449,6 +474,13 @@ fun SettingsScreen() {
 
         Spacer(Modifier.height(16.dp))
 
+        // Breeding Configuration card. Drives the Flock-screen cull-mode
+        // guardrail: minimum_males_needed = ceil(females / max_per_male)
+        //                                   * desired_males_per_group.
+        BreedingConfigCard()
+
+        Spacer(Modifier.height(16.dp))
+
         // Notifications card
         Card(
             Modifier.fillMaxWidth(),
@@ -494,6 +526,111 @@ fun SettingsScreen() {
         // On a production server the /api/dev/status route returns 404 and
         // the card never appears, so this is invisible to end users.
         DeveloperToolsCard()
+    }
+}
+
+/**
+ * Settings card for the breeding ratio that drives the Flock-screen
+ * cull-mode guardrail. Reads `/api/settings` on first composition; Save
+ * issues a PUT with the typed values. Both fields are positive ints; the
+ * server enforces a 1..100 range and returns 400 if violated — we surface
+ * that as a toast.
+ */
+@Composable
+fun BreedingConfigCard() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val api = remember { QuailSyncApi.create(ServerConfig.getServerUrl(context)) }
+
+    // String state so the user can clear the field while typing without us
+    // snapping a zero in. We re-parse to Int at save time.
+    var malesPerGroup by remember { mutableStateOf("") }
+    var maxFemalesPerMale by remember { mutableStateOf("") }
+    var loaded by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        try {
+            val s = api.getSettings()
+            malesPerGroup = s.desiredMalesPerGroup.toString()
+            maxFemalesPerMale = s.maxFemalesPerMale.toString()
+        } catch (e: Exception) {
+            loadError = "Couldn't load settings — using local defaults"
+            malesPerGroup = "1"
+            maxFemalesPerMale = "5"
+        } finally {
+            loaded = true
+        }
+    }
+
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(2.dp),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Breeding Configuration", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Used by the Flock screen's Cull Mode to compute the minimum number of males the flock needs. Minimum = ceil(females ÷ max-per-male) × males-per-group.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            loadError?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+            }
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
+                value = malesPerGroup,
+                onValueChange = { malesPerGroup = it.filter { c -> c.isDigit() }.take(3) },
+                label = { Text("Males per breeding group") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                enabled = loaded,
+                modifier = Modifier.fillMaxWidth().testTag("settings_males_per_group"),
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = maxFemalesPerMale,
+                onValueChange = { maxFemalesPerMale = it.filter { c -> c.isDigit() }.take(3) },
+                label = { Text("Max females per male") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                enabled = loaded,
+                modifier = Modifier.fillMaxWidth().testTag("settings_max_females_per_male"),
+            )
+            Spacer(Modifier.height(12.dp))
+            val malesInt = malesPerGroup.toIntOrNull()
+            val maxInt = maxFemalesPerMale.toIntOrNull()
+            val valid = malesInt != null && maxInt != null &&
+                malesInt in 1..100 && maxInt in 1..100
+            Button(
+                onClick = {
+                    if (!valid) return@Button
+                    saving = true
+                    scope.launch {
+                        try {
+                            api.updateSettings(
+                                UpdateAppSettings(
+                                    desiredMalesPerGroup = malesInt,
+                                    maxFemalesPerMale = maxInt,
+                                )
+                            )
+                            Toast.makeText(context, "Breeding settings saved", Toast.LENGTH_SHORT).show()
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Save failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                        } finally {
+                            saving = false
+                        }
+                    }
+                },
+                enabled = loaded && valid && !saving,
+                colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
+            ) { Text(if (saving) "Saving..." else "Save") }
+        }
     }
 }
 

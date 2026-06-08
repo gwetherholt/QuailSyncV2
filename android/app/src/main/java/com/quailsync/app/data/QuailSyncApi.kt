@@ -368,59 +368,36 @@ data class CreateBreedingGroupRequest(
     @SerializedName("notes") val notes: String? = null,
 )
 
-data class CullRecommendation(
+/** Server snapshot powering the Flock-screen cull-mode guardrail. */
+data class FlockBreedingStats(
+    @SerializedName("total_males") val totalMales: Int,
+    @SerializedName("total_females") val totalFemales: Int,
+    @SerializedName("minimum_males_needed") val minimumMalesNeeded: Int,
+    @SerializedName("safe_to_cull") val safeToCull: Int,
+    @SerializedName("per_male_safe_pairings") val perMaleSafePairings: List<PerMaleSafePairings> = emptyList(),
+    /** Echoed from /api/settings so the client can recompute the required-males
+     *  line as the user toggles cull selections (e.g. selecting females
+     *  reduces minimum_males_needed). */
+    @SerializedName("desired_males_per_group") val desiredMalesPerGroup: Int = 1,
+    @SerializedName("max_females_per_male") val maxFemalesPerMale: Int = 5,
+)
+
+data class PerMaleSafePairings(
     @SerializedName("bird_id") val birdId: Int,
-    @SerializedName("reason") val reason: com.google.gson.JsonElement? = null,
-) {
-    /** Parse the Rust serde-tagged enum:
-     *    {"ExcessMale": {"safe_pairings": N, "total_females": M}}
-     *    {"LowWeight":  {"weight_grams": N}}
-     *  ExcessMale folds breeding utility into the label — fewer safe pairings
-     *  = stronger cull candidate. Zero pairings gets its own phrasing.
-     */
-    val reasonLabel: String get() {
-        val r = reason ?: return "Unknown"
-        if (r.isJsonObject) {
-            val obj = r.asJsonObject
-            if (obj.has("ExcessMale")) {
-                val em = obj.getAsJsonObject("ExcessMale")
-                val safe = em.get("safe_pairings")?.asInt ?: 0
-                val total = em.get("total_females")?.asInt ?: 0
-                return if (safe == 0) "Excess Male · No safe pairings"
-                else "Excess Male · $safe of $total safe pairings"
-            }
-            if (obj.has("LowWeight")) {
-                val w = obj.getAsJsonObject("LowWeight").get("weight_grams")?.asDouble ?: 0.0
-                return "Underweight (${w.toInt()}g)"
-            }
-        }
-        return "Unknown"
-    }
-    val reasonKey: String get() {
-        val r = reason ?: return "unknown"
-        if (r.isJsonObject) {
-            val obj = r.asJsonObject
-            if (obj.has("ExcessMale")) return "excess_male"
-            if (obj.has("LowWeight")) return "underweight"
-        }
-        return "unknown"
-    }
-    /** Cull-list color priority. Zero-safe-pairings males get the high tier
-     *  (strongest cull candidate); any male with at least one safe pairing
-     *  is medium; underweight females are low. */
-    val priority: String get() {
-        val r = reason
-        if (r != null && r.isJsonObject) {
-            val obj = r.asJsonObject
-            if (obj.has("ExcessMale")) {
-                val safe = obj.getAsJsonObject("ExcessMale").get("safe_pairings")?.asInt ?: 0
-                return if (safe == 0) "high" else "medium"
-            }
-            if (obj.has("LowWeight")) return "low"
-        }
-        return "low"
-    }
-}
+    @SerializedName("safe_pairings") val safePairings: Int,
+    @SerializedName("safe_female_ids") val safeFemaleIds: List<Int> = emptyList(),
+)
+
+data class AppSettings(
+    @SerializedName("desired_males_per_group") val desiredMalesPerGroup: Int,
+    @SerializedName("max_females_per_male") val maxFemalesPerMale: Int,
+)
+
+/** Partial-update payload — fields omitted (null) are left unchanged server-side. */
+data class UpdateAppSettings(
+    @SerializedName("desired_males_per_group") val desiredMalesPerGroup: Int? = null,
+    @SerializedName("max_females_per_male") val maxFemalesPerMale: Int? = null,
+)
 
 data class InbreedingCheckResult(
     @SerializedName("male_id") val maleId: Int,
@@ -650,9 +627,19 @@ interface QuailSyncApi {
     @POST("api/breeding-groups")
     suspend fun createBreedingGroup(@Body request: CreateBreedingGroupRequest): BreedingGroupDto
 
-    // Cull recommendations
+    // Flock breeding stats (powers the cull-mode guardrail UI).
+    // Same path as before — server response shape changed from a prescribed
+    // cull list to a stats snapshot. Old field name kept on the path for
+    // backwards compatibility with the dashboard's URL.
     @GET("api/flock/cull-recommendations")
-    suspend fun getCullRecommendations(): List<CullRecommendation>
+    suspend fun getFlockBreedingStats(): FlockBreedingStats
+
+    // App settings (breeding ratio config).
+    @GET("api/settings")
+    suspend fun getSettings(): AppSettings
+
+    @PUT("api/settings")
+    suspend fun updateSettings(@Body body: UpdateAppSettings): AppSettings
 
     // Inbreeding check
     @GET("api/inbreeding-check")

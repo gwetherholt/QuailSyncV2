@@ -416,6 +416,32 @@ pub fn init_db(conn: &Connection) {
         println!("[migration]   dropped birds.bloodline_id");
     }
 
+    // --- App settings (key/value config). The cull-mode guardrail reads
+    //     `desired_males_per_group` and `max_females_per_male` from here;
+    //     defaults are seeded on first run and editable via PUT /api/settings.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );",
+    )
+    .expect("failed to create settings table");
+    // INSERT OR IGNORE so existing rows (user-edited values) aren't clobbered
+    // on every server restart, but missing keys still get a sane default.
+    conn.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('desired_males_per_group', '1')",
+        [],
+    )
+    .ok();
+    conn.execute(
+        &format!(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES ('max_females_per_male', '{}')",
+            MAX_FEMALES_PER_MALE
+        ),
+        [],
+    )
+    .ok();
+
     // --- Headcount inference results ---
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS headcounts (

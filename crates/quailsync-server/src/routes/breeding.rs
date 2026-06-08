@@ -355,78 +355,82 @@ pub(crate) async fn inbreeding_check(
     }
 }
 
-// --- Cull Recommendations ---
+// --- Flock breeding stats (powers the Flock-screen cull-mode guardrail) ---
 
+/// Returns the snapshot the client needs to draw the cull-mode guardrail:
+/// total males/females, the minimum-males line implied by the user's
+/// settings, how many males are above that line (`safe_to_cull`), and per-
+/// male safe-pairing counts (so the client can flag culls that would
+/// leave a specific female with zero safe mates).
+///
+/// Used to return a prescribed `Vec<CullRecommendation>`. Replaced because
+/// the new UX hands the cull-choice to the user — the server only enforces
+/// the breeding-capacity guardrail.
 pub(crate) async fn cull_recommendations(
     State(state): State<AppState>,
-) -> Json<Vec<CullRecommendation>> {
+) -> Json<FlockBreedingStats> {
     let conn = acquire_db(&state);
-    let mut recs: Vec<CullRecommendation> = Vec::new();
 
-    // Load every active bird once so we can compute relatedness scores for
-    // the excess-male ranking below. Done up front because we need the female
-    // count for the ideal-male math anyway.
+    // Pull live settings — they drive minimum_males_needed below. Falls
+    // back to AppSettings::default() if the keys are missing (shouldn't
+    // happen post-init_db, but the math has to stay sane regardless).
+    let settings = crate::routes::settings::load_settings(&conn);
+
     let all_birds = load_bird_records(&conn);
     let males: Vec<&BirdRecord> = all_birds.iter().filter(|b| b.sex == Sex::Male).collect();
     let females: Vec<&BirdRecord> = all_birds.iter().filter(|b| b.sex == Sex::Female).collect();
+    let total_males = males.len() as u32;
     let total_females = females.len() as u32;
 
-    let ideal_males = if total_females > 0 {
-        ((total_females as f64) / (MAX_FEMALES_PER_MALE as f64)).ceil() as usize
-    } else {
+    // ceil(total_females / max_females_per_male) * desired_males_per_group.
+    // `max(1, ...)` on the divisor defends against a malformed setting of 0
+    // — the PUT handler rejects that, but a hand-edited DB row could still
+    // smuggle one in.
+    let max_per_male = settings.max_females_per_male.max(1);
+    let minimum_males_needed = if total_females == 0 {
         0
+    } else {
+        let groups_needed = total_females.div_ceil(max_per_male);
+        groups_needed * settings.desired_males_per_group
     };
+    let safe_to_cull = total_males.saturating_sub(minimum_males_needed);
 
-    // For each male, count how many females he can breed with safely
-    // (coefficient < 0.0625). This is his breeding utility — the lower it
-    // is, the stronger his cull candidacy. Two genetically-identical males
-    // share the same count, so the cull list orders them identically rather
-    // than (as the old code did) randomly anointing one of them with a
-    // separate "Inbreeding Risk" badge based on id-sort ordering.
-    let mut ranked: Vec<(&&BirdRecord, u32)> = males
+    // For each male, count + collect the females he can breed with safely
+    // (relatedness < 0.0625). The id list lets the client answer the per-
+    // female "would culling these males leave her with 0 safe mates?"
+    // question without another round-trip.
+    let mut per_male: Vec<PerMaleSafePairings> = males
         .iter()
         .map(|m| {
-            let safe = females
+            let safe_ids: Vec<i64> = females
                 .iter()
                 .filter(|f| compute_relatedness(m, f) < 0.0625)
-                .count() as u32;
-            (m, safe)
+                .map(|f| f.id)
+                .collect();
+            PerMaleSafePairings {
+                bird_id: m.id,
+                safe_pairings: safe_ids.len() as u32,
+                safe_female_ids: safe_ids,
+            }
         })
         .collect();
-    // Ascending safe-pairings: fewer pairings → higher cull priority.
-    // Stable tiebreak on bird id so ordering is deterministic across runs.
-    ranked.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.id.cmp(&b.0.id)));
+    // Ascending safe-pairings: weakest breeders first, so the UI can
+    // highlight them as the natural cull candidates.
+    per_male.sort_by(|a, b| {
+        a.safe_pairings
+            .cmp(&b.safe_pairings)
+            .then_with(|| a.bird_id.cmp(&b.bird_id))
+    });
 
-    let surplus = males.len().saturating_sub(ideal_males);
-    for (m, safe_pairings) in ranked.iter().take(surplus) {
-        recs.push(CullRecommendation {
-            bird_id: m.id,
-            reason: CullReason::ExcessMale {
-                safe_pairings: *safe_pairings,
-                total_females,
-            },
-        });
-    }
-
-    let mut fw_stmt = conn.prepare(
-        "SELECT b.id, w.weight_grams FROM birds b JOIN weight_records w ON w.bird_id = b.id
-         WHERE b.sex = 'Female' AND b.status = 'Active'
-           AND w.id = (SELECT w2.id FROM weight_records w2 WHERE w2.bird_id = b.id ORDER BY w2.date DESC LIMIT 1)"
-    ).expect("prepare failed");
-    let low_weight: Vec<(i64, f64)> = fw_stmt
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-        .unwrap()
-        .filter_map(|r| r.ok())
-        .filter(|(_, w)| *w < COTURNIX_MIN_BREEDING_WEIGHT_GRAMS)
-        .collect();
-    for (bid, w) in low_weight {
-        recs.push(CullRecommendation {
-            bird_id: bid,
-            reason: CullReason::LowWeight { weight_grams: w },
-        });
-    }
-
-    Json(recs)
+    Json(FlockBreedingStats {
+        total_males,
+        total_females,
+        minimum_males_needed,
+        safe_to_cull,
+        per_male_safe_pairings: per_male,
+        desired_males_per_group: settings.desired_males_per_group,
+        max_females_per_male: settings.max_females_per_male,
+    })
 }
 
 // --- Flock Summary ---

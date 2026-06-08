@@ -40,14 +40,18 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -69,8 +73,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -95,9 +101,14 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.quailsync.app.data.Bird
 import com.quailsync.app.data.BirdWeight
+import com.quailsync.app.data.CullBatchRequest
+import com.quailsync.app.data.FlockBreedingStats
 import com.quailsync.app.data.Lineage
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.ServerConfig
+import com.quailsync.app.ui.theme.AlertGreen
+import com.quailsync.app.ui.theme.AlertRed
+import com.quailsync.app.ui.theme.AlertYellow
 import com.quailsync.app.ui.theme.SageGreen
 import com.quailsync.app.ui.theme.SageGreenLight
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -120,6 +131,12 @@ class FlockViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _lineages = MutableStateFlow<List<Lineage>>(emptyList())
     val lineages: StateFlow<List<Lineage>> = _lineages.asStateFlow()
+
+    /** Server breeding-capacity snapshot for the cull-mode guardrail. Null
+     *  until first load completes; treat as "no guardrail data yet" — the
+     *  Cull Mode UI degrades to selection-only without zone coloring. */
+    private val _flockStats = MutableStateFlow<FlockBreedingStats?>(null)
+    val flockStats: StateFlow<FlockBreedingStats?> = _flockStats.asStateFlow()
 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -146,11 +163,28 @@ class FlockViewModel(application: Application) : AndroidViewModel(application) {
             _birds.value = birdList
             val lineageList = try { api.getLineages() } catch (e: Exception) { Log.e("QuailSync", "Failed to load lineages", e); emptyList() }
             _lineages.value = lineageList
+            _flockStats.value = try { api.getFlockBreedingStats() } catch (e: Exception) {
+                Log.e("QuailSync", "Failed to load flock breeding stats", e); null
+            }
         } catch (e: Exception) {
             Log.e("QuailSync", "Failed to load birds", e)
         } finally {
             _isLoading.value = false
         }
+    }
+
+    /** Confirms a cull selection from the Flock screen's Cull Mode bottom
+     *  bar. Returns the server-reported count of birds actually updated. */
+    suspend fun cullBatch(
+        birdIds: List<Int>,
+        reason: String,
+        method: String,
+        notes: String?,
+        date: String,
+    ): Int {
+        val resp = api.cullBatch(CullBatchRequest(birdIds, reason, method, notes, date))
+        loadDataSuspend()
+        return resp.updated
     }
 
     suspend fun getBirdWeights(birdId: Int): List<BirdWeight> {
@@ -314,15 +348,28 @@ fun rememberBirdPhoto(birdId: Int, refreshKey: Int = 0): Bitmap? {
 // =====================================================================
 
 @Composable
-fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
+fun FlockScreen(
+    viewModel: FlockViewModel = viewModel(),
+    onBreedingClick: () -> Unit = {},
+) {
     val birds by viewModel.birds.collectAsState()
     val lineages by viewModel.lineages.collectAsState()
+    val flockStats by viewModel.flockStats.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     var selectedFilter by remember { mutableStateOf<FlockFilter>(FlockFilter.Active) }
     var selectedBird by remember { mutableStateOf<Bird?>(null) }
     var showAddBird by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    // Cull Mode: toggled by the scissors icon. While active, bird rows show
+    // checkboxes and a sticky bottom-bar surfaces the guardrail. Selection
+    // is held as a stable SnapshotStateList so checkbox toggles recompose
+    // only the affected row.
+    var cullMode by remember { mutableStateOf(false) }
+    val selectedToCull = remember { mutableStateListOf<Int>() }
+    var showCullDialog by remember { mutableStateOf(false) }
 
     val filteredBirds = remember(birds, selectedFilter) {
         when (selectedFilter) {
@@ -356,6 +403,25 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
                     IconButton(onClick = { viewModel.refresh() }) { Icon(Icons.Default.Refresh, "Refresh") }
                 }
                 IconButton(
+                    onClick = onBreedingClick,
+                    modifier = Modifier.testTag("flock_breeding"),
+                ) { Icon(Icons.Default.Groups, "Breeding groups", tint = SageGreen) }
+                // Scissors toggles Cull Mode. Tinted differently when active
+                // so the user can see at a glance that selection mode is on.
+                IconButton(
+                    onClick = {
+                        cullMode = !cullMode
+                        if (!cullMode) selectedToCull.clear()
+                    },
+                    modifier = Modifier.testTag("flock_cull"),
+                ) {
+                    Icon(
+                        Icons.Default.ContentCut,
+                        contentDescription = if (cullMode) "Exit cull mode" else "Cull mode",
+                        tint = if (cullMode) AlertRed else SageGreen,
+                    )
+                }
+                IconButton(
                     onClick = { showAddBird = true },
                     modifier = Modifier.testTag("flock_add_bird"),
                 ) { Icon(Icons.Default.Add, "Add Bird", tint = SageGreen) }
@@ -380,22 +446,109 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
                 }
             }
             else -> {
-                LazyColumn(
-                    modifier = Modifier.testTag("flock_bird_list"),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    items(filteredBirds, key = { it.id }) { bird ->
-                        BirdCard(
-                            bird,
-                            com.quailsync.app.data.formatLineages(bird.lineages, emptyText = "").ifEmpty { null },
-                            modifier = Modifier.testTag("flock_bird_row_${bird.id}"),
-                        ) { selectedBird = bird }
+                // Pre-compute the per-female "last safe mate" map so each row
+                // can render its own warning without scanning the whole stats
+                // payload. Maps female_id -> list of unselected males still
+                // safe for her; selecting a male whose id appears in any
+                // length-1 list will orphan that female.
+                val safeMalesForFemale: Map<Int, List<Int>> = remember(flockStats, selectedToCull.toList()) {
+                    val out = HashMap<Int, MutableList<Int>>()
+                    flockStats?.perMaleSafePairings?.forEach { entry ->
+                        if (entry.birdId in selectedToCull) return@forEach
+                        entry.safeFemaleIds.forEach { fid ->
+                            out.getOrPut(fid) { mutableListOf() }.add(entry.birdId)
+                        }
                     }
-                    item { Spacer(Modifier.height(8.dp)) }
+                    out
+                }
+
+                Column(Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        modifier = Modifier.testTag("flock_bird_list").weight(1f),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(filteredBirds, key = { it.id }) { bird ->
+                            // Per-row "last safe mate" warning: only meaningful
+                            // for active males. Lists females who'd be left
+                            // with zero safe mates if this male were culled
+                            // alongside the current selection.
+                            val orphanedFemaleIds: List<Int> = if (
+                                cullMode &&
+                                bird.sex?.lowercase() == "male" &&
+                                bird.id !in selectedToCull
+                            ) {
+                                val mine = flockStats?.perMaleSafePairings
+                                    ?.firstOrNull { it.birdId == bird.id }
+                                    ?.safeFemaleIds.orEmpty()
+                                mine.filter { fid ->
+                                    val safe = safeMalesForFemale[fid].orEmpty()
+                                    safe.size == 1 && safe.first() == bird.id
+                                }
+                            } else emptyList()
+
+                            CullableBirdRow(
+                                bird = bird,
+                                lineageLabel = com.quailsync.app.data.formatLineages(bird.lineages, emptyText = "").ifEmpty { null },
+                                cullMode = cullMode,
+                                selected = bird.id in selectedToCull,
+                                orphanedFemaleIds = orphanedFemaleIds,
+                                onToggleSelect = {
+                                    if (bird.id in selectedToCull) selectedToCull.remove(bird.id)
+                                    else selectedToCull.add(bird.id)
+                                },
+                                onOpen = { selectedBird = bird },
+                            )
+                        }
+                        item { Spacer(Modifier.height(8.dp)) }
+                    }
+                    if (cullMode) {
+                        CullModeBottomBar(
+                            stats = flockStats,
+                            allBirds = birds,
+                            selectedIds = selectedToCull.toList(),
+                            onClear = { selectedToCull.clear() },
+                            onConfirm = { showCullDialog = true },
+                        )
+                    }
                 }
             }
         }
+    }
+
+    if (showCullDialog) {
+        FlockCullConfirmDialog(
+            count = selectedToCull.size,
+            onConfirm = { method, notes ->
+                showCullDialog = false
+                val ids = selectedToCull.toList()
+                scope.launch {
+                    try {
+                        val updated = viewModel.cullBatch(
+                            ids,
+                            // The new flow doesn't track per-bird reasons —
+                            // the user owns the selection, so we just record a
+                            // generic "manual_cull". The cull-batch endpoint
+                            // still requires a reason string for audit.
+                            reason = "manual_cull",
+                            method = method,
+                            notes = notes.ifBlank { null },
+                            date = java.time.LocalDate.now().toString(),
+                        )
+                        Toast.makeText(
+                            context,
+                            "Culled $updated bird${if (updated != 1) "s" else ""}",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                        selectedToCull.clear()
+                        cullMode = false
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "Cull failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+            onDismiss = { showCullDialog = false },
+        )
     }
 
     if (selectedBird != null) {
@@ -415,6 +568,226 @@ fun FlockScreen(viewModel: FlockViewModel = viewModel()) {
             Toast.makeText(context, "Bird #${bird.id} created!", Toast.LENGTH_SHORT).show()
         })
     }
+}
+
+// =====================================================================
+// Cull Mode UI
+// =====================================================================
+
+/**
+ * Wraps a regular bird row with a leading checkbox when Cull Mode is on,
+ * plus an inline warning when culling this bird (a male) would leave any
+ * female with zero safe mates. Tapping the body opens the bird detail
+ * dialog as usual; tapping the checkbox toggles selection.
+ */
+@Composable
+private fun CullableBirdRow(
+    bird: Bird,
+    lineageLabel: String?,
+    cullMode: Boolean,
+    selected: Boolean,
+    orphanedFemaleIds: List<Int>,
+    onToggleSelect: () -> Unit,
+    onOpen: () -> Unit,
+) {
+    if (!cullMode) {
+        BirdCard(
+            bird,
+            lineageLabel,
+            modifier = Modifier.testTag("flock_bird_row_${bird.id}"),
+            onClick = onOpen,
+        )
+        return
+    }
+    Column(Modifier.testTag("flock_bird_row_${bird.id}")) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(
+                checked = selected,
+                onCheckedChange = { onToggleSelect() },
+                colors = CheckboxDefaults.colors(checkedColor = AlertRed),
+                modifier = Modifier.testTag("flock_cull_check_${bird.id}"),
+            )
+            Box(Modifier.weight(1f)) {
+                BirdCard(bird, lineageLabel, onClick = onOpen)
+            }
+        }
+        if (orphanedFemaleIds.isNotEmpty()) {
+            Text(
+                "⚠️ Last safe mate for ${orphanedFemaleIds.size} female${if (orphanedFemaleIds.size != 1) "s" else ""} (${orphanedFemaleIds.joinToString(", ") { "#$it" }})",
+                style = MaterialTheme.typography.labelSmall,
+                color = AlertRed,
+                modifier = Modifier.padding(start = 48.dp, end = 8.dp, bottom = 4.dp),
+            )
+        }
+    }
+}
+
+/**
+ * Sticky bottom bar shown while Cull Mode is active. Surfaces the
+ * guardrail:
+ *  - "X selected · Y males will remain · Z females in flock"
+ *  - Color zone: green (above min), yellow (at min), red (below min)
+ *  - "Cull Selected" is disabled in the red zone — the user can still
+ *    deselect to recover. The line is recomputed locally from the stats
+ *    settings so deselecting a female lowers the requirement live.
+ */
+@Composable
+private fun CullModeBottomBar(
+    stats: FlockBreedingStats?,
+    allBirds: List<Bird>,
+    selectedIds: List<Int>,
+    onClear: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val activeBirdMap = remember(allBirds) {
+        allBirds.filter { it.status?.lowercase() == "active" }.associateBy { it.id }
+    }
+    val selectedMales = selectedIds.count { activeBirdMap[it]?.sex?.lowercase() == "male" }
+    val selectedFemales = selectedIds.count { activeBirdMap[it]?.sex?.lowercase() == "female" }
+
+    val totalMales = stats?.totalMales ?: 0
+    val totalFemales = stats?.totalFemales ?: 0
+    val malesAfter = (totalMales - selectedMales).coerceAtLeast(0)
+    val femalesAfter = (totalFemales - selectedFemales).coerceAtLeast(0)
+    // Recompute live from the settings echoed back in stats. Falls back to
+    // the server's pre-selection figure if stats hasn't loaded yet.
+    val minAfter: Int = if (stats == null) 0 else if (femalesAfter == 0) 0 else {
+        val maxPer = stats.maxFemalesPerMale.coerceAtLeast(1)
+        val groups = (femalesAfter + maxPer - 1) / maxPer
+        groups * stats.desiredMalesPerGroup
+    }
+
+    val zone = when {
+        stats == null || selectedIds.isEmpty() -> Zone.NEUTRAL
+        malesAfter < minAfter -> Zone.RED
+        malesAfter == minAfter -> Zone.YELLOW
+        else -> Zone.GREEN
+    }
+    val zoneColor = when (zone) {
+        Zone.GREEN -> AlertGreen
+        Zone.YELLOW -> AlertYellow
+        Zone.RED -> AlertRed
+        Zone.NEUTRAL -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val zoneIcon = when (zone) {
+        Zone.GREEN -> "✅"   // ✅
+        Zone.YELLOW -> "⚠️" // ⚠️
+        Zone.RED -> "🛑" // 🛑
+        Zone.NEUTRAL -> ""
+    }
+
+    Card(
+        Modifier.fillMaxWidth().padding(12.dp).testTag("flock_cull_bottom_bar"),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(6.dp),
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (zoneIcon.isNotEmpty()) {
+                    Text(zoneIcon, fontSize = 18.sp)
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text(
+                    "${selectedIds.size} selected",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = zoneColor,
+                )
+            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                "$malesAfter male${if (malesAfter != 1) "s" else ""} will remain · $femalesAfter female${if (femalesAfter != 1) "s" else ""} in flock",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            if (stats != null) {
+                Text(
+                    "Minimum males needed: $minAfter",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(
+                    onClick = onClear,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Clear") }
+                Button(
+                    onClick = onConfirm,
+                    enabled = selectedIds.isNotEmpty() && zone != Zone.RED,
+                    colors = ButtonDefaults.buttonColors(containerColor = AlertRed),
+                    modifier = Modifier.weight(1f).testTag("flock_cull_confirm"),
+                ) {
+                    Icon(Icons.Default.Delete, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Cull Selected")
+                }
+            }
+            if (zone == Zone.RED) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Below the minimum-males line — deselect to enable.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AlertRed,
+                )
+            }
+        }
+    }
+}
+
+private enum class Zone { NEUTRAL, GREEN, YELLOW, RED }
+
+@Composable
+private fun FlockCullConfirmDialog(
+    count: Int,
+    onConfirm: (method: String, notes: String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var method by remember { mutableStateOf("Butchered") }
+    var notes by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Cull $count bird${if (count != 1) "s" else ""}?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "This will update their status. This action cannot be easily undone.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Butchered", "Culled").forEach { m ->
+                        OutlinedButton(
+                            onClick = { method = m },
+                            colors = if (method == m)
+                                ButtonDefaults.outlinedButtonColors(
+                                    containerColor = SageGreen.copy(alpha = 0.12f),
+                                    contentColor = SageGreen,
+                                )
+                            else ButtonDefaults.outlinedButtonColors(),
+                        ) { Text(m) }
+                    }
+                }
+                OutlinedTextField(
+                    value = notes,
+                    onValueChange = { notes = it },
+                    label = { Text("Notes (optional)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 2,
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(method, notes) },
+                colors = ButtonDefaults.buttonColors(containerColor = AlertRed),
+            ) { Text("Confirm Cull") }
+        },
+        dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 // =====================================================================

@@ -6,7 +6,7 @@ use quailsync_common::{
     Alert, Bird, BirdStatus, BreedingGroup, Brooder, BrooderReading, CameraFeed, CameraStatus,
     ChickGroup, ChickMortalityLog, Clutch, ClutchStatus, CreateBird, CreateBreedingGroup,
     CreateBrooder, CreateCameraFeed, CreateChickGroup, CreateClutch, CreateLineage,
-    CreateProcessingRecord, CreateWeightRecord, CullReason, CullRecommendation, FrameCapture,
+    CreateProcessingRecord, CreateWeightRecord, FlockBreedingStats, FrameCapture,
     InbreedingCoefficient, LifeStage, Lineage, MortalityRequest, ProcessingReason,
     ProcessingRecord, ProcessingStatus, Severity, Sex, SystemMetrics, UpdateClutch,
     UpdateProcessingRecord, WeightRecord, COTURNIX_BUTCHER_WEIGHT_GRAMS,
@@ -1526,24 +1526,43 @@ async fn cmd_breeding_group_list(base: &str) -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------
 
 async fn cmd_flock_cull_review(base: &str) -> anyhow::Result<()> {
-    let recs: Vec<CullRecommendation> =
-        reqwest::get(format!("{base}/api/flock/cull-recommendations"))
-            .await?
-            .json()
-            .await?;
-
-    if recs.is_empty() {
-        println!("{}", "No cull recommendations — flock looks good!".green());
-        return Ok(());
-    }
-
-    // Fetch birds for display. Lineage names come from `bird.lineages`
-    // populated by the server.
-    let birds: Vec<Bird> = reqwest::get(format!("{base}/api/birds"))
+    let stats: FlockBreedingStats = reqwest::get(format!("{base}/api/flock/cull-recommendations"))
         .await?
         .json()
         .await?;
 
+    println!("{}", "Flock Breeding Capacity".bold().underline());
+    println!();
+    println!(
+        "  Males:                   {}",
+        stats.total_males.to_string().bold()
+    );
+    println!(
+        "  Females:                 {}",
+        stats.total_females.to_string().bold()
+    );
+    println!(
+        "  Minimum males needed:    {}",
+        stats.minimum_males_needed.to_string().bold()
+    );
+    let safe_str = stats.safe_to_cull.to_string();
+    let safe_label = if stats.safe_to_cull == 0 {
+        safe_str.yellow().bold()
+    } else {
+        safe_str.green().bold()
+    };
+    println!("  Safe to cull (males):    {safe_label}");
+    println!();
+
+    if stats.per_male_safe_pairings.is_empty() {
+        println!("  {}", "No active males.".dimmed());
+        return Ok(());
+    }
+
+    let birds: Vec<Bird> = reqwest::get(format!("{base}/api/birds"))
+        .await?
+        .json()
+        .await?;
     let bird_label = |id: i64| -> String {
         birds
             .iter()
@@ -1556,56 +1575,20 @@ async fn cmd_flock_cull_review(base: &str) -> anyhow::Result<()> {
             .unwrap_or_else(|| format!("#{id}"))
     };
 
-    println!("{}", "Cull Recommendations".red().bold().underline());
-    println!();
-
-    // Group by reason type
-    let excess: Vec<&CullRecommendation> = recs
-        .iter()
-        .filter(|r| matches!(r.reason, CullReason::ExcessMale { .. }))
-        .collect();
-    let low_weight: Vec<&CullRecommendation> = recs
-        .iter()
-        .filter(|r| matches!(r.reason, CullReason::LowWeight { .. }))
-        .collect();
-
-    if !excess.is_empty() {
-        println!("  {}", "EXCESS MALES".red().bold());
-        for r in &excess {
-            if let CullReason::ExcessMale {
-                safe_pairings,
-                total_females,
-            } = &r.reason
-            {
-                let detail = if *safe_pairings == 0 {
-                    "no safe pairings".to_string()
-                } else {
-                    format!("{safe_pairings} of {total_females} safe pairings")
-                };
-                println!("    {} — {detail}", bird_label(r.bird_id).red());
-            }
+    println!("  {}", "Per-male safe pairings (weakest first)".bold());
+    for entry in &stats.per_male_safe_pairings {
+        let line = format!(
+            "    {} — {} safe of {} females",
+            bird_label(entry.bird_id),
+            entry.safe_pairings,
+            stats.total_females,
+        );
+        if entry.safe_pairings == 0 {
+            println!("{}", line.red());
+        } else {
+            println!("{line}");
         }
-        println!();
     }
-
-    if !low_weight.is_empty() {
-        println!("  {}", "LOW WEIGHT".red().bold());
-        for r in &low_weight {
-            if let CullReason::LowWeight { weight_grams } = &r.reason {
-                println!(
-                    "    {} — {:.1}g (min 200g)",
-                    bird_label(r.bird_id).red(),
-                    weight_grams,
-                );
-            }
-        }
-        println!();
-    }
-
-    println!(
-        "  {} birds flagged for review",
-        recs.len().to_string().red().bold(),
-    );
 
     Ok(())
 }

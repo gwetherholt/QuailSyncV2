@@ -449,30 +449,68 @@ pub struct CreateBreedingGroup {
 }
 
 // =========================================================================
-// Cull recommendations
+// Flock breeding stats (powers the cull-mode guardrail UI)
+// =========================================================================
+
+/// Per-male breeding utility. `safe_female_ids` lets clients answer the
+/// "would culling this male leave any female with zero safe mates?"
+/// question without another round-trip — they just remove the selected
+/// males from each female's safe-mate set client-side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerMaleSafePairings {
+    pub bird_id: i64,
+    pub safe_pairings: u32,
+    pub safe_female_ids: Vec<i64>,
+}
+
+/// Server-computed snapshot of flock breeding capacity. Used by the
+/// Flock screen's cull-mode guardrail: clients select birds, then
+/// subtract them from `total_males` and compare against
+/// `minimum_males_needed` to compute the green/yellow/red zone.
+///
+/// `safe_to_cull = max(0, total_males - minimum_males_needed)`, where
+/// `minimum_males_needed = ceil(total_females / max_females_per_male)
+///                         * desired_males_per_group` (settings-driven).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlockBreedingStats {
+    pub total_males: u32,
+    pub total_females: u32,
+    pub minimum_males_needed: u32,
+    pub safe_to_cull: u32,
+    pub per_male_safe_pairings: Vec<PerMaleSafePairings>,
+    /// Echoed back from the settings table so clients can recompute the
+    /// required-males line themselves as the user toggles cull selections.
+    pub desired_males_per_group: u32,
+    pub max_females_per_male: u32,
+}
+
+// =========================================================================
+// User-configurable app settings
 // =========================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum CullReason {
-    /// Male is beyond the ideal sex ratio. `safe_pairings` is how many of the
-    /// `total_females` active females this male can breed with at a
-    /// relatedness coefficient below 0.0625 — fewer = lower breeding utility =
-    /// stronger cull candidate. Used by the server to sort the cull list, and
-    /// by clients to surface the trade-off ("Excess Male · 2 of 8 safe
-    /// pairings") instead of a flat "Excess Male" label.
-    ExcessMale {
-        safe_pairings: u32,
-        total_females: u32,
-    },
-    LowWeight {
-        weight_grams: f64,
-    },
+pub struct AppSettings {
+    /// How many males the user wants per breeding group. Multiplied into
+    /// `minimum_males_needed` so a value of 2 doubles the required males.
+    pub desired_males_per_group: u32,
+    /// Cap on females per male before another male is required.
+    pub max_females_per_male: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CullRecommendation {
-    pub bird_id: i64,
-    pub reason: CullReason,
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            desired_males_per_group: 1,
+            max_females_per_male: MAX_FEMALES_PER_MALE as u32,
+        }
+    }
+}
+
+/// Partial-update payload for PUT /api/settings.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UpdateAppSettings {
+    pub desired_males_per_group: Option<u32>,
+    pub max_females_per_male: Option<u32>,
 }
 
 // =========================================================================

@@ -24,7 +24,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -221,7 +220,6 @@ fun DashboardScreen(
     viewModel: DashboardViewModel = viewModel(),
     onBrooderClick: (Int) -> Unit = {},
     onTelemetryClick: () -> Unit = {},
-    onBreedingClick: () -> Unit = {},
     onAlertsClick: () -> Unit = {},
 ) {
     val brooders by viewModel.brooders.collectAsState()
@@ -404,29 +402,6 @@ fun DashboardScreen(
                             onClick = { onBrooderClick(state.brooder.id) },
                             modifier = Modifier.testTag("dashboard_housing_card_${state.brooder.id}"),
                         )
-                    }
-                }
-
-                // === Breeding & Culling Card ===
-                item(key = "breeding-card") {
-                    Card(
-                        Modifier.fillMaxWidth().clickable(onClick = onBreedingClick),
-                        shape = RoundedCornerShape(10.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        elevation = CardDefaults.cardElevation(1.dp),
-                    ) {
-                        Row(
-                            Modifier.padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(Icons.Default.Science, null, Modifier.size(24.dp), tint = SageGreen)
-                            Spacer(Modifier.width(12.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text("Breeding & Culling", style = MaterialTheme.typography.titleMedium)
-                                Text("Manage groups, pair checks, cull list", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            Text("\u203A", fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
                     }
                 }
 

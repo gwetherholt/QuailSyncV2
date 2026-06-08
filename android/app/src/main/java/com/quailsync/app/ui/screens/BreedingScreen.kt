@@ -1,7 +1,6 @@
 package com.quailsync.app.ui.screens
 
 import android.app.Application
-import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -23,8 +22,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
@@ -70,7 +67,6 @@ import com.quailsync.app.data.Bird
 import com.quailsync.app.data.BreedingGroupDto
 import com.quailsync.app.data.CreateBreedingGroupRequest
 import com.quailsync.app.data.CullBatchRequest
-import com.quailsync.app.data.CullRecommendation
 import com.quailsync.app.data.InbreedingCheckResult
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.ServerConfig
@@ -83,7 +79,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.time.LocalDate
-import java.time.temporal.ChronoUnit
 
 // =====================================================================
 // ViewModel
@@ -98,9 +93,6 @@ class BreedingViewModel(application: Application) : AndroidViewModel(application
     private val _groups = MutableStateFlow<List<BreedingGroupDto>>(emptyList())
     val groups: StateFlow<List<BreedingGroupDto>> = _groups.asStateFlow()
 
-    private val _cullRecs = MutableStateFlow<List<CullRecommendation>>(emptyList())
-    val cullRecs: StateFlow<List<CullRecommendation>> = _cullRecs.asStateFlow()
-
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
@@ -113,9 +105,6 @@ class BreedingViewModel(application: Application) : AndroidViewModel(application
             _isLoading.value = true
             _birds.value = try { api.getBirds() } catch (_: Exception) { emptyList() }
             _groups.value = try { api.getBreedingGroups() } catch (_: Exception) { emptyList() }
-            _cullRecs.value = try { api.getCullRecommendations() } catch (e: Exception) {
-                Log.e("QuailSync", "Failed to load cull recs", e); emptyList()
-            }
             _isLoading.value = false
         }
     }
@@ -145,9 +134,16 @@ class BreedingViewModel(application: Application) : AndroidViewModel(application
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BreedingScreen(viewModel: BreedingViewModel = viewModel(), onBack: () -> Unit = {}) {
-    var tabIndex by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Cull List", "Breeding Groups", "Pair Check")
+fun BreedingScreen(
+    viewModel: BreedingViewModel = viewModel(),
+    onBack: () -> Unit = {},
+    initialTab: Int = 0,
+) {
+    var tabIndex by remember { mutableIntStateOf(initialTab.coerceIn(0, 1)) }
+    // Cull List was removed — the Flock screen's cull-mode toggle now owns
+    // the cull workflow. Deep-links to the old `?tab=0` (Cull List) now land
+    // on Breeding Groups; that's intentional, not a redirect bug.
+    val tabs = listOf("Breeding Groups", "Pair Check")
     val isLoading by viewModel.isLoading.collectAsState()
 
     Column(Modifier.fillMaxSize()) {
@@ -172,280 +168,19 @@ fun BreedingScreen(viewModel: BreedingViewModel = viewModel(), onBack: () -> Uni
             }
         } else {
             when (tabIndex) {
-                0 -> CullListTab(viewModel)
-                1 -> BreedingGroupsTab(viewModel)
-                2 -> PairCheckTab(viewModel)
+                0 -> BreedingGroupsTab(viewModel)
+                1 -> PairCheckTab(viewModel)
             }
         }
     }
 }
 
-// =====================================================================
-// Tab 1: Cull List
-// =====================================================================
-
-@Composable
-private fun CullListTab(viewModel: BreedingViewModel) {
-    val cullRecs by viewModel.cullRecs.collectAsState()
-    val birds by viewModel.birds.collectAsState()
-    val scope = rememberCoroutineScope()
-    val context = LocalContext.current
-
-    val selectedIds = remember { mutableStateListOf<Int>() }
-    // Explicit MutableState (not `by` delegate) so writes are setter calls;
-    // the Kotlin flow-analyser otherwise flags the lambda assignments below
-    // as `UNUSED_VALUE` (it can't see Compose's recomposition-time reads).
-    val showCullDialog = remember { mutableStateOf(false) }
-    // Which row is expanded to show full bird details. Null = none expanded.
-    val expandedBirdId = remember { mutableStateOf<Int?>(null) }
-
-    val birdMap = birds.associateBy { it.id }
-    val today = LocalDate.now()
-
-    Column(Modifier.fillMaxSize()) {
-        if (cullRecs.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.Check, null, Modifier.size(48.dp), tint = AlertGreen)
-                    Spacer(Modifier.height(8.dp))
-                    Text("No cull recommendations", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("Flock ratios look good!", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        } else {
-            LazyColumn(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.weight(1f),
-            ) {
-                items(cullRecs, key = { it.birdId }) { rec ->
-                    val bird = birdMap[rec.birdId]
-                    val age = bird?.hatchDate?.let {
-                        try {
-                            ChronoUnit.DAYS.between(LocalDate.parse(it.take(10)), today).toInt()
-                        } catch (_: Exception) { null }
-                    }
-                    val isSelected = rec.birdId in selectedIds
-                    val isExpanded = expandedBirdId.value == rec.birdId
-
-                    val priorityColor = when (rec.priority) {
-                        "high" -> AlertRed
-                        "medium" -> AlertYellow
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-
-                    Card(
-                        Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        elevation = CardDefaults.cardElevation(1.dp),
-                    ) {
-                        Column {
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        expandedBirdId.value = if (isExpanded) null else rec.birdId
-                                    }
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Checkbox(
-                                    checked = isSelected,
-                                    onCheckedChange = {
-                                        if (it) selectedIds.add(rec.birdId) else selectedIds.remove(rec.birdId)
-                                    },
-                                    colors = CheckboxDefaults.colors(checkedColor = SageGreen),
-                                )
-                                // Priority dot
-                                Box(Modifier.size(8.dp).clip(CircleShape).background(priorityColor))
-                                Spacer(Modifier.width(10.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            "#${rec.birdId}",
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = FontWeight.SemiBold,
-                                        )
-                                        if (!bird?.bandColor.isNullOrBlank()) {
-                                            Spacer(Modifier.width(8.dp))
-                                            Text(
-                                                "[${bird?.bandColor}]",
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            )
-                                        }
-                                        Spacer(Modifier.width(8.dp))
-                                        Text(
-                                            bird?.sex ?: "",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                    Text(
-                                        rec.reasonLabel,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = priorityColor,
-                                    )
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        val lineageText = com.quailsync.app.data.formatLineages(
-                                            bird?.lineages ?: emptyList(),
-                                            emptyText = "",
-                                        )
-                                        if (lineageText.isNotBlank()) {
-                                            Text(lineageText, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                            Spacer(Modifier.width(8.dp))
-                                        }
-                                        if (age != null) {
-                                            Text("${age}d old", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        }
-                                        bird?.latestWeight?.let { w ->
-                                            Spacer(Modifier.width(8.dp))
-                                            Text("${w.toInt()}g", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        }
-                                        if (!bird?.nfcTagId.isNullOrBlank()) {
-                                            Spacer(Modifier.width(8.dp))
-                                            Text(
-                                                "NFC ${bird?.nfcTagId?.takeLast(6)}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = SageGreen,
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (isExpanded && bird != null) {
-                                Column(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .padding(start = 56.dp, end = 12.dp, bottom = 12.dp),
-                                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                                ) {
-                                    bird.hatchDate?.let { DetailLine("Hatched", it.take(10)) }
-                                    bird.nfcTagId?.let { DetailLine("NFC Tag", it) }
-                                    val lineageList = bird.lineages.joinToString(", ") { it.name }
-                                    if (lineageList.isNotBlank()) DetailLine("Lineage", lineageList)
-                                    bird.housingId?.let { DetailLine("Housing", "#$it") }
-                                    bird.chickGroupId?.let { DetailLine("Chick Group", "#$it") }
-                                    bird.notes?.takeIf { it.isNotBlank() }?.let { DetailLine("Notes", it) }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Bottom action bar
-            if (selectedIds.isNotEmpty()) {
-                Card(
-                    Modifier.fillMaxWidth().padding(16.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    elevation = CardDefaults.cardElevation(4.dp),
-                ) {
-                    Row(
-                        Modifier.padding(12.dp).fillMaxWidth(),
-                        Arrangement.SpaceBetween, Alignment.CenterVertically,
-                    ) {
-                        Text("${selectedIds.size} selected", style = MaterialTheme.typography.titleMedium)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { selectedIds.clear() }) { Text("Clear") }
-                            Button(
-                                onClick = { showCullDialog.value = true },
-                                colors = ButtonDefaults.buttonColors(containerColor = AlertRed),
-                            ) {
-                                Icon(Icons.Default.Delete, null, Modifier.size(18.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Cull Selected")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showCullDialog.value) {
-        CullDialog(
-            count = selectedIds.size,
-            onConfirm = { method, notes ->
-                showCullDialog.value = false
-                val ids = selectedIds.toList()
-                val reason = cullRecs.find { it.birdId == ids.firstOrNull() }?.reasonKey ?: "excess_male"
-                scope.launch {
-                    try {
-                        val updated = viewModel.cullBatch(ids, reason, method, notes.ifBlank { null }, LocalDate.now().toString())
-                        Toast.makeText(context, "Culled $updated bird${if (updated != 1) "s" else ""}", Toast.LENGTH_SHORT).show()
-                        selectedIds.clear()
-                    } catch (e: Exception) {
-                        Toast.makeText(context, "Cull failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            },
-            onDismiss = { showCullDialog.value = false },
-        )
-    }
-}
-
-@Composable
-private fun DetailLine(label: String, value: String) {
-    Row {
-        Text(
-            "$label: ",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Text(
-            value,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-    }
-}
-
-@Composable
-private fun CullDialog(count: Int, onConfirm: (method: String, notes: String) -> Unit, onDismiss: () -> Unit) {
-    var method by remember { mutableStateOf("Butchered") }
-    var notes by remember { mutableStateOf("") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Cull $count bird${if (count != 1) "s" else ""}?") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("This will update their status. This action cannot be easily undone.", style = MaterialTheme.typography.bodyMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("Butchered", "Culled").forEach { m ->
-                        OutlinedButton(
-                            onClick = { method = m },
-                            colors = if (method == m)
-                                ButtonDefaults.outlinedButtonColors(containerColor = SageGreen.copy(alpha = 0.12f), contentColor = SageGreen)
-                            else ButtonDefaults.outlinedButtonColors(),
-                        ) { Text(m) }
-                    }
-                }
-                OutlinedTextField(
-                    value = notes, onValueChange = { notes = it },
-                    label = { Text("Notes (optional)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    maxLines = 2,
-                )
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onConfirm(method, notes) },
-                colors = ButtonDefaults.buttonColors(containerColor = AlertRed),
-            ) { Text("Confirm Cull") }
-        },
-        dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Cancel") } },
-    )
-}
+// The former "Tab 1: Cull List" lived here. Removed when the cull workflow
+// moved to the Flock screen's Cull Mode toggle — see FlockScreen for the
+// guardrail-based selection UI.
 
 // =====================================================================
-// Tab 2: Breeding Groups
+// Tab 1: Breeding Groups
 // =====================================================================
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -456,7 +191,9 @@ private fun BreedingGroupsTab(viewModel: BreedingViewModel) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    // Explicit MutableState — see comment on showCullDialog above.
+    // Explicit MutableState (not `by` delegate) so writes are setter calls;
+    // the Kotlin flow-analyser otherwise flags the lambda assignments below as
+    // `UNUSED_VALUE` (it can't see Compose's recomposition-time reads).
     val showCreateDialog = remember { mutableStateOf(false) }
 
     val activeBirds = birds.filter { it.status?.lowercase() == "active" }
@@ -647,7 +384,7 @@ private fun CreateBreedingGroupDialog(
 }
 
 // =====================================================================
-// Tab 3: Pair Check
+// Tab 2: Pair Check
 // =====================================================================
 
 @OptIn(ExperimentalMaterial3Api::class)
