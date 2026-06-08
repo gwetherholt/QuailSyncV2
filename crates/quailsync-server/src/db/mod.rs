@@ -191,6 +191,16 @@ pub fn init_db(conn: &Connection) {
             PRIMARY KEY (group_id, female_id)
         );
 
+        -- Males assigned to a group. Most groups have a single male, but the
+        -- UI allows extra males behind a confirmation step. `breeding_groups.
+        -- male_id` mirrors the primary (first) male for backward compatibility;
+        -- this table is the authoritative full list.
+        CREATE TABLE IF NOT EXISTS breeding_group_males (
+            group_id INTEGER NOT NULL REFERENCES breeding_groups(id),
+            male_id  INTEGER NOT NULL REFERENCES birds(id),
+            PRIMARY KEY (group_id, male_id)
+        );
+
         CREATE TABLE IF NOT EXISTS camera_feeds (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             name       TEXT NOT NULL,

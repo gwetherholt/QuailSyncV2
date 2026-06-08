@@ -1444,7 +1444,8 @@ async fn cmd_breeding_group_create(
     let today = Local::now().date_naive();
     let body = CreateBreedingGroup {
         name,
-        male_id: male,
+        male_id: Some(male),
+        male_ids: Vec::new(),
         female_ids: female_ids.clone(),
         start_date: today,
         notes,

@@ -139,7 +139,9 @@ pub fn build_app(state: AppState) -> Router {
         )
         .route(
             "/api/breeding-groups/{id}",
-            get(breeding::get_breeding_group),
+            get(breeding::get_breeding_group)
+                .put(breeding::update_breeding_group)
+                .delete(breeding::delete_breeding_group),
         )
         .route(
             "/api/groups/{id}/reconcile-tags",

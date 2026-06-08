@@ -354,17 +354,30 @@ data class MoveBirdRequest(
 data class BreedingGroupDto(
     @SerializedName("id") val id: Int,
     @SerializedName("name") val name: String,
+    /** Primary male (first assigned). [maleIds] is the full roster. */
     @SerializedName("male_id") val maleId: Int,
+    @SerializedName("male_ids") val maleIds: List<Int> = emptyList(),
     @SerializedName("female_ids") val femaleIds: List<Int> = emptyList(),
     @SerializedName("start_date") val startDate: String? = null,
     @SerializedName("notes") val notes: String? = null,
-)
+) {
+    /** Roster with a legacy fallback: older payloads only carry [maleId]. */
+    val males: List<Int> get() = maleIds.ifEmpty { listOf(maleId) }
+}
 
 data class CreateBreedingGroupRequest(
     @SerializedName("name") val name: String,
-    @SerializedName("male_id") val maleId: Int,
+    @SerializedName("male_ids") val maleIds: List<Int>,
     @SerializedName("female_ids") val femaleIds: List<Int>,
     @SerializedName("start_date") val startDate: String,
+    @SerializedName("notes") val notes: String? = null,
+)
+
+/** Partial edit; null fields are left unchanged server-side. */
+data class UpdateBreedingGroupRequest(
+    @SerializedName("name") val name: String? = null,
+    @SerializedName("male_ids") val maleIds: List<Int>? = null,
+    @SerializedName("female_ids") val femaleIds: List<Int>? = null,
     @SerializedName("notes") val notes: String? = null,
 )
 
@@ -681,6 +694,15 @@ interface QuailSyncApi {
 
     @POST("api/breeding-groups")
     suspend fun createBreedingGroup(@Body request: CreateBreedingGroupRequest): BreedingGroupDto
+
+    @PUT("api/breeding-groups/{id}")
+    suspend fun updateBreedingGroup(
+        @Path("id") id: Int,
+        @Body request: UpdateBreedingGroupRequest,
+    ): BreedingGroupDto
+
+    @DELETE("api/breeding-groups/{id}")
+    suspend fun deleteBreedingGroup(@Path("id") id: Int): retrofit2.Response<Unit>
 
     /** Read-only deduction: which present unbanded bird does each dropped tag
      *  belong to? Never writes a band assignment. */

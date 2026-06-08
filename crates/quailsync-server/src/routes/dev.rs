@@ -258,6 +258,7 @@ const ALL_TABLES: &[&str] = &[
     "bird_lineages",
     "chick_group_lineages",
     "breeding_group_members",
+    "breeding_group_males",
     "weight_records",
     "processing_records",
     "headcounts",

@@ -433,7 +433,13 @@ pub struct UpdateProcessingRecord {
 pub struct BreedingGroup {
     pub id: i64,
     pub name: String,
+    /// Primary male — the first male assigned to the group. Retained as a
+    /// scalar for backward compatibility (e.g. tag reconciliation, the
+    /// per-bird cull cascade). `male_ids` is the authoritative full list.
     pub male_id: i64,
+    /// All males in the group (usually one). Always includes `male_id` as
+    /// its first element.
+    pub male_ids: Vec<i64>,
     pub female_ids: Vec<i64>,
     pub start_date: NaiveDate,
     pub notes: Option<String>,
@@ -442,10 +448,75 @@ pub struct BreedingGroup {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateBreedingGroup {
     pub name: String,
-    pub male_id: i64,
+    /// Legacy single-male field. Still accepted so existing callers keep
+    /// working; folded into `male_ids` by [`CreateBreedingGroup::males`].
+    #[serde(default)]
+    pub male_id: Option<i64>,
+    /// Preferred multi-male field. The first entry becomes the primary male.
+    #[serde(default)]
+    pub male_ids: Vec<i64>,
     pub female_ids: Vec<i64>,
     pub start_date: NaiveDate,
     pub notes: Option<String>,
+}
+
+impl CreateBreedingGroup {
+    /// Resolves the effective male list from the legacy `male_id` and the
+    /// `male_ids` fields, de-duplicated while preserving order. When both are
+    /// supplied, `male_id` (if not already present) is prepended so it stays
+    /// the primary male.
+    pub fn males(&self) -> Vec<i64> {
+        let mut out: Vec<i64> = Vec::new();
+        if let Some(m) = self.male_id {
+            out.push(m);
+        }
+        for &m in &self.male_ids {
+            if !out.contains(&m) {
+                out.push(m);
+            }
+        }
+        out
+    }
+}
+
+/// Partial update for a breeding group. Absent (`None`) fields are left
+/// unchanged; present list fields fully replace the corresponding membership.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpdateBreedingGroup {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub male_id: Option<i64>,
+    #[serde(default)]
+    pub male_ids: Option<Vec<i64>>,
+    #[serde(default)]
+    pub female_ids: Option<Vec<i64>>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+impl UpdateBreedingGroup {
+    /// Resolves the new male list if either male field was supplied, else
+    /// `None` (meaning "leave males unchanged").
+    pub fn males(&self) -> Option<Vec<i64>> {
+        match (self.male_id, &self.male_ids) {
+            (None, None) => None,
+            _ => {
+                let mut out: Vec<i64> = Vec::new();
+                if let Some(m) = self.male_id {
+                    out.push(m);
+                }
+                if let Some(ids) = &self.male_ids {
+                    for &m in ids {
+                        if !out.contains(&m) {
+                            out.push(m);
+                        }
+                    }
+                }
+                Some(out)
+            }
+        }
+    }
 }
 
 // =========================================================================

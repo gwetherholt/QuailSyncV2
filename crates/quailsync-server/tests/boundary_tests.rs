@@ -1535,6 +1535,233 @@ async fn breeding_group_with_no_females() {
 }
 
 #[tokio::test]
+async fn breeding_group_accepts_multiple_males() {
+    let base = spawn_test_server().await;
+    let bl = seed_lineage(&base).await;
+    let m1 = seed_bird(&base, bl.id, Sex::Male).await;
+    let m2 = seed_bird(&base, bl.id, Sex::Male).await;
+    let f1 = seed_bird(&base, bl.id, Sex::Female).await;
+
+    let resp = client()
+        .post(format!("{base}/api/breeding-groups"))
+        .json(&json!({
+            "name": "Two Toms",
+            "male_ids": [m1.id, m2.id],
+            "female_ids": [f1.id],
+            "start_date": "2026-03-01",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let group: Value = resp.json().await.unwrap();
+    // Primary male is the first supplied; full roster echoes both.
+    assert_eq!(group["male_id"].as_i64(), Some(m1.id));
+    let males: Vec<i64> = group["male_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_i64().unwrap())
+        .collect();
+    assert!(males.contains(&m1.id) && males.contains(&m2.id));
+    assert_eq!(males.len(), 2);
+
+    // List round-trips the roster too.
+    let groups: Vec<Value> = client()
+        .get(format!("{base}/api/breeding-groups"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let listed = groups.iter().find(|g| g["name"] == "Two Toms").unwrap();
+    assert_eq!(listed["male_ids"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn legacy_single_male_id_still_accepted() {
+    // Pre-multi-male clients send a scalar `male_id`; it must keep working
+    // and surface in `male_ids`.
+    let base = spawn_test_server().await;
+    let bl = seed_lineage(&base).await;
+    let male = seed_bird(&base, bl.id, Sex::Male).await;
+
+    let resp = client()
+        .post(format!("{base}/api/breeding-groups"))
+        .json(&json!({
+            "name": "Legacy",
+            "male_id": male.id,
+            "female_ids": [],
+            "start_date": "2026-03-01",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let group: Value = resp.json().await.unwrap();
+    assert_eq!(group["male_id"].as_i64(), Some(male.id));
+    assert_eq!(group["male_ids"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn adding_female_to_new_group_transfers_her() {
+    // A female already in group A, added to group B, should leave A and join
+    // B — never be a member of both.
+    let base = spawn_test_server().await;
+    let bl = seed_lineage(&base).await;
+    let m1 = seed_bird(&base, bl.id, Sex::Male).await;
+    let m2 = seed_bird(&base, bl.id, Sex::Male).await;
+    let hen = seed_bird(&base, bl.id, Sex::Female).await;
+
+    let a: Value = client()
+        .post(format!("{base}/api/breeding-groups"))
+        .json(&json!({
+            "name": "Group A", "male_ids": [m1.id],
+            "female_ids": [hen.id], "start_date": "2026-03-01",
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let a_id = a["id"].as_i64().unwrap();
+
+    let b: Value = client()
+        .post(format!("{base}/api/breeding-groups"))
+        .json(&json!({
+            "name": "Group B", "male_ids": [m2.id],
+            "female_ids": [hen.id], "start_date": "2026-03-02",
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let b_id = b["id"].as_i64().unwrap();
+
+    let groups: Vec<Value> = client()
+        .get(format!("{base}/api/breeding-groups"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let ga = groups
+        .iter()
+        .find(|g| g["id"].as_i64() == Some(a_id))
+        .unwrap();
+    let gb = groups
+        .iter()
+        .find(|g| g["id"].as_i64() == Some(b_id))
+        .unwrap();
+    assert!(
+        ga["female_ids"].as_array().unwrap().is_empty(),
+        "hen left group A"
+    );
+    assert_eq!(
+        gb["female_ids"].as_array().unwrap().len(),
+        1,
+        "hen joined group B"
+    );
+}
+
+#[tokio::test]
+async fn update_breeding_group_replaces_membership() {
+    let base = spawn_test_server().await;
+    let bl = seed_lineage(&base).await;
+    let m1 = seed_bird(&base, bl.id, Sex::Male).await;
+    let m2 = seed_bird(&base, bl.id, Sex::Male).await;
+    let f1 = seed_bird(&base, bl.id, Sex::Female).await;
+    let f2 = seed_bird(&base, bl.id, Sex::Female).await;
+
+    let created: Value = client()
+        .post(format!("{base}/api/breeding-groups"))
+        .json(&json!({
+            "name": "Editable", "male_ids": [m1.id],
+            "female_ids": [f1.id], "start_date": "2026-03-01",
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let id = created["id"].as_i64().unwrap();
+
+    let resp = client()
+        .put(format!("{base}/api/breeding-groups/{id}"))
+        .json(&json!({
+            "name": "Renamed",
+            "male_ids": [m1.id, m2.id],
+            "female_ids": [f2.id],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let updated: Value = resp.json().await.unwrap();
+    assert_eq!(updated["name"], "Renamed");
+    assert_eq!(updated["male_ids"].as_array().unwrap().len(), 2);
+    let females: Vec<i64> = updated["female_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_i64().unwrap())
+        .collect();
+    assert_eq!(females, vec![f2.id]);
+}
+
+#[tokio::test]
+async fn delete_breeding_group_removes_it() {
+    let base = spawn_test_server().await;
+    let bl = seed_lineage(&base).await;
+    let male = seed_bird(&base, bl.id, Sex::Male).await;
+
+    let created: Value = client()
+        .post(format!("{base}/api/breeding-groups"))
+        .json(&json!({
+            "name": "Doomed", "male_ids": [male.id],
+            "female_ids": [], "start_date": "2026-03-01",
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let id = created["id"].as_i64().unwrap();
+
+    let resp = client()
+        .delete(format!("{base}/api/breeding-groups/{id}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // Second delete is a 404.
+    let resp = client()
+        .delete(format!("{base}/api/breeding-groups/{id}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    let groups: Vec<Value> = client()
+        .get(format!("{base}/api/breeding-groups"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(groups.iter().all(|g| g["id"].as_i64() != Some(id)));
+}
+
+#[tokio::test]
 async fn chick_group_mortality_exceeds_count() {
     let base = spawn_test_server().await;
     let bl = seed_lineage(&base).await;

@@ -222,6 +222,26 @@ pub(crate) async fn delete_bird(
         params![id],
     )
     .ok();
+    // Drop this bird from any group's male roster.
+    conn.execute(
+        "DELETE FROM breeding_group_males WHERE male_id = ?1",
+        params![id],
+    )
+    .ok();
+    // Groups whose primary male is this bird are dissolved (preserves prior
+    // behavior); clean their membership/roster rows first to avoid orphans.
+    conn.execute(
+        "DELETE FROM breeding_group_members WHERE group_id IN \
+         (SELECT id FROM breeding_groups WHERE male_id = ?1)",
+        params![id],
+    )
+    .ok();
+    conn.execute(
+        "DELETE FROM breeding_group_males WHERE group_id IN \
+         (SELECT id FROM breeding_groups WHERE male_id = ?1)",
+        params![id],
+    )
+    .ok();
     conn.execute(
         "DELETE FROM breeding_groups WHERE male_id = ?1",
         params![id],
