@@ -475,6 +475,16 @@ data class InbreedingCheckResult(
     @SerializedName("warning") val warning: String? = null,
 )
 
+/** One male×female relatedness coefficient from `/api/breeding/suggest`.
+ *  `coefficient` is on the standard ~0.5 scale (full sib / parent-offspring
+ *  = 0.5, half-sib = 0.25, cousin-ish ≈ 0.125, unrelated = 0.0). */
+data class InbreedingCoefficient(
+    @SerializedName("male_id") val maleId: Int,
+    @SerializedName("female_id") val femaleId: Int,
+    @SerializedName("coefficient") val coefficient: Double,
+    @SerializedName("safe") val safe: Boolean,
+)
+
 data class MortalityRequest(
     @SerializedName("count") val count: Int,
     @SerializedName("reason") val reason: String,
@@ -718,6 +728,12 @@ interface QuailSyncApi {
     // backwards compatibility with the dashboard's URL.
     @GET("api/flock/cull-recommendations")
     suspend fun getFlockBreedingStats(): FlockBreedingStats
+
+    /** All active male×female relatedness coefficients, reusing the server's
+     *  `compute_relatedness`. Fetched once to power the create-group inbreeding
+     *  warning without a round-trip per pair. */
+    @GET("api/breeding/suggest")
+    suspend fun getBreedingSuggestions(): List<InbreedingCoefficient>
 
     // App settings (breeding ratio config).
     @GET("api/settings")

@@ -4,6 +4,7 @@ import android.app.Application
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -77,6 +78,7 @@ import com.quailsync.app.data.BreedingGroupDto
 import com.quailsync.app.data.CreateBreedingGroupRequest
 import com.quailsync.app.data.CullBatchRequest
 import com.quailsync.app.data.InbreedingCheckResult
+import com.quailsync.app.data.InbreedingCoefficient
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.ServerConfig
 import com.quailsync.app.data.UpdateBreedingGroupRequest
@@ -89,6 +91,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+import kotlin.math.roundToInt
 
 // =====================================================================
 // ViewModel
@@ -112,6 +115,12 @@ class BreedingViewModel(application: Application) : AndroidViewModel(application
     private val _settings = MutableStateFlow(AppSettings(desiredMalesPerGroup = 1, maxFemalesPerMale = 5))
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
+    // Relatedness coefficient per (maleId, femaleId), reusing the server's
+    // compute_relatedness via /api/breeding/suggest. Powers the soft inbreeding
+    // warning in the create/edit dialog. Looked up locally — no per-pair calls.
+    private val _relatedness = MutableStateFlow<Map<Pair<Int, Int>, Double>>(emptyMap())
+    val relatedness: StateFlow<Map<Pair<Int, Int>, Double>> = _relatedness.asStateFlow()
+
     init { loadAll() }
 
     fun refresh() { loadAll() }
@@ -122,6 +131,9 @@ class BreedingViewModel(application: Application) : AndroidViewModel(application
             _birds.value = try { api.getBirds() } catch (_: Exception) { emptyList() }
             _groups.value = try { api.getBreedingGroups() } catch (_: Exception) { emptyList() }
             try { _settings.value = api.getSettings() } catch (_: Exception) { /* keep defaults */ }
+            _relatedness.value = try {
+                api.getBreedingSuggestions().associate { (it.maleId to it.femaleId) to it.coefficient }
+            } catch (_: Exception) { emptyMap() }
             _isLoading.value = false
         }
     }
@@ -221,6 +233,7 @@ private fun BreedingGroupsTab(viewModel: BreedingViewModel, onReconcileGroup: (I
     val groups by viewModel.groups.collectAsState()
     val birds by viewModel.birds.collectAsState()
     val settings by viewModel.settings.collectAsState()
+    val relatedness by viewModel.relatedness.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -361,6 +374,7 @@ private fun BreedingGroupsTab(viewModel: BreedingViewModel, onReconcileGroup: (I
             maleGroupId = maleGroupId,
             femaleGroupId = femaleGroupId,
             settings = settings,
+            relatedness = relatedness,
             onConfirm = { name, maleIds, femaleIds, notes ->
                 showDialog.value = false
                 scope.launch {
@@ -430,6 +444,7 @@ private fun BreedingGroupDialog(
     maleGroupId: Map<Int, Int>,
     femaleGroupId: Map<Int, Int>,
     settings: AppSettings,
+    relatedness: Map<Pair<Int, Int>, Double>,
     onConfirm: (name: String, maleIds: List<Int>, femaleIds: List<Int>, notes: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -464,6 +479,22 @@ private fun BreedingGroupDialog(
         else -> null
     }
 
+    // Soft inbreeding check — relatedness comes from the server's
+    // compute_relatedness (via /api/breeding/suggest); we only look it up.
+    val maleById = allMales.associateBy { it.id }
+    val femaleById = allFemales.associateBy { it.id }
+    fun coef(maleId: Int, femaleId: Int): Double = relatedness[maleId to femaleId] ?: 0.0
+    fun maleLabel(id: Int): String = maleById[id]?.let { "${it.bandColor ?: "Bird"} #${it.id}" } ?: "#$id"
+    fun femaleLabel(id: Int): String = femaleById[id]?.let { "${it.bandColor ?: "Bird"} #${it.id}" } ?: "#$id"
+    // Single male → inline per-female %; multiple males → a table.
+    val singleMaleId = selectedMaleIds.singleOrNull()
+    // Offending pairs within the *selected* group: (maleId, femaleId, coef),
+    // strong tier first then caution (both = descending coefficient).
+    val offending = selectedMaleIds
+        .flatMap { m -> selectedFemaleIds.map { f -> Triple(m, f, coef(m, f)) } }
+        .filter { relTier(it.third) != RelTier.NONE }
+        .sortedByDescending { it.third }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (editing == null) "Create Breeding Group" else "Edit Breeding Group") },
@@ -492,6 +523,72 @@ private fun BreedingGroupDialog(
                             Text("⚠️", style = MaterialTheme.typography.titleMedium)
                             Spacer(Modifier.width(8.dp))
                             Text(ratioWarning, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                }
+
+                // Advisory inbreeding warning — names the closely-related pairs
+                // among the selected birds. Never blocks save. Red when any
+                // strong-tier pair is present, amber for caution-only.
+                if (offending.isNotEmpty()) {
+                    val anyStrong = offending.any { relTier(it.third) == RelTier.STRONG }
+                    val tint = if (anyStrong) AlertRed else AlertYellow
+                    Card(
+                        Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = CardDefaults.cardColors(containerColor = tint.copy(alpha = 0.15f)),
+                        elevation = CardDefaults.cardElevation(0.dp),
+                    ) {
+                        Column(Modifier.padding(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("⚠️", style = MaterialTheme.typography.titleMedium)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Closely related pairings", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            offending.take(6).forEach { (m, f, c) ->
+                                val label = relLabel(c)?.let { " ($it)" } ?: ""
+                                Text(
+                                    "${maleLabel(m)} × ${femaleLabel(f)}: ${relPercent(c)}$label",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = relColor(relTier(c)),
+                                )
+                            }
+                            if (offending.size > 6) {
+                                Text("+${offending.size - 6} more", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Spacer(Modifier.height(2.dp))
+                            Text("Consider a different pairing.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+
+                // Multiple males → relatedness table (females × males); single
+                // male is shown inline on each female row instead.
+                if (selectedMaleIds.size >= 2 && selectedFemaleIds.isNotEmpty()) {
+                    Text("Relatedness of selected pairs", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                    Column(Modifier.horizontalScroll(rememberScrollState())) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Spacer(Modifier.width(110.dp))
+                            selectedMaleIds.forEach { m ->
+                                Text(maleLabel(m), Modifier.width(78.dp), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                        selectedFemaleIds.forEach { f ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(femaleLabel(f), Modifier.width(110.dp), style = MaterialTheme.typography.labelSmall)
+                                selectedMaleIds.forEach { m ->
+                                    val c = coef(m, f)
+                                    val tier = relTier(c)
+                                    Text(
+                                        relPercent(c),
+                                        Modifier.width(78.dp),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = relColor(tier),
+                                        fontWeight = if (tier != RelTier.NONE) FontWeight.SemiBold else FontWeight.Normal,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -537,6 +634,7 @@ private fun BreedingGroupDialog(
                         bird = f,
                         checked = f.id in selectedFemaleIds,
                         transferFrom = null,
+                        relatedness = singleMaleId?.let { coef(it, f.id) },
                         onToggle = { want -> if (want) selectedFemaleIds.add(f.id) else selectedFemaleIds.remove(f.id) },
                     )
                 }
@@ -551,6 +649,7 @@ private fun BreedingGroupDialog(
                         bird = f,
                         checked = f.id in selectedFemaleIds,
                         transferFrom = groupNameById[femaleGroupId[f.id]] ?: "another group",
+                        relatedness = singleMaleId?.let { coef(it, f.id) },
                         onToggle = { want -> if (want) selectedFemaleIds.add(f.id) else selectedFemaleIds.remove(f.id) },
                     )
                 }
@@ -591,12 +690,15 @@ private fun BreedingGroupDialog(
 }
 
 /** One row in the female picker. A staged transfer (female pulled from
- *  another group) is tagged so it's never confused with a free bird. */
+ *  another group) is tagged so it's never confused with a free bird. When a
+ *  single male is selected, [relatedness] shows her coefficient to him,
+ *  tier-colored (null = not in single-male mode → no inline figure). */
 @Composable
 private fun FemaleSelectRow(
     bird: Bird,
     checked: Boolean,
     transferFrom: String?,
+    relatedness: Double?,
     onToggle: (Boolean) -> Unit,
 ) {
     val bl = com.quailsync.app.data.formatLineages(bird.lineages, emptyText = "")
@@ -612,6 +714,16 @@ private fun FemaleSelectRow(
                 Text("currently in $transferFrom", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+        if (relatedness != null) {
+            val tier = relTier(relatedness)
+            Text(
+                relPercent(relatedness),
+                modifier = Modifier.padding(horizontal = 6.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = relColor(tier),
+                fontWeight = if (tier != RelTier.NONE) FontWeight.SemiBold else FontWeight.Normal,
+            )
+        }
         if (transferFrom != null && checked) {
             Box(
                 Modifier
@@ -623,6 +735,37 @@ private fun FemaleSelectRow(
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------
+// Relatedness tiers — shared by the inline %, the table, and the summary.
+// Coefficient is on compute_relatedness's ~0.5 scale (full sib /
+// parent-offspring = 0.5, half-sib = 0.25, cousin-ish ≈ 0.125).
+// ---------------------------------------------------------------------
+
+private enum class RelTier { NONE, CAUTION, STRONG }
+
+private fun relTier(c: Double): RelTier = when {
+    c >= 0.25 -> RelTier.STRONG    // half-sib / sib / parent-offspring
+    c >= 0.125 -> RelTier.CAUTION  // cousin-ish
+    else -> RelTier.NONE
+}
+
+private fun relPercent(c: Double): String = "${(c * 100).roundToInt()}%"
+
+/** Plain-language band, or null below the caution threshold. */
+private fun relLabel(c: Double): String? = when {
+    c >= 0.5 -> "siblings / parent–offspring"
+    c >= 0.25 -> "likely siblings"
+    c >= 0.125 -> "cousins"
+    else -> null
+}
+
+@Composable
+private fun relColor(tier: RelTier): Color = when (tier) {
+    RelTier.STRONG -> AlertRed
+    RelTier.CAUTION -> AlertYellow
+    RelTier.NONE -> MaterialTheme.colorScheme.onSurfaceVariant
 }
 
 // =====================================================================
