@@ -2235,3 +2235,261 @@ mod nfc_tag_reassignment_tests {
         assert_eq!(with_tag.len(), 1, "exactly one bird should own TAG-G");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Dropped-tag reconciliation: POST /api/groups/{id}/reconcile-tags
+// ---------------------------------------------------------------------------
+
+mod reconcile_tests {
+    use super::*;
+    use serde_json::{json, Value};
+
+    async fn seed_lineage(base: &str, client: &reqwest::Client, name: &str) -> i64 {
+        let bl: Lineage = client
+            .post(format!("{base}/api/lineages"))
+            .json(&CreateLineage {
+                name: name.into(),
+                source: "S".into(),
+                notes: None,
+            })
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        bl.id
+    }
+
+    async fn make_bird(
+        base: &str,
+        client: &reqwest::Client,
+        sex: Sex,
+        band: Option<&str>,
+        tag: Option<&str>,
+        lineage_id: i64,
+    ) -> i64 {
+        let bird: Bird = client
+            .post(format!("{base}/api/birds"))
+            .json(&CreateBird {
+                band_color: band.map(|b| b.to_string()),
+                sex,
+                lineage_ids: vec![lineage_id],
+                hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                mother_id: None,
+                father_id: None,
+                generation: 1,
+                status: BirdStatus::Active,
+                notes: None,
+                nfc_tag_id: tag.map(|t| t.to_string()),
+                chick_group_id: None,
+            })
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        bird.id
+    }
+
+    /// Build a one-male/two-female breeding group and return its id. The hens
+    /// carry tags "T-HEN-A" (red band) and "T-HEN-B" (blue band); the male
+    /// carries "T-MALE".
+    async fn seed_group(base: &str, client: &reqwest::Client) -> (i64, i64, i64, i64) {
+        let lineage_id = seed_lineage(base, client, "Fernbank").await;
+        let male = make_bird(
+            base,
+            client,
+            Sex::Male,
+            Some("green"),
+            Some("T-MALE"),
+            lineage_id,
+        )
+        .await;
+        let hen_a = make_bird(
+            base,
+            client,
+            Sex::Female,
+            Some("red"),
+            Some("T-HEN-A"),
+            lineage_id,
+        )
+        .await;
+        let hen_b = make_bird(
+            base,
+            client,
+            Sex::Female,
+            Some("blue"),
+            Some("T-HEN-B"),
+            lineage_id,
+        )
+        .await;
+
+        let resp = client
+            .post(format!("{base}/api/breeding-groups"))
+            .json(&json!({
+                "name": "Group 1",
+                "male_id": male,
+                "female_ids": [hen_a, hen_b],
+                "start_date": "2026-01-01",
+                "notes": null,
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 201);
+
+        let groups: Vec<Value> = reqwest::get(format!("{base}/api/breeding-groups"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let group_id = groups[0]["id"].as_i64().unwrap();
+        (group_id, male, hen_a, hen_b)
+    }
+
+    #[tokio::test]
+    async fn unknown_group_is_rejected() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("{base}/api/groups/9999/reconcile-tags"))
+            .json(&json!({ "orphan_tag_ids": [], "observed_birds": [] }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[tokio::test]
+    async fn end_to_end_resolves_dropped_hen_tag() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (group_id, _male, _a, _b) = seed_group(&base, &client).await;
+
+        // One hen lost her band; the keeper sees one red-banded female.
+        let body: Value = client
+            .post(format!("{base}/api/groups/{group_id}/reconcile-tags"))
+            .json(&json!({
+                "orphan_tag_ids": ["T-HEN-A"],
+                "observed_birds": [{
+                    "ref_id": "corner-hen",
+                    "sex": "Female",
+                    "traits": { "band_color": "red" }
+                }],
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        assert!(body["unmatched_tags"].as_array().unwrap().is_empty());
+        let result = &body["results"][0];
+        assert_eq!(result["ref_id"], "corner-hen");
+        assert_eq!(result["outcome"]["kind"], "resolved");
+        assert_eq!(result["outcome"]["tag_id"], "T-HEN-A");
+        assert_eq!(result["outcome"]["confidence"], "sole");
+    }
+
+    #[tokio::test]
+    async fn foreign_tag_lands_in_unmatched() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (group_id, _male, _a, _b) = seed_group(&base, &client).await;
+
+        // A bird (and tag) that belongs to no group at all.
+        let lineage_id = seed_lineage(&base, &client, "Outsider").await;
+        make_bird(
+            &base,
+            &client,
+            Sex::Female,
+            None,
+            Some("T-OUTSIDER"),
+            lineage_id,
+        )
+        .await;
+
+        let body: Value = client
+            .post(format!("{base}/api/groups/{group_id}/reconcile-tags"))
+            .json(&json!({
+                "orphan_tag_ids": ["T-OUTSIDER", "T-NONEXISTENT"],
+                "observed_birds": [],
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        let unmatched: Vec<String> = body["unmatched_tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(unmatched.contains(&"T-OUTSIDER".to_string()));
+        assert!(unmatched.contains(&"T-NONEXISTENT".to_string()));
+        assert!(body["results"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn empty_request_to_valid_group_is_empty_200() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (group_id, _male, _a, _b) = seed_group(&base, &client).await;
+
+        let resp = client
+            .post(format!("{base}/api/groups/{group_id}/reconcile-tags"))
+            .json(&json!({ "orphan_tag_ids": [], "observed_birds": [] }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: Value = resp.json().await.unwrap();
+        assert!(body["results"].as_array().unwrap().is_empty());
+        assert!(body["unmatched_tags"].as_array().unwrap().is_empty());
+    }
+
+    /// End-to-end rooster case: the male's band drops. With the male observed,
+    /// the single-male short-circuit resolves it `sole` over the wire, and the
+    /// hen resolves on her lone remaining tag. Exercises serde + DB + the
+    /// confidence enum round-trip, not just the pure core.
+    #[tokio::test]
+    async fn rooster_band_resolves_via_short_circuit() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (group_id, _male, _a, _b) = seed_group(&base, &client).await;
+
+        let body: Value = client
+            .post(format!("{base}/api/groups/{group_id}/reconcile-tags"))
+            .json(&json!({
+                "orphan_tag_ids": ["T-MALE", "T-HEN-A"],
+                "observed_birds": [
+                    { "ref_id": "the-cock", "sex": "Male" },
+                    { "ref_id": "a-hen", "sex": "Female" }
+                ],
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        assert!(body["unmatched_tags"].as_array().unwrap().is_empty());
+        let results = body["results"].as_array().unwrap();
+        let cock = results.iter().find(|r| r["ref_id"] == "the-cock").unwrap();
+        assert_eq!(cock["outcome"]["kind"], "resolved");
+        assert_eq!(cock["outcome"]["tag_id"], "T-MALE");
+        assert_eq!(cock["outcome"]["confidence"], "sole");
+
+        let hen = results.iter().find(|r| r["ref_id"] == "a-hen").unwrap();
+        assert_eq!(hen["outcome"]["kind"], "resolved");
+        assert_eq!(hen["outcome"]["tag_id"], "T-HEN-A");
+    }
+}

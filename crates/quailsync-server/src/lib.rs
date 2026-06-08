@@ -141,6 +141,10 @@ pub fn build_app(state: AppState) -> Router {
             "/api/breeding-groups/{id}",
             get(breeding::get_breeding_group),
         )
+        .route(
+            "/api/groups/{id}/reconcile-tags",
+            axum::routing::post(reconcile::reconcile_tags),
+        )
         .route("/api/flock/summary", get(breeding::flock_summary))
         .route(
             "/api/flock/cull-recommendations",

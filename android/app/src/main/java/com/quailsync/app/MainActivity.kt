@@ -88,6 +88,7 @@ import com.quailsync.app.ui.screens.FlockScreen
 import com.quailsync.app.ui.screens.TelemetryScreen
 import com.quailsync.app.ui.screens.NfcScreen
 import com.quailsync.app.ui.screens.NfcViewModel
+import com.quailsync.app.ui.screens.ReconcileScreen
 import com.quailsync.app.ui.theme.QuailSyncTheme
 import com.quailsync.app.ui.theme.SageGreen
 import com.quailsync.app.ui.theme.SageGreenLight
@@ -103,6 +104,10 @@ sealed class Screen(val route: String, val label: String, val icon: ImageVector,
     data object Telemetry : Screen("telemetry", "Telemetry", Icons.Default.Settings)
     data object Breeding : Screen("breeding", "Breeding", Icons.Default.Egg)
     data object Alerts : Screen("alerts", "Alerts", Icons.Default.Settings)
+
+    /** Dropped-tag reconciliation wizard, scoped to one breeding group.
+     *  Navigated to as "reconcile/{groupId}"; not a bottom-nav destination. */
+    data object Reconcile : Screen("reconcile", "Reconcile", Icons.Default.Nfc)
 }
 
 val bottomNavItems = listOf(
@@ -192,6 +197,18 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleNfcIntent(intent: Intent) {
+        // Dropped-tag reconciliation owns the tap while its wizard is open: a
+        // pure read (write mode is off, so handleIntent leaves the tag alone)
+        // that updates _lastScan for the wizard to collect. We deliberately do
+        // NOT navigate — the reconcile screen is already foreground and should
+        // stay put, unlike the standalone read path below which jumps to NFC.
+        if (nfcService.reconcileMode.value) {
+            val (scanResult, _) = nfcService.handleIntent(intent) ?: return
+            nfcViewModel.lookupBirdByNfc(scanResult.tagId, scanResult.payload)
+            Toast.makeText(this, "Read tag ${scanResult.tagId}", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         val batchStateAtEntry = nfcViewModel.batchState.value
         val wasBatchScanning = batchStateAtEntry is BatchState.AwaitingTagScan
         val wasBatchWriting = batchStateAtEntry is BatchState.AwaitingTagWrite
@@ -361,6 +378,20 @@ fun QuailSyncApp(
             ) { backStackEntry ->
                 BreedingScreen(
                     initialTab = backStackEntry.arguments?.getInt("tab") ?: 0,
+                    onBack = { navController.popBackStack() },
+                    onReconcileGroup = { groupId ->
+                        navController.navigate("${Screen.Reconcile.route}/$groupId") { launchSingleTop = true }
+                    },
+                )
+            }
+            composable(
+                route = "${Screen.Reconcile.route}/{groupId}",
+                arguments = listOf(navArgument("groupId") { type = NavType.IntType }),
+            ) { backStackEntry ->
+                val groupId = backStackEntry.arguments?.getInt("groupId") ?: 0
+                ReconcileScreen(
+                    groupId = groupId,
+                    nfcService = nfcService,
                     onBack = { navController.popBackStack() },
                 )
             }

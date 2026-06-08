@@ -368,6 +368,61 @@ data class CreateBreedingGroupRequest(
     @SerializedName("notes") val notes: String? = null,
 )
 
+// ---------------------------------------------------------------------------
+// Dropped-tag reconciliation ("whose band is this?"). Read-only deduction —
+// the server never writes a band assignment. See docs/dropped_tag_deduction.md.
+// ---------------------------------------------------------------------------
+
+data class ReconcileRequest(
+    /** Tags found on the floor; their stored bird records are what we look for. */
+    @SerializedName("orphan_tag_ids") val orphanTagIds: List<String>,
+    /** Present unbanded birds, described by observation. */
+    @SerializedName("observed_birds") val observedBirds: List<ObservedBirdDto>,
+)
+
+data class ObservedBirdDto(
+    /** Client-side handle echoed back in the result; NOT a DB id. */
+    @SerializedName("ref_id") val refId: String,
+    /** "Male" | "Female" | "Unknown" | null. Both null and "Unknown" mean
+     *  "not sure" and never eliminate a candidate. */
+    @SerializedName("sex") val sex: String? = null,
+    @SerializedName("bloodline") val bloodline: String? = null,
+    @SerializedName("traits") val traits: ObservedTraitsDto = ObservedTraitsDto(),
+)
+
+data class ObservedTraitsDto(
+    @SerializedName("band_color") val bandColor: String? = null,
+)
+
+data class ReconcileResponse(
+    @SerializedName("results") val results: List<ReconcileResult> = emptyList(),
+    /** Tags that resolved to no present group member. */
+    @SerializedName("unmatched_tags") val unmatchedTags: List<String> = emptyList(),
+)
+
+data class ReconcileResult(
+    @SerializedName("ref_id") val refId: String,
+    @SerializedName("outcome") val outcome: ReconcileOutcome,
+)
+
+/** Flattened tagged union: `kind` selects which fields are populated.
+ *  kind = "resolved"  → tagId + confidence
+ *  kind = "ambiguous" → candidates (ranked best-first)
+ *  kind = "no_candidate" → none */
+data class ReconcileOutcome(
+    @SerializedName("kind") val kind: String,
+    @SerializedName("tag_id") val tagId: String? = null,
+    /** "sole" | "forced" when kind = "resolved". */
+    @SerializedName("confidence") val confidence: String? = null,
+    @SerializedName("candidates") val candidates: List<ReconcileCandidate> = emptyList(),
+)
+
+data class ReconcileCandidate(
+    @SerializedName("tag_id") val tagId: String,
+    /** Soft-trait Jaccard similarity, 0.0–1.0. */
+    @SerializedName("score") val score: Double,
+)
+
 /** Server snapshot powering the Flock-screen cull-mode guardrail. */
 data class FlockBreedingStats(
     @SerializedName("total_males") val totalMales: Int,
@@ -626,6 +681,14 @@ interface QuailSyncApi {
 
     @POST("api/breeding-groups")
     suspend fun createBreedingGroup(@Body request: CreateBreedingGroupRequest): BreedingGroupDto
+
+    /** Read-only deduction: which present unbanded bird does each dropped tag
+     *  belong to? Never writes a band assignment. */
+    @POST("api/groups/{id}/reconcile-tags")
+    suspend fun reconcileTags(
+        @Path("id") groupId: Int,
+        @Body request: ReconcileRequest,
+    ): ReconcileResponse
 
     // Flock breeding stats (powers the cull-mode guardrail UI).
     // Same path as before — server response shape changed from a prescribed

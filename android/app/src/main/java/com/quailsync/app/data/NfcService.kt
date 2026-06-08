@@ -490,6 +490,27 @@ class NfcService {
         conflictTag = null
     }
 
+    // --- Dropped-tag reconciliation (read-only capture) ---
+    //
+    // While reconciling a dropped band, every NFC tap must be a *pure read*
+    // that feeds the reconcile wizard — never a write, and never the forced
+    // jump to the standalone NFC screen that a normal scan triggers. The flag
+    // below lets MainActivity.handleNfcIntent route taps to the wizard. Write
+    // mode is never enabled during reconciliation, so handleIntent() takes its
+    // normal read-only branch (and the tag is left untouched).
+    private val _reconcileMode = MutableStateFlow(false)
+    val reconcileMode: StateFlow<Boolean> = _reconcileMode.asStateFlow()
+
+    fun enterReconcileMode() {
+        cancelWriteMode() // make sure no stray write payload is armed
+        _lastScan.value = null // start the wizard with a clean slate
+        _reconcileMode.value = true
+    }
+
+    fun exitReconcileMode() {
+        _reconcileMode.value = false
+    }
+
     fun setWriteResult(result: WriteResult) {
         _writeResult.value = result
     }

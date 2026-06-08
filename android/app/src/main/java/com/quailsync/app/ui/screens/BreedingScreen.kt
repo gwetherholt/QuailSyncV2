@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Nfc
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -44,6 +45,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -138,6 +140,7 @@ fun BreedingScreen(
     viewModel: BreedingViewModel = viewModel(),
     onBack: () -> Unit = {},
     initialTab: Int = 0,
+    onReconcileGroup: (Int) -> Unit = {},
 ) {
     var tabIndex by remember { mutableIntStateOf(initialTab.coerceIn(0, 1)) }
     // Cull List was removed — the Flock screen's cull-mode toggle now owns
@@ -168,7 +171,7 @@ fun BreedingScreen(
             }
         } else {
             when (tabIndex) {
-                0 -> BreedingGroupsTab(viewModel)
+                0 -> BreedingGroupsTab(viewModel, onReconcileGroup)
                 1 -> PairCheckTab(viewModel)
             }
         }
@@ -185,7 +188,7 @@ fun BreedingScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun BreedingGroupsTab(viewModel: BreedingViewModel) {
+private fun BreedingGroupsTab(viewModel: BreedingViewModel, onReconcileGroup: (Int) -> Unit = {}) {
     val groups by viewModel.groups.collectAsState()
     val birds by viewModel.birds.collectAsState()
     val scope = rememberCoroutineScope()
@@ -270,6 +273,16 @@ private fun BreedingGroupsTab(viewModel: BreedingViewModel) {
                         if (group.notes != null) {
                             Spacer(Modifier.height(4.dp))
                             Text(group.notes, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        // Found a band on the hutch floor? Deduce whose it is.
+                        TextButton(
+                            onClick = { onReconcileGroup(group.id) },
+                            modifier = Modifier.align(Alignment.End),
+                        ) {
+                            Icon(Icons.Default.Nfc, null, Modifier.size(18.dp), tint = SageGreen)
+                            Spacer(Modifier.width(4.dp))
+                            Text("Found a dropped band?", color = SageGreen, style = MaterialTheme.typography.labelMedium)
                         }
                     }
                 }

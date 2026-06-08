@@ -112,6 +112,14 @@ Every bird gets an NTAG215 NFC tag on its leg band. Tap the phone to a bird, get
   </tr>
 </table>
 
+📖 Deep dive: [How NFC scanning, writing, and conflict resolution work](docs/NFC_ALGORITHM.md).
+
+### Dropped-Tag Reconciliation
+
+A leg band falls off and you find it on the hutch floor — but which bird does it belong to? Scan the dropped tag, describe the unbanded birds you can see, and the app deduces whose band it is: it *eliminates* candidates on hard attributes (sex, lineage), then *ranks* the survivors by band-color similarity. Read-only diagnosis — nothing is re-banded; you just re-attach the existing tag. Scoped to breeding groups, where the single male resolves instantly and the females split on lineage.
+
+📖 Deep dive: [How dropped-tag deduction and Jaccard ranking work](docs/dropped_tag_deduction.md).
+
 ### Hatchery Tracking
 
 17-day incubation timeline with visual progress rings. Candling records, hatch outcome logging — eggs hatched, stillborn, quit, infertile, damaged. Fertility rate and hatch rate displayed prominently with color coding. Android push notifications at key milestones (day 7 candle, day 14 lockdown, hatch day).
