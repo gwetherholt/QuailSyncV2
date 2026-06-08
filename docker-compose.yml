@@ -6,12 +6,13 @@ services:
       - ./data:/data
     restart: always
     environment:
-      # Uncomment to expose /api/dev/{status,seed,stress-seed,restore}.
-      # When unset, those routes are not registered — invisible to clients
+      - QUAILSYNC_ENV=prod
+      # Uncomment to enable DEV mode (exposes /api/dev/{status,seed,stress-seed,restore}).
+      # When unset, those routes aren't registered — invisible to clients
       # (Android Settings → Developer Tools hides itself when /api/dev/status
       # returns 404). Never set this in a real deployment.
-      # DEV_MODE: "true"
-
+      # - DEV_MODE=true
+      
   # sensors service removed — ESP32 wireless nodes now send data directly via WebSocket
 
   # Camera runs via systemd (quailsync-camera.service) — Docker containers cannot
