@@ -1,0 +1,31 @@
+# QuailSync Bird-Photo Backup — systemd service (oneshot, driven by the timer)
+# Runs directly on the Pi, consistent with quailsync-camera.service.
+#
+# Install:
+#   sudo cp backup-bird-photos.sh prune-archived-photos.sh /usr/local/bin/
+#   sudo chmod +x /usr/local/bin/backup-bird-photos.sh /usr/local/bin/prune-archived-photos.sh
+#   sudo cp quailsync-photo-backup.service quailsync-photo-backup.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now quailsync-photo-backup.timer
+#
+# Run once on demand (e.g. to test):   sudo systemctl start quailsync-photo-backup.service
+# Logs:                                journalctl -u quailsync-photo-backup -f
+#                                      (also /home/gwetherholt/quailsync/logs/photo-backup.log)
+#
+# Set NTFY_TOPIC and any paths via the script's variables, or override here with
+# Environment= lines (e.g. Environment=NTFY_TOPIC=my-secret-topic).
+
+[Unit]
+Description=QuailSync overnight bird-photo backup (copy, verify, then prune)
+After=network-online.target
+Wants=network-online.target
+# Wait for the PC share to be mounted before running, and fail fast if it isn't.
+RequiresMountsFor=/mnt/pcshare
+
+[Service]
+Type=oneshot
+User=gwetherholt
+ExecStart=/usr/local/bin/backup-bird-photos.sh
+# Be gentle on the Pi while zipping/checksumming.
+Nice=10
+IOSchedulingClass=idle

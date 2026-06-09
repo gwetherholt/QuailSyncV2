@@ -1,0 +1,17 @@
+# QuailSync Bird-Photo Backup — systemd timer
+# Fires the backup service overnight. See quailsync-photo-backup.service for
+# install steps (enable the .timer, not the .service).
+
+[Unit]
+Description=Run QuailSync bird-photo backup overnight
+
+[Timer]
+# Daily at 03:15 local time.
+OnCalendar=*-*-* 03:15:00
+# If the Pi was off at 03:15, run as soon as it's next up (don't skip a night).
+Persistent=true
+# Spread load / avoid every device hitting the share at the same instant.
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target
