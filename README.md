@@ -357,7 +357,7 @@ docker compose up -d --build
 
 > **Migration note (2026-05):** Bloodline was renamed to **lineage**, and chick groups + birds now support **multiple lineages per record** (many-to-many). Existing data is migrated automatically on server startup: the legacy `bloodlines` table is renamed to `lineages`, the legacy `bloodline_id` columns on `chick_groups` and `birds` are backfilled into the new `chick_group_lineages` / `bird_lineages` junction tables, and the old columns are dropped. The migration is idempotent and runs every boot.
 >
-> **Before deploying on the Pi**, take a backup with the existing nightly script (or run it manually so you have an off-host copy in `/mnt/pc-snapshots/quailsync-nightly/`):
+> **Before deploying on the Pi**, take a backup with the existing nightly script (or run it manually so you have an off-host copy in `/mnt/pc-snapshots/nightly/`):
 >
 > ```bash
 > bash scripts/nightly-backup.sh
@@ -431,7 +431,7 @@ Three shell scripts in `scripts/` keep the Pi's data safe and the disk healthy. 
 
 | Script | Cron | What it does |
 | --- | --- | --- |
-| `nightly-backup.sh` | `0 2 * * *` | Hot SQLite `.backup` of `quailsync.db` → gzipped to `/mnt/pc-snapshots/quailsync-nightly/quailsync-YYYY-MM-DD.db.gz`. Verifies size + `gunzip -t`. Prunes files older than 7 days. |
+| `nightly-backup.sh` | `0 2 * * *` | Hot SQLite `.backup` of `quailsync.db` → gzipped to `/mnt/pc-snapshots/nightly/quailsync-YYYY-MM-DD.db.gz`. Verifies size + `gunzip -t`. Prunes files older than 7 days. |
 | `morning-backup-verify.sh` | `0 8 * * *` | Deadman switch — alerts if today's backup file is missing or older than 12 hours. |
 | `weekly-cleanup.sh` | `0 3 * * 0` | Truncates Docker JSON logs >100 MB, deletes app-generated backups in `~/QuailSyncV2/backups/` older than 7 days, runs `docker image prune`, `journalctl --vacuum-time=14d`, and `apt clean`. |
 
