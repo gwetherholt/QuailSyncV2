@@ -11,9 +11,14 @@
 $ErrorActionPreference = "Stop"
 
 # --- Configuration ---
-$SnapshotDir   = "C:\QuailSyncSnapshots"
+# READ location: where the camera deposits brooder JPEGs (moved out of the
+# share root into a snapshots\ subfolder).
+$SnapshotDir   = "C:\QuailSyncSnapshots\snapshots"
 $DateStamp     = Get-Date -Format "yyyy-MM-dd"
-$StagingDir    = Join-Path $SnapshotDir "${DateStamp}_roboflow-ready"
+# WRITE location: dated Roboflow export, collected under roboflow-ready\.
+# Set explicitly (no longer derived from $SnapshotDir, which now points into
+# a subfolder).
+$StagingDir    = "C:\QuailSyncSnapshots\roboflow-ready\${DateStamp}_roboflow-ready"
 $BlurThreshold = 50
 $ScriptDir     = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $RepoRoot      = Split-Path -Parent $ScriptDir

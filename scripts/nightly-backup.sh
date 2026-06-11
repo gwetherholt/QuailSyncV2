@@ -17,9 +17,9 @@ ALERT_URL="http://localhost:3000/api/alerts"
 SSH_USER="Georgia"
 SSH_HOST="192.168.0.228"
 SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new"
-REMOTE_DIR="/cygdrive/c/QuailSyncSnapshots/quailsync-nightly"
+REMOTE_DIR="/cygdrive/c/QuailSyncSnapshots/nightly"
 # NOTE: If using Windows OpenSSH (not Cygwin), the path format is:
-# REMOTE_DIR="C:/QuailSyncSnapshots/quailsync-nightly"
+# REMOTE_DIR="C:/QuailSyncSnapshots/nightly"
 # Test with: ssh Georgia@192.168.0.228 "ls C:/QuailSyncSnapshots/"
 # and adjust REMOTE_DIR to whichever format works.
 
@@ -60,7 +60,7 @@ cleanup_remote() {
     # doesn't exist on the Windows side (no GNU coreutils, no Cygwin in this
     # path). `$_` is escaped so bash doesn't expand it locally; the inner
     # double quotes around the -Command argument are also escaped.
-    ssh $SSH_OPTS "${SSH_USER}@${SSH_HOST}" "powershell -Command \"Get-ChildItem 'C:\\QuailSyncSnapshots\\quailsync-nightly\\quailsync-*.db.gz' | Where-Object { \$_.LastWriteTime -lt (Get-Date).AddDays(-${REMOTE_RETENTION_DAYS}) } | Remove-Item -Force\"" 2>/dev/null || {
+    ssh $SSH_OPTS "${SSH_USER}@${SSH_HOST}" "powershell -Command \"Get-ChildItem 'C:\\QuailSyncSnapshots\\nightly\\quailsync-*.db.gz' | Where-Object { \$_.LastWriteTime -lt (Get-Date).AddDays(-${REMOTE_RETENTION_DAYS}) } | Remove-Item -Force\"" 2>/dev/null || {
         log "WARNING: Remote cleanup failed (non-critical)"
     }
 }

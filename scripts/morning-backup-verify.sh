@@ -14,7 +14,7 @@ ALERT_URL="http://localhost:3000/api/alerts"
 SSH_USER="Georgia"
 SSH_HOST="192.168.0.228"
 SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new"
-REMOTE_DIR="/cygdrive/c/QuailSyncSnapshots/quailsync-nightly"
+REMOTE_DIR="/cygdrive/c/QuailSyncSnapshots/nightly"
 # NOTE: Adjust REMOTE_DIR path format to match nightly-backup.sh
 # (see the note there about Cygwin vs Windows OpenSSH paths)
 
@@ -52,7 +52,7 @@ fi
 # ─── Check 2: Remote file exists and is non-empty ─────────────────────
 log "Checking remote file: ${REMOTE_DIR}/${EXPECTED_FILE}"
 REMOTE_SIZE=$(ssh $SSH_OPTS "${SSH_USER}@${SSH_HOST}" \
-    "powershell -Command \"if (Test-Path 'C:\\QuailSyncSnapshots\\quailsync-nightly\\${EXPECTED_FILE}') { (Get-Item 'C:\\QuailSyncSnapshots\\quailsync-nightly\\${EXPECTED_FILE}').Length } else { Write-Output 0 }\"" \
+    "powershell -Command \"if (Test-Path 'C:\\QuailSyncSnapshots\\nightly\\${EXPECTED_FILE}') { (Get-Item 'C:\\QuailSyncSnapshots\\nightly\\${EXPECTED_FILE}').Length } else { Write-Output 0 }\"" \
     2>/dev/null | tr -d '\r')
 
 if [[ "$REMOTE_SIZE" -eq 0 ]]; then
