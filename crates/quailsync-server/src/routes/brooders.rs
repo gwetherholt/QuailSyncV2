@@ -527,7 +527,7 @@ pub(crate) async fn brooder_residents(
     // `chick_groups` above. The two are intentionally disjoint — a bird in
     // a chick group has housing_id = NULL.
     let mut stmt = conn.prepare(
-        "SELECT id, band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path, housing_id, chick_group_id
+        "SELECT id, band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path, photo_uploaded_at, housing_id, chick_group_id
          FROM birds WHERE housing_id = ?1 AND status = 'Active'"
     ).expect("prepare failed");
     let mut birds: Vec<Bird> = stmt

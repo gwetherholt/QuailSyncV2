@@ -265,6 +265,13 @@ pub fn init_db(conn: &Connection) {
     .ok();
     conn.execute("ALTER TABLE birds ADD COLUMN photo_path TEXT", [])
         .ok();
+    // Bird-photo upload timestamp (ISO-8601). Filenames are now history-keyed
+    // (`bird_{id}_{stamp}.jpg`) so they're no longer derivable from the id
+    // alone — `photo_path` points at the most-recent upload and this records
+    // when it landed. Both are written together, only after the file is safely
+    // on disk. See routes/photos.rs.
+    conn.execute("ALTER TABLE birds ADD COLUMN photo_uploaded_at TEXT", [])
+        .ok();
     // Issue #13: permanent housing assignment for adult birds. Distinct from
     // current_brooder_id (live location). Nullable — unhoused birds have NULL.
     if !column_exists(conn, "birds", "housing_id") {

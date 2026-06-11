@@ -13,11 +13,13 @@
 # only invoked after verification passes and which independently re-verifies
 # the destination checksum before removing anything. See that script.
 #
-# Source path note: the Rust server does not (yet) implement the photo-upload
-# handler, so PHOTO_SRC_DIR below is the *intended* location by convention
-# (the `bird_photos/` prefix under the ./data:/data docker volume). Adjust if
-# your deployment differs. A missing/empty source is treated as "nothing to
-# do" — no delete, no alert.
+# Source path note: the Rust server's photo-upload handler writes JPEGs to
+# `bird_photos/` under its `/data` workdir (host side of the ./data:/data
+# docker volume), using history-keeping timestamped names like
+# `bird_{id}_{YYYYMMDD-HHMMSS}.jpg`. PHOTO_SRC_DIR below points at that dir;
+# the glob picks up the timestamped names unchanged. Adjust if your deployment
+# differs. A missing/empty source is treated as "nothing to do" — no delete,
+# no alert.
 #
 # Install: see quailsync-photo-backup.service / .timer in this directory.
 # =============================================================================

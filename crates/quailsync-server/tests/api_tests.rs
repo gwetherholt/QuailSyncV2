@@ -26,6 +26,9 @@ async fn spawn_test_server() -> String {
         live_tx,
         last_seen: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         metrics_handle,
+        photos: quailsync_server::state::PhotoConfig::for_dir(
+            std::env::temp_dir().join("quailsync-test-photos"),
+        ),
     };
 
     let app = build_app(state);

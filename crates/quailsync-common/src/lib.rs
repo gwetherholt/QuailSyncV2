@@ -200,6 +200,12 @@ pub struct Bird {
     pub current_brooder_id: Option<i64>,
     #[serde(default)]
     pub photo_path: Option<String>,
+    /// When `photo_path` was last set by an upload (ISO-8601 string). `None`
+    /// for birds with no uploaded photo. The DB is the source of truth for
+    /// "current photo" now that filenames carry a timestamp and history is
+    /// retained on disk — this surfaces the upload time to the UI.
+    #[serde(default)]
+    pub photo_uploaded_at: Option<String>,
     /// Permanent housing assignment for adult birds (issue #13). Distinct
     /// from `current_brooder_id`, which tracks the bird's *current* physical
     /// location during the chick/adolescent stages. `None` for unhoused

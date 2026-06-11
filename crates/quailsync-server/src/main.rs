@@ -1,6 +1,7 @@
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use quailsync_common::AlertConfig;
+use quailsync_server::state::PhotoConfig;
 use quailsync_server::{auto_backup_if_needed, build_app, init_db, AppState};
 use rusqlite::Connection;
 use tokio::sync::broadcast;
@@ -83,6 +84,17 @@ async fn main() {
         .expect("failed to install Prometheus recorder");
     println!("[metrics] Prometheus exporter installed (GET /metrics)");
 
+    let photos = PhotoConfig::from_env();
+    println!(
+        "[photos] upload dir = {} (ntfy alerts {})",
+        photos.dir.display(),
+        if photos.ntfy_enabled() {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         agent_connected: Arc::new(AtomicBool::new(false)),
@@ -90,6 +102,7 @@ async fn main() {
         live_tx,
         last_seen: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         metrics_handle: prometheus_handle,
+        photos,
     };
 
     let app = build_app(state);

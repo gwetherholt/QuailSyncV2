@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc, Mutex, RwLock};
 use std::time::Instant;
 
@@ -12,6 +13,57 @@ use tokio::sync::broadcast;
 /// How long before a brooder sensor is considered offline (no telemetry received).
 pub const SENSOR_STALE_SECS: u64 = 15;
 
+/// Where uploaded bird photos are stored and how anomalous-rejection alerts
+/// are pushed. Held in `AppState` (rather than read from the environment at
+/// the point of use) so the composition root — `main.rs` — owns all env
+/// parsing, and so tests can inject a temp dir + a mock ntfy endpoint.
+#[derive(Clone)]
+pub struct PhotoConfig {
+    /// Directory the upload handler writes photo files into. Created on first
+    /// use if absent. In production this is relative ("bird_photos") and so
+    /// resolves under the container's `/data` workdir — i.e. the host's
+    /// `…/data/bird_photos/`, the same path the backup script globs.
+    pub dir: Arc<PathBuf>,
+    /// ntfy base server (e.g. "https://ntfy.sh"). Empty disables alerts.
+    pub ntfy_server: String,
+    /// ntfy topic. `None` disables alerts. The topic is a secret and lives in
+    /// the out-of-repo env file — never hardcoded here.
+    pub ntfy_topic: Option<String>,
+}
+
+impl PhotoConfig {
+    /// Production configuration, read entirely from the environment. Mirrors
+    /// the backup script's variables (`NTFY_SERVER`, `NTFY_TOPIC`) so a single
+    /// env file configures both. A blank or placeholder topic disables alerts.
+    pub fn from_env() -> Self {
+        let dir =
+            std::env::var("QUAILSYNC_PHOTO_DIR").unwrap_or_else(|_| "bird_photos".to_string());
+        let ntfy_topic = std::env::var("NTFY_TOPIC")
+            .ok()
+            .filter(|t| !t.trim().is_empty() && t != "quailsync-REPLACE-ME");
+        Self {
+            dir: Arc::new(PathBuf::from(dir)),
+            ntfy_server: std::env::var("NTFY_SERVER")
+                .unwrap_or_else(|_| "https://ntfy.sh".to_string()),
+            ntfy_topic,
+        }
+    }
+
+    /// Test/default configuration: photos under `dir`, ntfy alerts disabled.
+    pub fn for_dir(dir: impl Into<PathBuf>) -> Self {
+        Self {
+            dir: Arc::new(dir.into()),
+            ntfy_server: String::new(),
+            ntfy_topic: None,
+        }
+    }
+
+    /// Whether ntfy alerting is configured (server + topic both present).
+    pub fn ntfy_enabled(&self) -> bool {
+        !self.ntfy_server.is_empty() && self.ntfy_topic.is_some()
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
@@ -22,6 +74,8 @@ pub struct AppState {
     pub last_seen: Arc<RwLock<HashMap<i64, Instant>>>,
     /// Prometheus metrics handle for rendering /metrics output.
     pub metrics_handle: PrometheusHandle,
+    /// Bird-photo upload storage + alert configuration.
+    pub photos: PhotoConfig,
 }
 
 /// Record that we just received telemetry for a brooder.
