@@ -100,6 +100,7 @@ import com.quailsync.app.data.NfcScanResult
 import com.quailsync.app.data.NfcService
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.TagConflict
+import com.quailsync.app.data.uploadBirdPhotoFile
 import com.quailsync.app.ui.theme.AlertGreen
 import com.quailsync.app.ui.theme.AlertRed
 import com.quailsync.app.ui.theme.AlertYellow
@@ -110,8 +111,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -689,16 +688,33 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
 
     fun saveBirdPhotoLocally(birdId: Int, bitmap: Bitmap, context: Context) {
         viewModelScope.launch {
-            try {
+            // Local save first, always — the on-disk copy is the source of
+            // truth and must never depend on the upload succeeding.
+            val file = try {
                 val dir = File(context.filesDir, "bird_photos").also { it.mkdirs() }
-                val file = File(dir, "bird_${birdId}.jpg")
-                file.outputStream().use { out ->
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                File(dir, "bird_${birdId}.jpg").also { f ->
+                    f.outputStream().use { out ->
+                        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                    }
                 }
-                Log.d("QuailSync", "Photo saved locally: ${file.absolutePath}")
-                onPostTagPhotoSaved()
             } catch (e: Exception) {
                 Log.e("QuailSync", "Failed to save photo", e)
+                null
+            }
+
+            if (file != null) {
+                Log.d("QuailSync", "Photo saved locally: ${file.absolutePath}")
+                // Advance the batch flow off the saved copy; don't make the
+                // user wait on the network.
+                onPostTagPhotoSaved()
+                // Follow-on upload. Failure keeps the local file and just warns.
+                if (!uploadBirdPhotoFile(api, birdId, file)) {
+                    Toast.makeText(
+                        context,
+                        "Photo saved locally — upload failed, will retry next time",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
             }
         }
     }
@@ -754,28 +770,6 @@ class NfcViewModel(val nfcService: NfcService, serverUrl: String) : ViewModel() 
     }
 
     fun dismissBatchSummary() { _batchState.value = BatchState.Idle }
-
-    // --- Photo upload ---
-
-    @Suppress("unused") fun uploadPhoto(birdId: Int, uri: Uri, context: Context) {
-        viewModelScope.launch {
-            try {
-                val bytes = context.contentResolver.openInputStream(uri)?.readBytes() ?: return@launch
-                val part = okhttp3.MultipartBody.Part.createFormData(
-                    "photo", "bird_${birdId}.jpg", bytes.toRequestBody("image/jpeg".toMediaType()),
-                )
-                api.uploadBirdPhoto(birdId, part)
-            } catch (e: Exception) {
-                Log.e("QuailSync", "Photo upload failed, saving locally", e)
-                try {
-                    val dir = File(context.filesDir, "bird_photos").also { it.mkdirs() }
-                    context.contentResolver.openInputStream(uri)?.use { input ->
-                        File(dir, "bird_${birdId}.jpg").outputStream().use { input.copyTo(it) }
-                    }
-                } catch (_: Exception) {}
-            }
-        }
-    }
 }
 
 // =====================================================================

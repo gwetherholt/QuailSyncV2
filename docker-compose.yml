@@ -1,6 +1,15 @@
 services:
   server:
     build: .
+    # Run as the host user (gwetherholt = UID 1000 / GID 1000) instead of root,
+    # so files written into the ./data volume (uploaded bird photos, the SQLite
+    # db, auto-backups, generated TLS certs) are owned by 1000:1000 — letting the
+    # photo-backup prune step (which runs as gwetherholt) delete them. Confirm
+    # the real UID:GID with `id gwetherholt` on the Pi and adjust if different.
+    # NOTE: the ./data tree must be chown'd to 1000:1000 first or the server
+    # can't open the db / write files. Ports 3000+3443 are unprivileged, so a
+    # non-root process can still bind them.
+    user: "1000:1000"
     network_mode: host
     volumes:
       - ./data:/data

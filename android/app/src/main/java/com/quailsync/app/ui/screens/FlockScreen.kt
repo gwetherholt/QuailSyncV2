@@ -9,7 +9,6 @@ package com.quailsync.app.ui.screens
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.net.Uri
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -106,6 +105,7 @@ import com.quailsync.app.data.FlockBreedingStats
 import com.quailsync.app.data.Lineage
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.ServerConfig
+import com.quailsync.app.data.uploadBirdPhotoFile
 import com.quailsync.app.ui.theme.AlertGreen
 import com.quailsync.app.ui.theme.AlertRed
 import com.quailsync.app.ui.theme.AlertYellow
@@ -115,8 +115,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 
 // =====================================================================
@@ -191,33 +189,6 @@ class FlockViewModel(application: Application) : AndroidViewModel(application) {
         return try { api.getBirdWeights(birdId) } catch (e: Exception) { Log.e("QuailSync", "Failed to load weights for bird $birdId", e); emptyList() }
     }
 
-    @Suppress("unused") fun uploadBirdPhoto(birdId: Int, uri: Uri, context: android.content.Context) {
-        viewModelScope.launch {
-            // Always save to the standard local path first
-            try {
-                val dir = File(context.filesDir, "bird_photos").also { it.mkdirs() }
-                val dest = File(dir, "bird_${birdId}.jpg")
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    dest.outputStream().use { input.copyTo(it) }
-                }
-                Log.d("QuailSync", "Photo saved locally: ${dest.absolutePath}")
-            } catch (e: Exception) {
-                Log.e("QuailSync", "Failed to save photo locally", e)
-            }
-            // Try server upload
-            try {
-                val bytes = context.contentResolver.openInputStream(uri)?.readBytes() ?: return@launch
-                val part = okhttp3.MultipartBody.Part.createFormData(
-                    "photo", "bird_${birdId}.jpg", bytes.toRequestBody("image/jpeg".toMediaType()),
-                )
-                api.uploadBirdPhoto(birdId, part)
-                Log.d("QuailSync", "Photo uploaded for bird $birdId")
-            } catch (e: Exception) {
-                Log.e("QuailSync", "Photo upload failed (saved locally)", e)
-            }
-        }
-    }
-
     fun updateBirdStatus(birdId: Int, status: String, notes: String? = null, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             val ok = try {
@@ -274,16 +245,31 @@ class FlockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Save a bitmap directly (used from TakePicturePreview). */
+    /** Save a bitmap directly (used from TakePicturePreview), then upload it. */
     fun saveBirdPhotoBitmap(birdId: Int, bitmap: Bitmap, context: android.content.Context) {
         viewModelScope.launch {
-            try {
+            // Local save first, always — never lose the local copy to an
+            // upload failure.
+            val file = try {
                 val dir = File(context.filesDir, "bird_photos").also { it.mkdirs() }
-                val file = File(dir, "bird_${birdId}.jpg")
-                file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
-                Log.d("QuailSync", "Photo saved: ${file.absolutePath}")
+                File(dir, "bird_${birdId}.jpg").also { f ->
+                    f.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+                }
             } catch (e: Exception) {
                 Log.e("QuailSync", "Failed to save photo", e)
+                null
+            }
+
+            if (file != null) {
+                Log.d("QuailSync", "Photo saved: ${file.absolutePath}")
+                // Follow-on upload; failure keeps the local file and just warns.
+                if (!uploadBirdPhotoFile(api, birdId, file)) {
+                    Toast.makeText(
+                        context,
+                        "Photo saved locally — upload failed, will retry next time",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
             }
         }
     }
