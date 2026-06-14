@@ -226,13 +226,51 @@ Each test spins up a fresh Axum server on a random port with an in-memory SQLite
 - `ClutchStatus` enum behavior and JSON string values
 - Full API integration: create and list lineages, create and list birds, breeding suggestions for same-lineage pairs (coefficient 0.25, unsafe), different-lineage pairs (coefficient 0.0, safe), and full siblings (coefficient 0.5, unsafe)
 
-### Python — 58 tests
+### Python — 152 tests
 
-**`test_pi_agent.py`**
+**`pi-agent/tests/test_pi_agent.py` — 58 tests**
 - **Sensor edge cases** — `None` temperature, `None` humidity, both `None`, checksum failures 10 times in a row, extreme values (-40°C, 80°C, 0% humidity, 100% humidity)
 - **WebSocket resilience** — server unreachable on startup, connection drops mid-send, reconnection backoff verification (confirms it actually backs off instead of hammering the server)
 - **Camera stream** — multi-client MJPEG serving, snapshot endpoint under load
 - **QR code parsing** — empty strings, 10,000-character payloads, XSS injection, SQL injection, null bytes, unicode, brooder IDs of 0, -1, and 999999999
+
+**Trail-camera pipeline — `trailcam/tests/` — 94 tests**
+
+The trail-cam pipeline (SpyPoint poll → YOLO detect → QuailSync post) ships its own pytest suite. Everything is hermetic — no test touches the real SpyPoint API, real model weights, or the network (the third-party client, HTTP session, and DNS resolver are all mocked; filesystem tests use `tmp_path`):
+
+```bash
+cd trailcam
+pip install pytest                # pipeline deps are in requirements.txt
+pytest -m "not integration"       # fast suite (93 tests; skips the real-model test)
+pytest -m integration             # the one slow test: downloads stock yolov8n.pt + real inference
+```
+
+*Functional suites:*
+- **`test_config.py` (5)** — settings load from environment variables, defaults are correct (incl. `QUAILSYNC_API_URL`, confidence, poll interval, photo limit), the `pathlib` directory layout, and `ensure_dirs()` creating the `staging/processed/archive/models` tree.
+- **`test_photo_state.py` (6)** — the JSON dedup ledger: missing/corrupt files start empty, ids normalize to strings, save→reload persists, and the write is atomic (no `.tmp` left behind).
+- **`test_poller.py` (5)** — the SpyPoint poller with **`spypoint.Client` and `requests.Session` fully mocked**: downloads new photos with metadata sidecars, skips already-seen ids, retries with exponential backoff then succeeds, gives up after max retries while leaving the photo *unseen* (so the next poll retries it), and the login wiring.
+- **`test_detector.py` (6)** — YOLO detection with **a mocked Ultralytics model** (predictable one-`quail` result): `DetectionResult` shape, confidence passthrough, camera-id fallback to the directory name when the sidecar is missing, and `process_staging()` moving files staging→processed while writing `*_detections.json`. Includes one `@pytest.mark.integration` test that runs the **real stock `yolov8n.pt`** end-to-end (structure only — no detection-count assertions, since it's COCO- not quail-trained).
+- **`test_bridge.py` (6)** — the QuailSync observation payload + JSONL output: field shape, average/min confidence (`None` when there are no detections), `bird_count` tracking `total_count`, `post_batch()` success/failure counts, and write-failure handling.
+- **`test_integration.py` (1)** — the full chain end-to-end with PIL-generated 640×640 JPEGs and the mocked model: images move staging→processed, detection JSON is written, and observations are logged.
+
+*Security suites (a deliberate threat-modeling pass over the third-party integration):*
+- **`test_security.py` (25)** — first-pass hardening:
+  - **Path traversal** — `camera_id`/`photo_id` from the API are sanitized; a `../../etc` camera or `../../../tmp/pwned` photo id still writes *inside* staging (verified with `Path.resolve()`), plus direct `sanitize_filename()` cases (separators, null bytes, length cap, dot-only fallback).
+  - **Download size caps** — an oversized `Content-Length` and an oversized stream are both rejected (and not retried); nothing is written.
+  - **HTTPS enforcement** — an `http://` photo URL is refused before any request is made.
+  - **Credential leakage** — the password never appears in logs (on login error) or in any file the poller writes.
+  - **State-file permissions** — `PhotoState.save()` produces a `0o600` file (POSIX-only; skipped on Windows).
+  - **Model integrity** — a world-writable `.pt` logs a warning, and an optional `YOLO_MODEL_SHA256` mismatch refuses to load (PyTorch `.pt` files are unpickled — i.e. arbitrary code execution if swapped).
+- **`test_advanced_security.py` (40)** — second-pass, deeper attack vectors:
+  - **TLS verification** — the session keeps `verify=True`, downloads never disable it, and `_validate_url()` requires HTTPS.
+  - **SSRF** — `_is_safe_url()` rejects loopback / RFC1918 / link-local (incl. the `169.254.169.254` cloud-metadata endpoint) / IPv6 loopback, catches **DNS rebinding** (a public hostname resolving to a private IP, resolver mocked), and allows legitimate public CDNs — wired into the download path.
+  - **Malformed API responses** — invalid JSON, payload bombs, 1000-level nesting, and photos missing `id`/`url` or carrying a nested-object `id` are all handled gracefully (logged, empty result, no crash).
+  - **Image validation** — `_validate_image()` rejects a renamed PNG, a zero-byte file, a spoofed-magic-then-garbage file, and an HTML login page; a full poll discards an HTML response without staging it.
+  - **EXIF sanitization** — `_strip_exif()` removes embedded metadata, verified both directly and through a real download.
+  - **Credential/token leak** — `repr(poller)` redacts the username and hides the password; secrets stay out of logs (success *and* failure paths) and every written file.
+  - **Bridge input sanitization** — `camera_id` and `class_name` posted to QuailSync are stripped of SQL metacharacters (`'; DROP TABLE`), HTML/script tags, and null bytes, while clean values pass through untouched.
+
+**`trailcam/test_pipeline.py`** — a standalone (non-pytest) smoke test that exercises the real pipeline mechanics against the stock `yolov8n.pt` using downloaded Creative-Commons bird photos (falling back to PIL-generated images offline). Run with `python test_pipeline.py`.
 
 ### CI Pipeline
 

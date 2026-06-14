@@ -41,6 +41,10 @@ YOLO_MODEL_PATH: Path = Path(
     os.environ.get("YOLO_MODEL_PATH", MODELS_DIR / "best.pt")
 ).expanduser()
 YOLO_CONFIDENCE: float = float(os.environ.get("YOLO_CONFIDENCE", "0.5"))
+# Optional integrity pin for the model weights. PyTorch .pt files are unpickled
+# on load (arbitrary code execution if swapped), so when set the detector
+# refuses to load a model whose SHA-256 doesn't match. Unset = no check.
+YOLO_MODEL_SHA256: str | None = os.environ.get("YOLO_MODEL_SHA256")
 
 # --- QuailSync server ------------------------------------------------------
 QUAILSYNC_API_URL: str = os.environ.get(
@@ -50,6 +54,9 @@ QUAILSYNC_API_URL: str = os.environ.get(
 # --- Polling behaviour -----------------------------------------------------
 POLL_INTERVAL: int = int(os.environ.get("POLL_INTERVAL", "900"))  # seconds
 PHOTO_LIMIT: int = int(os.environ.get("PHOTO_LIMIT", "25"))
+# Hard cap on a single photo download (bytes). Guards against a malicious /
+# buggy API response pointing at a huge file that would fill the Pi's disk.
+MAX_PHOTO_SIZE_BYTES: int = int(os.environ.get("MAX_PHOTO_SIZE_BYTES", str(20_971_520)))  # 20 MiB
 
 # Every directory the pipeline writes into — the single source of truth for
 # ``ensure_dirs()``.

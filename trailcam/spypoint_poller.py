@@ -16,12 +16,17 @@ easy to test and to drive from the pipeline or a cron/systemd timer.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
+import os
+import re
+import socket
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
@@ -33,6 +38,82 @@ except ImportError:
     import config
 
 logger = logging.getLogger("trailcam.spypoint_poller")
+
+# Single path component built from API data must never exceed this (ext4/most
+# filesystems cap a name at 255 bytes).
+MAX_FILENAME_LENGTH = 255
+
+# Image sanity bounds. JPEG Start-Of-Image marker; a real photo is at least 1KB.
+JPEG_MAGIC = b"\xff\xd8\xff"
+MIN_PHOTO_SIZE_BYTES = 1024
+
+
+class PhotoTooLargeError(Exception):
+    """Raised when a download exceeds the configured size cap (non-retryable)."""
+
+
+# These subclass ValueError so callers can catch either the specific type or a
+# plain ValueError (the public _validate_url contract raises "ValueError").
+class InsecureURLError(ValueError):
+    """Raised when a photo URL is not HTTPS (non-retryable)."""
+
+
+class UnsafeURLError(ValueError):
+    """Raised when a URL resolves to a private/internal address (SSRF guard)."""
+
+
+class InvalidImageError(ValueError):
+    """Raised when downloaded bytes don't look like a sane JPEG."""
+
+
+def sanitize_filename(value, *, fallback: str = "unknown", max_length: int = MAX_FILENAME_LENGTH) -> str:
+    """Make an API-supplied string safe to use as a *single* path component.
+
+    Untrusted ``camera_id`` / ``photo_id`` values from the SpyPoint API are used
+    to build on-disk paths; without this a value like ``../../etc`` or one
+    containing ``/`` or a null byte could write outside the staging tree. This:
+
+    * removes null bytes and control characters,
+    * replaces anything outside ``[A-Za-z0-9._-]`` (notably ``/`` and ``\\``)
+      with ``_``,
+    * rejects names that are empty or consist only of dots (``.``/``..``), and
+    * caps the length.
+
+    The result never contains a path separator, a null byte, or is ``.``/``..``,
+    so ``base_dir / sanitize_filename(x)`` always stays inside ``base_dir``.
+    """
+    text = str(value).replace("\x00", "")
+    # Drop other control characters, then allowlist-replace everything unsafe.
+    text = "".join(ch for ch in text if ch >= " ")
+    text = re.sub(r"[^A-Za-z0-9._-]", "_", text).strip()
+    # A name of only dots (e.g. "." or "..") is a traversal/no-op component.
+    if not text or set(text) <= {"."}:
+        text = fallback
+    return text[:max_length]
+
+
+def _strip_exif(image_path: Path) -> None:
+    """Rewrite a JPEG with all EXIF/metadata removed.
+
+    Trail-cam photos can carry GPS, device, and timestamp EXIF that we don't
+    want flowing into downstream systems (EXIF can also carry injection
+    payloads). We rebuild the image from raw pixels into a fresh object with no
+    ``info``/``exif``, then re-save. Best-effort: if Pillow is missing or the
+    re-encode fails, we log and leave the original file in place.
+    """
+    try:
+        from PIL import Image
+    except ImportError:  # pragma: no cover - Pillow ships with ultralytics
+        logger.warning("Pillow not installed — cannot strip EXIF from %s", image_path)
+        return
+    try:
+        with Image.open(image_path) as im:
+            rgb = im.convert("RGB")
+            clean = Image.new("RGB", rgb.size)
+            clean.putdata(list(rgb.getdata()))  # fresh image carries no metadata
+        clean.save(image_path, format="JPEG", quality=95)
+    except Exception as exc:  # noqa: BLE001 — never fail a download over EXIF
+        logger.warning("Could not strip EXIF from %s: %s", image_path, exc)
 
 
 class PhotoState:
@@ -71,13 +152,24 @@ class PhotoState:
         self._seen.add(str(photo_id))
 
     def save(self) -> None:
-        """Persist the seen set atomically (write to temp, then rename)."""
+        """Persist the seen set atomically (write to temp, then rename).
+
+        The file is locked down to ``0o600`` (owner read/write only) so another
+        user can't tamper with the dedup state — clearing it to force mass
+        re-downloads, or injecting ids to suppress real photos. The mode is set
+        on the temp file *before* the rename so the final file is never briefly
+        group/other-readable. (chmod is a no-op for these bits on Windows.)
+        """
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
         tmp.write_text(
             json.dumps({"seen_ids": sorted(self._seen)}, indent=2),
             encoding="utf-8",
         )
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError as exc:  # pragma: no cover - platform dependent
+            logger.debug("Could not chmod state file %s: %s", tmp, exc)
         tmp.replace(self.path)
 
     def __len__(self) -> int:
@@ -102,6 +194,7 @@ class SpypointPoller:
         max_retries: int = 3,
         backoff_base: float = 2.0,
         session: requests.Session | None = None,
+        max_photo_size: int = config.MAX_PHOTO_SIZE_BYTES,
     ):
         self.username = username
         self.password = password
@@ -112,7 +205,23 @@ class SpypointPoller:
         self.max_retries = max_retries
         self.backoff_base = backoff_base
         self.session = session or requests.Session()
+        self.max_photo_size = max_photo_size
         self.client = None  # set by login()
+
+    def __repr__(self) -> str:
+        # Credentials must never leak via repr (logs, tracebacks, debuggers).
+        return (
+            f"SpypointPoller(username={self._redact(self.username)!r}, "
+            f"authenticated={self.client is not None})"
+        )
+
+    @staticmethod
+    def _redact(value) -> str:
+        """Mask a credential to first+last char, e.g. 'gwetherholt' -> 'g***t'."""
+        text = "" if value is None else str(value)
+        if len(text) <= 2:
+            return "*" * len(text)
+        return f"{text[0]}{'*' * (len(text) - 2)}{text[-1]}"
 
     # -- connection ---------------------------------------------------------
 
@@ -136,13 +245,33 @@ class SpypointPoller:
         if self.client is None:
             self.login()
 
-        cameras = self.client.cameras()
-        logger.info("Found %d camera(s)", len(cameras))
-        photos = self.client.photos(cameras, limit=self.limit)
+        # The API/library can return anything: invalid JSON, a payload bomb,
+        # deeply nested structures, etc. Any failure fetching or iterating the
+        # photo list is logged and turned into "no photos this poll" rather than
+        # crashing the service.
+        try:
+            cameras = self.client.cameras()
+            logger.info("Found %d camera(s)", len(cameras))
+            photos = self.client.photos(cameras, limit=self.limit)
+            photo_iter = list(photos)  # force any lazy parsing to happen here
+        except Exception as exc:  # noqa: BLE001 — bad JSON, payload bomb, deep nesting…
+            logger.error("Failed to fetch photo list from SpyPoint: %s", exc)
+            return []
 
         downloaded: list[Path] = []
-        for photo in photos:
-            photo_id = str(photo.id)
+        for photo in photo_iter:
+            # Defensively pull the id — a malformed photo (no id, or an id whose
+            # str() blows up, e.g. a pathologically nested object) is skipped
+            # rather than crashing the whole poll.
+            try:
+                raw_id = getattr(photo, "id", None)
+                if raw_id is None:
+                    logger.error("Skipping malformed photo object (no id)")
+                    continue
+                photo_id = str(raw_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Skipping photo with unreadable id: %s", exc)
+                continue
             if self.state.has_seen(photo_id):
                 continue
             try:
@@ -174,21 +303,43 @@ class SpypointPoller:
     # makes the transport helper reusable (e.g. quailsync_bridge.py) and
     # testable on its own without constructing a fake photo object.
     def _download_photo(self, photo) -> Path:
-        camera_id = self._camera_id(photo)
+        # camera_id and photo.id come straight from the API — sanitize BOTH
+        # before they touch the filesystem so a malicious value (e.g.
+        # "../../etc") can't escape the staging tree. The dedup key in poll()
+        # still uses the raw id; only the on-disk name is sanitized.
+        camera_id = sanitize_filename(self._camera_id(photo))
+        safe_photo_id = sanitize_filename(str(photo.id))
         taken_at = self._photo_timestamp(photo)
         download_time = datetime.now(timezone.utc)
 
         camera_dir = self.staging_dir / camera_id
         camera_dir.mkdir(parents=True, exist_ok=True)
 
-        # Timestamp-based filename, suffixed with the photo id to guarantee
-        # uniqueness even if two photos share a second.
-        stem = f"{taken_at:%Y%m%d-%H%M%S}_{photo.id}"
+        # Timestamp-based filename, suffixed with the (sanitized) photo id to
+        # keep names unique even if two photos share a second.
+        stem = f"{taken_at:%Y%m%d-%H%M%S}_{safe_photo_id}"
         image_path = camera_dir / f"{stem}.jpg"
         sidecar_path = camera_dir / f"{stem}.json"
 
+        # Defense in depth: confirm the resolved target really is inside staging
+        # before writing anything (catches any sanitizer gap).
+        staging_root = self.staging_dir.resolve()
+        if not image_path.resolve().is_relative_to(staging_root):
+            raise ValueError(f"refusing to write outside staging dir: {image_path}")
+
         url = photo.url(size=self.photo_size)
         self._download_with_retry(url, image_path)
+
+        # Validate the bytes really are a sane JPEG (not HTML from a redirect to
+        # a login page, a renamed PNG, garbage, etc.). On failure, remove the
+        # file and bail so the photo isn't marked seen.
+        try:
+            self._validate_image(image_path.read_bytes())
+        except Exception:
+            image_path.unlink(missing_ok=True)
+            raise
+        # Strip EXIF before anything downstream touches the image.
+        _strip_exif(image_path)
 
         metadata = {
             "photo_id": str(photo.id),
@@ -205,19 +356,44 @@ class SpypointPoller:
 
     def _download_with_retry(self, url: str, dest: Path) -> None:
         """Download ``url`` to ``dest`` with up to ``max_retries`` attempts and
-        exponential backoff (``backoff_base ** (attempt - 1)`` seconds)."""
+        exponential backoff (``backoff_base ** (attempt - 1)`` seconds).
+
+        Two non-retryable guards run here: the URL must be HTTPS, and the
+        download must stay under ``max_photo_size`` (checked both against the
+        declared ``Content-Length`` and the actual streamed byte count). These
+        raise immediately rather than burning retries on a request that can
+        never succeed.
+        """
+        # HTTPS-only, and not pointed at a private/internal address (SSRF).
+        self._validate_url(url)
+        if not self._is_safe_url(url):
+            raise UnsafeURLError(f"refusing URL resolving to a private address: {url}")
+
+        part = dest.with_suffix(dest.suffix + ".part")
         last_exc: Exception | None = None
         for attempt in range(1, self.max_retries + 1):
             try:
                 resp = self.session.get(url, timeout=30, stream=True)
                 resp.raise_for_status()
-                tmp = dest.with_suffix(dest.suffix + ".part")
-                with open(tmp, "wb") as fh:
+                self._reject_if_too_large_declared(resp)
+
+                total = 0
+                with open(part, "wb") as fh:
                     for chunk in resp.iter_content(chunk_size=8192):
-                        if chunk:
-                            fh.write(chunk)
-                tmp.replace(dest)  # atomic: only a complete file appears at dest
+                        if not chunk:
+                            continue
+                        total += len(chunk)
+                        if total > self.max_photo_size:
+                            raise PhotoTooLargeError(
+                                f"download exceeded {self.max_photo_size} bytes — aborting"
+                            )
+                        fh.write(chunk)
+                part.replace(dest)  # atomic: only a complete file appears at dest
                 return
+            except (PhotoTooLargeError, InsecureURLError):
+                # Size/security rejections are deterministic — don't retry.
+                part.unlink(missing_ok=True)
+                raise
             except Exception as exc:  # noqa: BLE001 — broad on purpose, we retry
                 last_exc = exc
                 if attempt == self.max_retries:
@@ -233,8 +409,101 @@ class SpypointPoller:
                 )
                 time.sleep(delay)
         # Exhausted retries — clean up any partial file and re-raise.
-        dest.with_suffix(dest.suffix + ".part").unlink(missing_ok=True)
+        part.unlink(missing_ok=True)
         raise RuntimeError(f"download failed after {self.max_retries} attempts: {url}") from last_exc
+
+    def _reject_if_too_large_declared(self, resp) -> None:
+        """Reject before downloading if the server's Content-Length already
+        exceeds the cap. Missing/garbage headers are ignored (the streaming
+        guard still enforces the real limit)."""
+        headers = getattr(resp, "headers", {}) or {}
+        declared = headers.get("Content-Length")
+        if declared is None:
+            return
+        try:
+            size = int(declared)
+        except (TypeError, ValueError):
+            return
+        if size > self.max_photo_size:
+            raise PhotoTooLargeError(
+                f"declared size {size} bytes exceeds limit {self.max_photo_size}"
+            )
+
+    # -- URL / SSRF / image validation --------------------------------------
+
+    @staticmethod
+    def _validate_url(url) -> None:
+        """Require an HTTPS scheme. Raises ``ValueError`` (``InsecureURLError``)
+        for anything else — never silently downgrades."""
+        scheme = urlparse(str(url)).scheme.lower()
+        if scheme != "https":
+            raise InsecureURLError(f"refusing non-HTTPS URL (scheme={scheme!r}): {url}")
+
+    def _is_safe_url(self, url) -> bool:
+        """Return False if the URL's host resolves to a private/internal address.
+
+        Guards against SSRF (incl. DNS rebinding) by resolving the hostname via
+        ``socket.getaddrinfo`` and rejecting loopback / RFC1918 / link-local /
+        ULA / reserved / multicast targets. A host that can't be resolved is
+        allowed through — there's nothing to SSRF *to*, and the actual request
+        will simply fail.
+        """
+        host = urlparse(str(url)).hostname
+        if not host:
+            return False
+        try:
+            infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+        except (socket.gaierror, UnicodeError, OSError) as exc:
+            logger.debug("Could not resolve %s for SSRF check (%s) — allowing", host, exc)
+            return True
+        for info in infos:
+            ip_text = info[4][0]
+            try:
+                ip = ipaddress.ip_address(ip_text)
+            except ValueError:
+                return False
+            if self._is_blocked_ip(ip):
+                logger.warning("Refusing SSRF-unsafe URL %s -> %s", url, ip_text)
+                return False
+        return True
+
+    @staticmethod
+    def _is_blocked_ip(ip) -> bool:
+        """True for any address we must never connect to from the poller."""
+        return (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        )
+
+    def _validate_image(self, data: bytes) -> None:
+        """Reject anything that isn't a plausible JPEG photo.
+
+        Checks size bounds, the JPEG magic bytes, and (if Pillow is available)
+        that PIL can actually parse it — catching renamed PNGs, HTML login
+        pages returned by a redirect, truncated/garbage files, etc.
+        """
+        if len(data) < MIN_PHOTO_SIZE_BYTES:
+            raise InvalidImageError(f"image too small: {len(data)} bytes (< {MIN_PHOTO_SIZE_BYTES})")
+        if len(data) > self.max_photo_size:
+            raise InvalidImageError(f"image too large: {len(data)} bytes (> {self.max_photo_size})")
+        if not data.startswith(JPEG_MAGIC):
+            raise InvalidImageError("not a JPEG (bad magic bytes)")
+        try:
+            from PIL import Image
+        except ImportError:  # pragma: no cover - Pillow ships with ultralytics
+            logger.warning("Pillow not installed — skipping deep image validation")
+            return
+        import io
+
+        try:
+            with Image.open(io.BytesIO(data)) as im:
+                im.verify()  # structural parse without full decode
+        except Exception as exc:  # noqa: BLE001 — any parse failure = invalid
+            raise InvalidImageError(f"PIL could not parse image: {exc}") from exc
 
     # -- photo attribute extraction (defensive) -----------------------------
     # The pyspypoint Photo object's exact field names for camera and timestamp

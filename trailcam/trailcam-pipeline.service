@@ -1,0 +1,48 @@
+# QuailSync trail-camera pipeline — systemd service
+# Runs the SpyPoint -> YOLO -> QuailSync loop continuously on the Pi.
+#
+# Install:
+#   sudo cp trailcam-pipeline.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now trailcam-pipeline
+#
+# Logs:
+#   journalctl -u trailcam-pipeline -f
+
+[Unit]
+Description=QuailSync trail-camera pipeline (SpyPoint -> YOLO -> QuailSync)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gwetherholt
+WorkingDirectory=/home/gwetherholt/trailcam
+
+# --- Credentials -----------------------------------------------------------
+# SpyPoint credentials live OUTSIDE the repo in a root-owned, chmod 600 file so
+# they're never committed and not readable by other users. Create it from the
+# template trailcam/.trailcam-secrets.example, e.g.:
+#   install -m 600 /dev/null /home/gwetherholt/.trailcam-secrets
+#   editor /home/gwetherholt/.trailcam-secrets   # set SPYPOINT_USERNAME / _PASSWORD
+EnvironmentFile=/home/gwetherholt/.trailcam-secrets
+
+# --- Non-secret configuration ----------------------------------------------
+Environment=TRAILCAM_BASE_DIR=/home/gwetherholt/trailcam
+Environment=YOLO_MODEL_PATH=/home/gwetherholt/trailcam/models/best.pt
+Environment=YOLO_CONFIDENCE=0.5
+Environment=QUAILSYNC_API_URL=https://quailsync.tail01d133.ts.net
+Environment=POLL_INTERVAL=900
+Environment=PHOTO_LIMIT=25
+Environment=PYTHONUNBUFFERED=1
+
+# Use the project's virtualenv interpreter (ultralytics/torch are heavy — they
+# belong in a venv, e.g. created with `python3 -m venv /home/gwetherholt/trailcam/venv`
+# then `venv/bin/pip install -r requirements.txt`).
+ExecStart=/home/gwetherholt/trailcam/venv/bin/python /home/gwetherholt/trailcam/pipeline.py --mode loop --log-level INFO
+
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

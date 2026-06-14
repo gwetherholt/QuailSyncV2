@@ -13,3 +13,7 @@ data/
 pi-agent/core.*
 *.db-journal
 *.db-wal
+
+# Trail-cam secrets — real credentials file must never be committed
+# (the .example template is intentionally NOT ignored).
+.trailcam-secrets

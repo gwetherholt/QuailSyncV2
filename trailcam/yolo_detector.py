@@ -21,9 +21,11 @@ Run standalone to process whatever is currently staged:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import shutil
+import stat
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -77,6 +79,60 @@ class DetectionResult:
 _MODEL_CACHE: dict[str, object] = {}
 
 
+class ModelIntegrityError(Exception):
+    """Raised when the model file fails its configured SHA-256 integrity check."""
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _verify_model_file(model_path: Path | str) -> None:
+    """Pre-load safety checks on the weights file.
+
+    PyTorch ``.pt`` files are unpickled on load — i.e. loading attacker-swapped
+    weights is arbitrary code execution. So before we hand the path to
+    ultralytics we:
+
+    * warn if the file is world-writable (anyone could swap it), and
+    * if ``config.YOLO_MODEL_SHA256`` is set, refuse to load a file whose digest
+      doesn't match (raises :class:`ModelIntegrityError`).
+
+    A non-existent path is left alone — ultralytics auto-downloads named models
+    like ``yolov8n.pt`` on first use; there's nothing to verify yet.
+    """
+    path = Path(model_path)
+    if not path.exists():
+        return
+
+    try:
+        mode = path.stat().st_mode
+        if mode & stat.S_IWOTH:
+            logger.warning(
+                "Model file %s is world-writable (mode %o) — anyone could swap the "
+                "weights; loading a tampered .pt is arbitrary code execution. "
+                "Tighten with: chmod 600 %s",
+                path,
+                stat.S_IMODE(mode),
+                path,
+            )
+    except OSError as exc:  # pragma: no cover - platform dependent
+        logger.debug("Could not stat model file %s: %s", path, exc)
+
+    expected = config.YOLO_MODEL_SHA256
+    if expected:
+        actual = _sha256(path)
+        if actual.lower() != expected.lower():
+            raise ModelIntegrityError(
+                f"model checksum mismatch for {path}: expected {expected}, got {actual}"
+            )
+        logger.info("Model checksum verified for %s", path)
+
+
 def _load_model(model_path: Path | str):
     """Return a cached YOLO model for ``model_path``, loading it on first use.
 
@@ -86,6 +142,7 @@ def _load_model(model_path: Path | str):
     key = str(model_path)
     model = _MODEL_CACHE.get(key)
     if model is None:
+        _verify_model_file(model_path)
         from ultralytics import YOLO  # lazy: imported only on first detection
 
         logger.info("Loading YOLO model from %s", key)

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict
+import re
 from pathlib import Path
 
 # Support both `python quailsync_bridge.py` (script) and package imports.
@@ -50,9 +50,13 @@ class QuailSyncBridge:
 
     # -- payload ------------------------------------------------------------
 
-    @staticmethod
-    def build_payload(result: DetectionResult) -> dict:
-        """Shape a ``DetectionResult`` into the QuailSync observation payload."""
+    def build_payload(self, result: DetectionResult) -> dict:
+        """Shape a ``DetectionResult`` into the QuailSync observation payload.
+
+        Free-text fields that originate from the camera/model (``camera_id``,
+        ``class_name``) are sanitized before they leave this process so we never
+        forward SQL metacharacters, HTML/script tags, or null bytes to the
+        server (defense in depth — the server should validate too)."""
         confidences = [d.confidence for d in result.detections]
         average_confidence = (
             round(sum(confidences) / len(confidences), 4) if confidences else None
@@ -61,7 +65,7 @@ class QuailSyncBridge:
 
         return {
             "source": "trailcam",
-            "camera_id": result.camera_id,
+            "camera_id": self._sanitize_string(result.camera_id),
             "timestamp": result.timestamp,
             # NOTE: bird_count == total detections. Fine while the model only
             # detects birds; if it gains other classes, filter by class_name
@@ -69,10 +73,33 @@ class QuailSyncBridge:
             "bird_count": result.total_count,
             "average_confidence": average_confidence,
             "min_confidence": min_confidence,
-            "detections": [asdict(d) for d in result.detections],
+            "detections": [
+                {
+                    "class_name": self._sanitize_string(d.class_name),
+                    "confidence": d.confidence,
+                    "bbox": d.bbox,
+                }
+                for d in result.detections
+            ],
             "inference_time_ms": result.inference_time_ms,
             "image_path": result.image_path,
         }
+
+    @staticmethod
+    def _sanitize_string(value, *, max_length: int = 200):
+        """Strip dangerous content from a free-text field bound for the server.
+
+        Removes null bytes, HTML/script tags, and SQL/HTML metacharacters
+        (``; ' " ` < >``), collapses whitespace, and caps length. ``None`` is
+        passed through unchanged.
+        """
+        if value is None:
+            return None
+        text = str(value).replace("\x00", "")
+        text = re.sub(r"<[^>]*>", "", text)  # drop HTML/script tags entirely
+        text = re.sub(r"[;'\"`<>]", "", text)  # drop SQL/HTML metacharacters
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:max_length]
 
     # -- delivery -----------------------------------------------------------
 
