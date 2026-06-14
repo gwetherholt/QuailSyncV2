@@ -1,0 +1,30 @@
+name: TODO to Issue
+
+# Scan the codebase for TODO/FIXME comments on every push to main and turn them
+# into GitHub issues (labelled "todo"). When a tracked comment is removed in a
+# later commit, the matching issue is closed automatically.
+on:
+  push:
+    branches:
+      - main
+
+# GITHUB_TOKEN needs to read the repo and create/close issues.
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  todo-to-issue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Convert TODOs and FIXMEs to issues
+        uses: alstr/todo-to-issue-action@v5
+        with:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Close the corresponding issue when a TODO/FIXME is deleted.
+          CLOSE_ISSUES: true
+          # Track both markers; label every resulting issue "todo".
+          IDENTIFIERS: '[{"name": "TODO", "labels": ["todo"]}, {"name": "FIXME", "labels": ["todo"]}]'
