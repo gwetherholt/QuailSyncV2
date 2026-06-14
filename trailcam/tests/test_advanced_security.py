@@ -48,8 +48,8 @@ def _valid_jpeg(width=160, height=160) -> bytes:
 
 
 VALID_JPEG = _valid_jpeg()
-USERNAME = "gwetherholt"
-PASSWORD = "SuperSecretPassword123!"
+USERNAME = "gwetherholt"  # pragma: allowlist secret
+PASSWORD = "SuperSecretPassword123!"  # pragma: allowlist secret
 
 
 # --- Fakes -----------------------------------------------------------------

@@ -66,9 +66,9 @@ def test_env_overrides(monkeypatch, tmp_path):
 
 def test_credentials_from_env(monkeypatch, tmp_path):
     monkeypatch.setenv("TRAILCAM_BASE_DIR", str(tmp_path))
-    monkeypatch.setenv("SPYPOINT_USERNAME", "alice")
-    monkeypatch.setenv("SPYPOINT_PASSWORD", "s3cret")
+    monkeypatch.setenv("SPYPOINT_USERNAME", "alice")  # pragma: allowlist secret
+    monkeypatch.setenv("SPYPOINT_PASSWORD", "s3cret")  # pragma: allowlist secret
     importlib.reload(config)
 
-    assert config.SPYPOINT_USERNAME == "alice"
-    assert config.SPYPOINT_PASSWORD == "s3cret"
+    assert config.SPYPOINT_USERNAME == "alice"  # pragma: allowlist secret
+    assert config.SPYPOINT_PASSWORD == "s3cret"  # pragma: allowlist secret

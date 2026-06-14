@@ -226,7 +226,7 @@ def test_password_never_logged_on_login_error(tmp_path, monkeypatch, caplog):
     import sys
     import types
 
-    password = "SuperSecret-P@ssw0rd!"
+    password = "SuperSecret-P@ssw0rd!"  # pragma: allowlist secret
 
     class Client:
         def __init__(self, username, pw):
@@ -240,7 +240,7 @@ def test_password_never_logged_on_login_error(tmp_path, monkeypatch, caplog):
     monkeypatch.setitem(sys.modules, "spypoint", fake_mod)
 
     state = PhotoState(tmp_path / "state.json")
-    poller = SpypointPoller("alice", password, tmp_path / "staging", state, session=FakeSession())
+    poller = SpypointPoller("alice", password, tmp_path / "staging", state, session=FakeSession())  # pragma: allowlist secret
 
     with caplog.at_level(logging.DEBUG):
         with pytest.raises(RuntimeError):
@@ -252,9 +252,9 @@ def test_password_never_logged_on_login_error(tmp_path, monkeypatch, caplog):
 
 
 def test_credentials_not_written_to_any_file(tmp_path):
-    password = "PWD_SECRET_98765"
+    password = "PWD_SECRET_98765"  # pragma: allowlist secret
     state = PhotoState(tmp_path / "state.json")
-    poller = SpypointPoller("alice", password, tmp_path / "staging", state, session=FakeSession())
+    poller = SpypointPoller("alice", password, tmp_path / "staging", state, session=FakeSession())  # pragma: allowlist secret
     poller.client = FakeClient([FakePhoto()])
 
     poller.poll()
