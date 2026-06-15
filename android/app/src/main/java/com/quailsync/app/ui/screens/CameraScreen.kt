@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -98,6 +99,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.ColorPainter
+import coil.compose.AsyncImage
+import com.quailsync.app.data.TrailcamLatest
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.format.DateTimeFormatter
+import kotlin.math.roundToInt
 
 // =====================================================================
 // Unified camera item — either from /api/cameras or a brooder's camera_url
@@ -362,6 +376,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 // Camera Screen
 // =====================================================================
 
+// Hardcoded SPYPOINT camera IDs for the outdoor cams. Replace these with the
+// real device IDs from your SPYPOINT account. Tabs are labelled positionally
+// ("Outdoor Cam 1", "Outdoor Cam 2", …) regardless of the underlying id; this
+// list can later be served by an API endpoint instead of being hardcoded.
+private val OUTDOOR_CAMERA_IDS = listOf(
+    "spypoint-cam-1",
+    "spypoint-cam-2",
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
     val cameraItems by viewModel.cameraItems.collectAsState()
@@ -369,6 +393,7 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val allBrooders by viewModel.brooders.collectAsState()
     var showAddDialog by remember { mutableStateOf(false) }
+    var selectedTab by remember { mutableIntStateOf(0) }
 
     // Increment refreshKey every time this screen resumes (e.g. navigating back to Cameras tab)
     // so that MjpegStreamView LaunchedEffects restart their HTTP connections.
@@ -384,63 +409,95 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // Tab 0 is the live IMX477 hutch stream; one tab per hardcoded outdoor cam.
+    val tabTitles = remember {
+        listOf("Hutch Camera") + OUTDOOR_CAMERA_IDS.indices.map { "Outdoor Cam ${it + 1}" }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             Arrangement.SpaceBetween, Alignment.CenterVertically,
         ) {
             Text("Cameras", style = MaterialTheme.typography.headlineMedium)
-            Row {
-                if (isRefreshing) {
-                    CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp, color = SageGreen)
-                } else {
-                    IconButton(onClick = { viewModel.refresh() }) { Icon(Icons.Default.Refresh, "Refresh") }
+            // Refresh + add act on the hutch camera list, so only show them there.
+            if (selectedTab == 0) {
+                Row {
+                    if (isRefreshing) {
+                        CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp, color = SageGreen)
+                    } else {
+                        IconButton(onClick = { viewModel.refresh() }) { Icon(Icons.Default.Refresh, "Refresh") }
+                    }
+                    IconButton(onClick = { showAddDialog = true }) { Icon(Icons.Default.Add, "Add Camera", tint = SageGreen) }
                 }
-                IconButton(onClick = { showAddDialog = true }) { Icon(Icons.Default.Add, "Add Camera", tint = SageGreen) }
             }
         }
 
-        when {
-            isLoading && cameraItems.isEmpty() -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = SageGreen) }
+        ScrollableTabRow(
+            selectedTabIndex = selectedTab,
+            containerColor = MaterialTheme.colorScheme.surface,
+            edgePadding = 12.dp,
+            indicator = { tabPositions ->
+                if (selectedTab < tabPositions.size) {
+                    SecondaryIndicator(Modifier.tabIndicatorOffset(tabPositions[selectedTab]), color = SageGreen)
+                }
+            },
+        ) {
+            tabTitles.forEachIndexed { i, title ->
+                Tab(selectedTab == i, { selectedTab = i }) { Text(title, Modifier.padding(12.dp)) }
             }
-            cameraItems.isEmpty() -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.VideocamOff, null, Modifier.size(64.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.height(16.dp))
-                        Text("No cameras configured.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-                        Spacer(Modifier.height(8.dp))
-                        Button(onClick = { showAddDialog = true }, colors = ButtonDefaults.buttonColors(containerColor = SageGreen)) {
-                            Icon(Icons.Default.Add, null, Modifier.size(18.dp))
-                            Spacer(Modifier.size(6.dp))
-                            Text("Add Camera")
+        }
+
+        if (selectedTab == 0) {
+            // --- Hutch Camera (existing live IMX477 MJPEG content) ---
+            when {
+                isLoading && cameraItems.isEmpty() -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = SageGreen) }
+                }
+                cameraItems.isEmpty() -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.VideocamOff, null, Modifier.size(64.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(16.dp))
+                            Text("No cameras configured.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                            Spacer(Modifier.height(8.dp))
+                            Button(onClick = { showAddDialog = true }, colors = ButtonDefaults.buttonColors(containerColor = SageGreen)) {
+                                Icon(Icons.Default.Add, null, Modifier.size(18.dp))
+                                Spacer(Modifier.size(6.dp))
+                                Text("Add Camera")
+                            }
                         }
                     }
                 }
-            }
-            else -> {
-                LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    items(
-                        cameraItems,
-                        key = { item ->
-                            when (val src = item.source) {
-                                is CameraSource.Standalone -> "cam-${src.camera.id}"
-                                is CameraSource.BrooderCamera -> "brooder-${src.brooder.id}"
-                            }
-                        },
-                    ) { item ->
-                        CameraCard(
-                            item = item,
-                            brooders = allBrooders,
-                            onDelete = { viewModel.deleteCamera(item) },
-                            onReassign = { newBrooderId -> viewModel.reassignCamera(item, newBrooderId) },
-                            streamRefreshKey = refreshKey,
-                        )
+                else -> {
+                    LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        items(
+                            cameraItems,
+                            key = { item ->
+                                when (val src = item.source) {
+                                    is CameraSource.Standalone -> "cam-${src.camera.id}"
+                                    is CameraSource.BrooderCamera -> "brooder-${src.brooder.id}"
+                                }
+                            },
+                        ) { item ->
+                            CameraCard(
+                                item = item,
+                                brooders = allBrooders,
+                                onDelete = { viewModel.deleteCamera(item) },
+                                onReassign = { newBrooderId -> viewModel.reassignCamera(item, newBrooderId) },
+                                streamRefreshKey = refreshKey,
+                            )
+                        }
+                        item { Spacer(Modifier.height(8.dp)) }
                     }
-                    item { Spacer(Modifier.height(8.dp)) }
                 }
             }
+        } else {
+            // --- Outdoor Cam N ---
+            OutdoorCamTab(
+                cameraId = OUTDOOR_CAMERA_IDS[selectedTab - 1],
+                label = tabTitles[selectedTab],
+            )
         }
     }
 
@@ -448,6 +505,194 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
         AddCameraDialog(viewModel) { showAddDialog = false }
     }
 }
+
+// =====================================================================
+// Outdoor Cam tab — latest still capture + bird-count overlay
+// =====================================================================
+
+private sealed interface OutdoorState {
+    data object Loading : OutdoorState
+    data object Empty : OutdoorState
+    data class Error(val message: String) : OutdoorState
+    data class Data(val latest: TrailcamLatest) : OutdoorState
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun OutdoorCamTab(cameraId: String, label: String) {
+    val context = LocalContext.current
+    val baseUrl = remember { ServerConfig.getServerUrl(context).trimEnd('/') }
+    val api = remember { QuailSyncApi.create(ServerConfig.getServerUrl(context)) }
+    val scope = rememberCoroutineScope()
+
+    var state by remember(cameraId) { mutableStateOf<OutdoorState>(OutdoorState.Loading) }
+    var isRefreshing by remember(cameraId) { mutableStateOf(false) }
+
+    suspend fun fetchLatest() {
+        try {
+            val latest = withContext(Dispatchers.IO) { api.getTrailcamLatest(cameraId) }
+            state = OutdoorState.Data(latest)
+        } catch (e: retrofit2.HttpException) {
+            // 404 = nothing captured for this camera yet (vs. a real error).
+            state = if (e.code() == 404) OutdoorState.Empty else OutdoorState.Error("Server error (HTTP ${e.code()})")
+        } catch (e: Exception) {
+            Log.e("QuailSync", "Failed to load outdoor cam $cameraId", e)
+            state = OutdoorState.Error(e.message ?: "Couldn't reach the server")
+        }
+    }
+
+    LaunchedEffect(cameraId) {
+        state = OutdoorState.Loading
+        fetchLatest()
+    }
+
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = {
+            scope.launch {
+                isRefreshing = true
+                fetchLatest()
+                isRefreshing = false
+            }
+        },
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+        ) {
+            when (val s = state) {
+                is OutdoorState.Loading ->
+                    OutdoorMessage(label) {
+                        CircularProgressIndicator(color = SageGreen, modifier = Modifier.size(32.dp), strokeWidth = 2.dp)
+                    }
+                is OutdoorState.Empty ->
+                    OutdoorMessage(label) {
+                        Icon(Icons.Default.PhotoCamera, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            "No captures yet from $label.\nPull down to refresh.",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                is OutdoorState.Error ->
+                    OutdoorMessage(label) {
+                        Icon(Icons.Default.VideocamOff, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            "${s.message}.\nPull down to retry.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                is OutdoorState.Data -> OutdoorCamContent(s.latest, baseUrl, label)
+            }
+        }
+    }
+}
+
+/** Centered single-message column (loading / empty / error), kept tall enough
+ *  that the pull-to-refresh gesture is comfortable. */
+@Composable
+private fun OutdoorMessage(label: String, content: @Composable ColumnScope.() -> Unit) {
+    Column(Modifier.fillMaxWidth()) {
+        Text(label, style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(48.dp))
+        Column(
+            Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            content = content,
+        )
+    }
+}
+
+@Composable
+private fun OutdoorCamContent(latest: TrailcamLatest, baseUrl: String, label: String) {
+    val imageUrl = latest.imageUrl?.let { if (it.startsWith("http")) it else "$baseUrl$it" }
+    val count = latest.birdCount ?: 0
+    val placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant)
+
+    Column(Modifier.fillMaxWidth()) {
+        Text(label, style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(12.dp))
+
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .aspectRatio(4f / 3f)
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color.Black),
+        ) {
+            if (imageUrl != null) {
+                AsyncImage(
+                    model = imageUrl,
+                    contentDescription = "$label latest capture",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                    placeholder = placeholder,
+                    error = placeholder,
+                )
+            } else {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.PhotoCamera, null, Modifier.size(48.dp), tint = Color.White.copy(alpha = 0.6f))
+                }
+            }
+
+            // Bird-count badge, top-left.
+            Box(
+                Modifier
+                    .align(Alignment.TopStart)
+                    .padding(10.dp)
+                    .background(SageGreen.copy(alpha = 0.92f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+            ) {
+                Text(
+                    "$count bird${if (count == 1) "" else "s"} detected",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Color.White,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+
+        Row(
+            Modifier.fillMaxWidth(),
+            Arrangement.SpaceBetween,
+            Alignment.CenterVertically,
+        ) {
+            Text(
+                formatCaptureTime(latest.timestamp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "Avg confidence: ${formatConfidence(latest.confidenceAvg)}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** Format an ISO-8601 capture timestamp (with or without an offset) into a
+ *  friendly "MMM d, h:mm a"; falls back to the raw string. */
+private fun formatCaptureTime(iso: String?): String {
+    if (iso.isNullOrBlank()) return "Unknown time"
+    val fmt = DateTimeFormatter.ofPattern("MMM d, h:mm a")
+    return runCatching { OffsetDateTime.parse(iso).format(fmt) }
+        .recoverCatching { LocalDateTime.parse(iso).format(fmt) }
+        .getOrDefault(iso)
+}
+
+private fun formatConfidence(value: Double?): String =
+    if (value == null) "—" else "${(value * 100).roundToInt()}%"
 
 // =====================================================================
 // Camera Card

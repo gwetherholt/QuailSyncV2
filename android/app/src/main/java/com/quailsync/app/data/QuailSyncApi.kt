@@ -291,6 +291,23 @@ data class BirdPhoto(
     @SerializedName("url") val url: String,
 )
 
+/** Latest outdoor-camera observation (GET /api/trailcam/latest/{camera_id}).
+ *  `imageUrl` is server-relative — prepend the configured server base URL. */
+data class TrailcamLatest(
+    @SerializedName("camera_id") val cameraId: String? = null,
+    @SerializedName("bird_count") val birdCount: Int? = null,
+    @SerializedName("timestamp") val timestamp: String? = null,
+    @SerializedName("confidence_avg") val confidenceAvg: Double? = null,
+    @SerializedName("image_url") val imageUrl: String? = null,
+    @SerializedName("detections") val detections: List<TrailcamDetection> = emptyList(),
+)
+
+data class TrailcamDetection(
+    @SerializedName("class_name") val className: String? = null,
+    @SerializedName("confidence") val confidence: Double? = null,
+    @SerializedName("bbox") val bbox: List<Double> = emptyList(),
+)
+
 data class TargetTempResponse(
     @SerializedName("brooder_id") val brooderId: Int,
     @SerializedName("target_temp_f") val targetTempF: Double,
@@ -626,6 +643,9 @@ interface QuailSyncApi {
 
     @GET("api/birds/{id}/photos")
     suspend fun getBirdPhotos(@Path("id") id: Int): List<BirdPhoto>
+
+    @GET("api/trailcam/latest/{camera_id}")
+    suspend fun getTrailcamLatest(@Path("camera_id") cameraId: String): TrailcamLatest
 
     @GET("api/lineages")
     suspend fun getLineages(): List<Lineage>
