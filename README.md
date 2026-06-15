@@ -318,13 +318,13 @@ All parts designed in OpenSCAD and trimesh, printed on an Artillery Sidewinder X
 
 ### Camera Stand
 
-Two-piece parametric design (`CAD/camera_stand_v4.scad`). Weighted base with coin pockets for stability, tapered column with cable channel, 3-sided cradle holding the Arducam at a 3° downward tilt. Snap-on backplate with ribbon cable exit slots and a catch lip.
+Two-piece design (`CAD/hq_camera_stand.stl` + snap-on `CAD/hq_backplate.stl`). Weighted base with coin pockets for stability, tapered column with cable channel, 3-sided cradle holding the Arducam at a 3° downward tilt. Snap-on backplate with ribbon cable exit slots and a catch lip.
 
 <!-- TODO: Photo of printed camera stand -->
 
 ### ESP32 Sensor Enclosures
 
-Vented housing with an L-hook for mounting on 15mm brooder walls. Snap-fit lid, USB cable trough along the hook, and internal standoffs for the DHT22. Three labeled versions (Sensor 1, 2, 3). Iterated from wired sensor pods to wireless ESP32 enclosures as the project evolved.
+Vented housing with an L-hook for mounting on 15mm brooder walls. Snap-fit lid, USB cable trough along the hook, and internal standoffs for the DHT22. Three labeled versions (Sensor 1, 2, 3). Iterated from wired sensor pods to wireless ESP32 enclosures as the project evolved. Printed as two parts: `CAD/esp32_sensor_base.stl` (housing) and `CAD/esp32_sensor_lid.stl` (snap-fit lid).
 
 <table>
   <tr>
@@ -339,9 +339,7 @@ Vented housing with an L-hook for mounting on 15mm brooder walls. Snap-fit lid, 
 
 ### Pi 5 Case Lid
 
-Custom lid for the CanaKit Turbine case with camera ribbon cable slots rotated 90° for cleaner routing.
-
-<!-- TODO: Upload camera case STLs and incubator dividers -->
+Custom lid for the CanaKit Turbine case with camera ribbon cable slots rotated 90° for cleaner routing (`CAD/canakit_lid.stl`).
 
 STL files are in the `/CAD` directory.
 
