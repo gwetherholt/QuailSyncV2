@@ -108,6 +108,11 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
 
+    // Coil — async image loading for remote bird photos (Compose). The server
+    // is reached over a system-trusted Tailscale ts.net cert, so Coil's default
+    // ImageLoader works without custom OkHttp/trust wiring.
+    implementation("io.coil-kt:coil-compose:2.7.0")
+
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 

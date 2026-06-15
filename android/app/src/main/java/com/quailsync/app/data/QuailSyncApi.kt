@@ -282,6 +282,15 @@ data class PhotoUploadResponse(
     @SerializedName("path") val path: String? = null,
 )
 
+/** One entry in a bird's photo history (GET /api/birds/{id}/photos). `url` is
+ *  server-relative (e.g. "/api/birds/7/photos/bird_7_...jpg") — prepend the
+ *  configured server base URL before loading. */
+data class BirdPhoto(
+    @SerializedName("filename") val filename: String,
+    @SerializedName("uploaded_at") val uploadedAt: String,
+    @SerializedName("url") val url: String,
+)
+
 data class TargetTempResponse(
     @SerializedName("brooder_id") val brooderId: Int,
     @SerializedName("target_temp_f") val targetTempF: Double,
@@ -613,6 +622,9 @@ interface QuailSyncApi {
         @Path("id") id: Int,
         @Part photo: MultipartBody.Part,
     ): PhotoUploadResponse
+
+    @GET("api/birds/{id}/photos")
+    suspend fun getBirdPhotos(@Path("id") id: Int): List<BirdPhoto>
 
     @GET("api/lineages")
     suspend fun getLineages(): List<Lineage>

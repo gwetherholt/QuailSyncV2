@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -98,7 +99,10 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.ui.graphics.painter.ColorPainter
+import coil.compose.AsyncImage
 import com.quailsync.app.data.Bird
+import com.quailsync.app.data.BirdPhoto
 import com.quailsync.app.data.BirdWeight
 import com.quailsync.app.data.CullBatchRequest
 import com.quailsync.app.data.FlockBreedingStats
@@ -116,6 +120,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 // =====================================================================
 // ViewModel
@@ -187,6 +193,11 @@ class FlockViewModel(application: Application) : AndroidViewModel(application) {
 
     suspend fun getBirdWeights(birdId: Int): List<BirdWeight> {
         return try { api.getBirdWeights(birdId) } catch (e: Exception) { Log.e("QuailSync", "Failed to load weights for bird $birdId", e); emptyList() }
+    }
+
+    /** Photo history (newest-first) for a bird. Empty on failure. */
+    suspend fun getBirdPhotos(birdId: Int): List<BirdPhoto> {
+        return try { api.getBirdPhotos(birdId) } catch (e: Exception) { Log.e("QuailSync", "Failed to load photos for bird $birdId", e); emptyList() }
     }
 
     fun updateBirdStatus(birdId: Int, status: String, notes: String? = null, onResult: (Boolean) -> Unit) {
@@ -294,6 +305,13 @@ private fun formatSex(sex: String?): String {
         "female", "f" -> "Female"
         else -> "Unknown"
     }
+}
+
+/** Format a photo's ISO-8601 `uploaded_at` (e.g. "2026-06-15T05:20:48") into a
+ *  short thumbnail label; falls back to the raw string if it won't parse. */
+private val PHOTO_DATE_FORMAT = DateTimeFormatter.ofPattern("MMM d, h:mm a")
+private fun formatPhotoDate(iso: String): String {
+    return runCatching { LocalDateTime.parse(iso).format(PHOTO_DATE_FORMAT) }.getOrDefault(iso)
 }
 
 internal fun parseBandColor(color: String?): Color {
@@ -885,6 +903,10 @@ fun BirdDetailDialog(
     var showLogWeight by remember { mutableStateOf(false) }
     var showEditBird by remember { mutableStateOf(false) }
     var weightRefreshKey by remember { mutableStateOf(0) }
+    var photos by remember { mutableStateOf<List<BirdPhoto>>(emptyList()) }
+    var fullScreenPhotoUrl by remember { mutableStateOf<String?>(null) }
+    // Server base URL for turning the photos' relative `url` into absolute ones.
+    val photoBaseUrl = remember { ServerConfig.getServerUrl(context).trimEnd('/') }
 
     val photoLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview(),
@@ -898,6 +920,12 @@ fun BirdDetailDialog(
     androidx.compose.runtime.LaunchedEffect(bird.id, weightRefreshKey) {
         weights = viewModel.getBirdWeights(bird.id)
         weightsLoaded = true
+    }
+
+    // Reloads after a capture (photoRefreshKey bumps) so a freshly-uploaded
+    // photo appears in the history once the server has it.
+    androidx.compose.runtime.LaunchedEffect(bird.id, photoRefreshKey) {
+        photos = viewModel.getBirdPhotos(bird.id)
     }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -973,6 +1001,42 @@ fun BirdDetailDialog(
                         Text("Notes", style = MaterialTheme.typography.titleMedium)
                         Spacer(Modifier.height(4.dp))
                         Text(bird.notes, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+
+                // Photos section — history thumbnails; skipped when empty.
+                if (photos.isNotEmpty()) {
+                    item {
+                        Spacer(Modifier.height(8.dp))
+                        HorizontalDivider()
+                        Spacer(Modifier.height(8.dp))
+                        Text("Photos", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(8.dp))
+                        val photoPlaceholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            items(photos) { p ->
+                                val fullUrl = photoBaseUrl + p.url
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    AsyncImage(
+                                        model = fullUrl,
+                                        contentDescription = "Bird photo",
+                                        modifier = Modifier
+                                            .size(90.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .clickable { fullScreenPhotoUrl = fullUrl },
+                                        contentScale = ContentScale.Crop,
+                                        placeholder = photoPlaceholder,
+                                        error = photoPlaceholder,
+                                    )
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        formatPhotoDate(p.uploadedAt),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -1104,6 +1168,33 @@ fun BirdDetailDialog(
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // Full-screen photo viewer (tap a thumbnail to open).
+    if (fullScreenPhotoUrl != null) {
+        Dialog(
+            onDismissRequest = { fullScreenPhotoUrl = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.92f))
+                    .clickable { fullScreenPhotoUrl = null },
+                contentAlignment = Alignment.Center,
+            ) {
+                AsyncImage(
+                    model = fullScreenPhotoUrl,
+                    contentDescription = "Bird photo",
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    contentScale = ContentScale.Fit,
+                )
+                IconButton(
+                    onClick = { fullScreenPhotoUrl = null },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+                ) { Icon(Icons.Default.Close, "Close", tint = Color.White) }
             }
         }
     }

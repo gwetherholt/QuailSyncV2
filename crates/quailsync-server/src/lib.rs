@@ -117,6 +117,13 @@ pub fn build_app(state: AppState) -> Router {
                     photos::PHOTO_BODY_LIMIT,
                 )),
         )
+        // Photo history: list all timestamped photos for a bird, and serve a
+        // specific historical file. See routes/photos.rs.
+        .route("/api/birds/{id}/photos", get(photos::list_bird_photos))
+        .route(
+            "/api/birds/{id}/photos/{filename}",
+            get(photos::serve_bird_photo_file),
+        )
         .route(
             "/api/birds/{id}/weights/{wid}",
             axum::routing::delete(birds::delete_weight),

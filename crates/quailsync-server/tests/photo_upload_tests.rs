@@ -434,3 +434,105 @@ async fn get_photo_404_for_unknown_bird() {
         StatusCode::NOT_FOUND
     );
 }
+
+// ---------------------------------------------------------------------------
+// GET /api/birds/{id}/photos — history listing + per-file serving
+// ---------------------------------------------------------------------------
+
+async fn list_photos(base: &str, id: i64) -> Vec<serde_json::Value> {
+    let resp = client()
+        .get(format!("{base}/api/birds/{id}/photos"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    resp.json().await.unwrap()
+}
+
+#[tokio::test]
+async fn list_photos_empty_when_none() {
+    let dir = unique_temp_dir();
+    let base = spawn_app(photos_no_alerts(&dir)).await;
+    let id = seed_bird(&base).await;
+
+    assert!(list_photos(&base, id).await.is_empty());
+}
+
+#[tokio::test]
+async fn list_photos_returns_history_newest_first() {
+    let dir = unique_temp_dir();
+    let base = spawn_app(photos_no_alerts(&dir)).await;
+    let id = seed_bird(&base).await;
+
+    // Two uploads → two timestamped files (history kept).
+    upload(&base, id, jpeg_bytes(1024), "image/jpeg").await;
+    upload(&base, id, jpeg_bytes(2048), "image/jpeg").await;
+
+    let photos = list_photos(&base, id).await;
+    assert_eq!(photos.len(), 2);
+
+    for p in &photos {
+        let filename = p["filename"].as_str().unwrap();
+        assert!(filename.starts_with(&format!("bird_{id}_")) && filename.ends_with(".jpg"));
+        assert!(p["uploaded_at"].as_str().unwrap().starts_with("20")); // ISO-ish
+        assert_eq!(
+            p["url"].as_str().unwrap(),
+            format!("/api/birds/{id}/photos/{filename}")
+        );
+    }
+
+    // Newest-first ordering (descending by uploaded_at then filename).
+    let first = photos[0]["filename"].as_str().unwrap();
+    let second = photos[1]["filename"].as_str().unwrap();
+    assert!(
+        first >= second,
+        "expected newest-first: {first} vs {second}"
+    );
+}
+
+#[tokio::test]
+async fn serve_specific_history_file() {
+    let dir = unique_temp_dir();
+    let base = spawn_app(photos_no_alerts(&dir)).await;
+    let id = seed_bird(&base).await;
+
+    let bytes = jpeg_bytes(3072);
+    upload(&base, id, bytes.clone(), "image/jpeg").await;
+
+    let photos = list_photos(&base, id).await;
+    let url = photos[0]["url"].as_str().unwrap();
+
+    let resp = client().get(format!("{base}{url}")).send().await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let ct = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(ct.contains("image/jpeg"), "unexpected content-type: {ct}");
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), bytes.as_slice());
+}
+
+#[tokio::test]
+async fn serve_history_file_rejects_foreign_or_bad_names() {
+    let dir = unique_temp_dir();
+    let base = spawn_app(photos_no_alerts(&dir)).await;
+    let id = seed_bird(&base).await;
+    upload(&base, id, jpeg_bytes(1024), "image/jpeg").await;
+
+    // Not this bird's prefix, an arbitrary name, and a well-formed-but-absent
+    // file all 404 (the strict filename validation scopes access to this bird).
+    for fname in [
+        format!("bird_{}_20990101-000000.jpg", id + 1), // different bird
+        "secrets.txt".to_string(),                      // not a photo name
+        format!("bird_{id}_20990101-000000.jpg"),       // valid name, no file
+    ] {
+        let resp = client()
+            .get(format!("{base}/api/birds/{id}/photos/{fname}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "should 404: {fname}");
+    }
+}

@@ -244,6 +244,108 @@ pub(crate) async fn serve_bird_photo(
         .into_response()
 }
 
+/// One entry in a bird's photo history.
+#[derive(serde::Serialize)]
+struct PhotoHistoryEntry {
+    filename: String,
+    /// ISO-8601 local timestamp parsed from the filename (no zone).
+    uploaded_at: String,
+    /// Served via `serve_bird_photo_file`.
+    url: String,
+}
+
+/// `GET /api/birds/{id}/photos` — list a bird's full photo history.
+///
+/// Scans the photos directory for `bird_{id}_*.jpg`, parses the
+/// `YYYYMMDD-HHMMSS` timestamp out of each filename, and returns the entries
+/// newest-first. Returns `[]` (not 404) when the bird has no photos, so the
+/// dashboard can simply skip the section.
+pub(crate) async fn list_bird_photos(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Response {
+    // Trailing underscore makes the prefix unambiguous: `bird_7_` never matches
+    // `bird_70_...`.
+    let prefix = format!("bird_{id}_");
+    let dir = state.photos.dir.clone();
+
+    let mut entries: Vec<PhotoHistoryEntry> = Vec::new();
+    if let Ok(read_dir) = std::fs::read_dir(&*dir) {
+        for entry in read_dir.flatten() {
+            let fname = entry.file_name().to_string_lossy().to_string();
+            if !fname.starts_with(&prefix) || !fname.ends_with(".jpg") {
+                continue;
+            }
+            // The 15 chars right after the prefix are the `YYYYMMDD-HHMMSS`
+            // stamp (a possible `-N` collision suffix follows and is ignored).
+            let uploaded_at = fname
+                .get(prefix.len()..prefix.len() + 15)
+                .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y%m%d-%H%M%S").ok())
+                .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S").to_string())
+                .unwrap_or_default();
+            entries.push(PhotoHistoryEntry {
+                url: format!("/api/birds/{id}/photos/{fname}"),
+                filename: fname,
+                uploaded_at,
+            });
+        }
+    }
+
+    // Newest first by timestamp; filename as a stable tiebreak (collision
+    // suffixes, unparseable names).
+    entries.sort_by(|a, b| {
+        b.uploaded_at
+            .cmp(&a.uploaded_at)
+            .then_with(|| b.filename.cmp(&a.filename))
+    });
+
+    Json(entries).into_response()
+}
+
+/// `GET /api/birds/{id}/photos/{filename}` — serve a specific historical photo.
+///
+/// The filename comes from the URL, so it is validated strictly: it must be a
+/// bare `bird_{id}_*.jpg` name (no path separators, no `..`). This both scopes
+/// access to *this* bird's files and blocks path traversal.
+pub(crate) async fn serve_bird_photo_file(
+    State(state): State<AppState>,
+    Path((id, filename)): Path<(i64, String)>,
+) -> Response {
+    let prefix = format!("bird_{id}_");
+    let safe = filename.starts_with(&prefix)
+        && filename.ends_with(".jpg")
+        && !filename.contains('/')
+        && !filename.contains('\\')
+        && !filename.contains("..");
+    if !safe {
+        return err(
+            StatusCode::NOT_FOUND,
+            "photo_not_found",
+            "No such photo for this bird.",
+        );
+    }
+
+    let path = state.photos.dir.join(&filename);
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(_) => {
+            return err(
+                StatusCode::NOT_FOUND,
+                "photo_not_found",
+                "No such photo for this bird.",
+            )
+        }
+    };
+
+    let mime = mime_guess::from_path(&filename).first_or_octet_stream();
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, mime.as_ref())],
+        bytes,
+    )
+        .into_response()
+}
+
 /// Does a bird with this id exist?
 fn bird_exists(state: &AppState, id: i64) -> bool {
     let conn = acquire_db(state);

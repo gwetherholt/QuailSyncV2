@@ -417,6 +417,45 @@
     min-height:60px;
   }
 
+  /* ---------- Bird Photos ---------- */
+  .bird-profile-photo{
+    width:120px;height:120px;border-radius:12px;object-fit:cover;
+    box-shadow:var(--shadow);cursor:pointer;flex-shrink:0;background:var(--beige);
+    transition:transform .1s;
+  }
+  .bird-profile-photo:hover{transform:scale(1.02)}
+  .bird-profile-photo.placeholder{
+    display:flex;align-items:center;justify-content:center;
+    font-size:2.6rem;color:#c4bcb2;cursor:default;
+  }
+  .bird-profile-photo.placeholder:hover{transform:none}
+  .photo-grid{
+    display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:.75rem;
+  }
+  .photo-thumb{
+    margin:0;cursor:pointer;border-radius:10px;overflow:hidden;
+    background:var(--beige);box-shadow:var(--shadow);transition:transform .1s;
+  }
+  .photo-thumb:hover{transform:scale(1.03)}
+  .photo-thumb img{width:100%;height:110px;object-fit:cover;display:block}
+  .photo-thumb figcaption{font-size:.7rem;color:#777;text-align:center;padding:.35rem .2rem}
+  .photo-lightbox{
+    position:fixed;inset:0;background:rgba(0,0,0,.85);
+    display:flex;align-items:center;justify-content:center;
+    z-index:600;animation:fadeIn .15s;cursor:zoom-out;
+  }
+  .photo-lightbox img{
+    max-width:92vw;max-height:92vh;border-radius:8px;
+    box-shadow:0 8px 40px rgba(0,0,0,.5);cursor:default;
+  }
+  .photo-lightbox-close{
+    position:absolute;top:1rem;right:1.25rem;
+    background:rgba(255,255,255,.15);color:#fff;border:none;
+    font-size:2rem;line-height:1;width:44px;height:44px;border-radius:50%;
+    cursor:pointer;
+  }
+  .photo-lightbox-close:hover{background:rgba(255,255,255,.3)}
+
   /* ---------- Weight Chart SVG ---------- */
   .weight-chart-wrap{padding:.5rem 0}
   .weight-chart-wrap svg{width:100%;height:auto}
@@ -1952,6 +1991,7 @@
     _birdId: null,
     _bird: null,
     _weights: [],
+    _photos: [],
     render: function(app){
       app.innerHTML = '<a class="back-btn" onclick="Router.navigate(\'#/flock\')">&larr; Back to Flock</a>' +
         '<div id="bird-detail-content">'+loadingHTML()+'</div>';
@@ -1959,7 +1999,7 @@
     start: function(){
       this._load();
     },
-    stop: function(){},
+    stop: function(){ this.closeLightbox(); },
     _load: async function(){
       var bl = await API.get('/api/lineages');
       if(bl) _lineages = bl;
@@ -1968,6 +2008,7 @@
       this._bird = findBird(this._birdId);
       var weights = await API.get('/api/birds/'+this._birdId+'/weights');
       this._weights = weights || [];
+      this._photos = (await API.get('/api/birds/'+this._birdId+'/photos')) || [];
       this._render();
     },
     _render: function(){
@@ -1983,8 +2024,15 @@
       var statusCls = b.status.toLowerCase();
       var bandColor = b.band_color || '#ccc';
 
-      // Profile header
+      // Profile header — lead with the most recent photo (or a placeholder).
+      var latestPhoto = this._photos.length ? this._photos[0] : null;
       var html = '<div class="bird-profile">';
+      if(latestPhoto){
+        html += '<img class="bird-profile-photo" src="'+escapeHtml(latestPhoto.url)+'" alt="Bird #'+b.id+' photo" '+
+          'onclick="Page.BirdDetail.openLightbox(\''+escapeHtml(latestPhoto.url)+'\')">';
+      } else {
+        html += '<div class="bird-profile-photo placeholder" title="No photos yet">&#x1F426;</div>';
+      }
       html += '<div class="band-dot-lg" style="background:'+escapeHtml(bandColor)+'"></div>';
       html += '<div class="bird-profile-info">';
       html += '<h2>Bird #'+b.id+' <span class="status-badge '+statusCls+'">'+escapeHtml(b.status)+'</span></h2>';
@@ -2019,6 +2067,20 @@
 
       html += '</div>'; // end detail grid
 
+      // Photos — only shown when the bird actually has photos.
+      if(this._photos.length){
+        html += '<div class="panel" style="margin-bottom:1.25rem"><div class="panel-header"><span class="panel-header-left">&#x1F4F8; Photos ('+this._photos.length+')</span></div><div class="panel-body">';
+        html += '<div class="photo-grid">';
+        this._photos.forEach(function(p){
+          var dateLabel = Page.BirdDetail._formatPhotoDate(p.uploaded_at);
+          html += '<figure class="photo-thumb" onclick="Page.BirdDetail.openLightbox(\''+escapeHtml(p.url)+'\')">'+
+            '<img loading="lazy" src="'+escapeHtml(p.url)+'" alt="Photo from '+escapeHtml(dateLabel)+'">'+
+            '<figcaption>'+escapeHtml(dateLabel)+'</figcaption>'+
+            '</figure>';
+        });
+        html += '</div></div></div>';
+      }
+
       // Notes
       html += '<div class="panel" style="margin-bottom:1.25rem"><div class="panel-header"><span class="panel-header-left">&#x1F4DD; Notes</span></div><div class="panel-body">';
       html += '<div class="bird-notes">'+escapeHtml(b.notes || 'No notes')+'</div>';
@@ -2036,6 +2098,36 @@
       html += '</div>';
 
       el.innerHTML = html;
+    },
+
+    _formatPhotoDate: function(iso){
+      if(!iso) return '';
+      var d = new Date(iso);
+      if(isNaN(d.getTime())) return iso;
+      return d.toLocaleString(undefined, {year:'numeric',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+    },
+
+    openLightbox: function(url){
+      this.closeLightbox();
+      var ov = document.createElement('div');
+      ov.id = 'photo-lightbox';
+      ov.className = 'photo-lightbox';
+      ov.onclick = function(){ Page.BirdDetail.closeLightbox(); };
+      // stopPropagation on the image so only backdrop/close clicks dismiss it.
+      ov.innerHTML = '<button class="photo-lightbox-close" aria-label="Close">&times;</button>'+
+        '<img src="'+escapeHtml(url)+'" alt="Bird photo" onclick="event.stopPropagation()">';
+      document.body.appendChild(ov);
+      this._lightboxKey = function(e){ if(e.key === 'Escape') Page.BirdDetail.closeLightbox(); };
+      document.addEventListener('keydown', this._lightboxKey);
+    },
+
+    closeLightbox: function(){
+      var ov = document.getElementById('photo-lightbox');
+      if(ov) ov.remove();
+      if(this._lightboxKey){
+        document.removeEventListener('keydown', this._lightboxKey);
+        this._lightboxKey = null;
+      }
     },
 
     _buildWeightChart: function(){
