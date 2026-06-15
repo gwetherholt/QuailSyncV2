@@ -156,8 +156,8 @@ Inbreeding coefficient calculated for every possible male-female pairing. Flags 
 
 <table>
   <tr>
-    <td><img width="300" height="1520" alt="image" src="https://github.com/user-attachments/assets/c5c510aa-0589-435c-9f12-5a13185d218d" /></td>
-    <td><img width="300" alt="Breeding suggestions" src="https://github.com/user-attachments/assets/729f1a70-73fe-4247-ba42-19dd21ddc8a4" /></td>
+    <td valign="top" style="vertical-align: top; padding: 10px;"><img width="300" alt="Pair check with coefficient" src="https://github.com/user-attachments/assets/c5c510aa-0589-435c-9f12-5a13185d218d" /></td>
+    <td valign="top" style="vertical-align: top; padding: 10px;"><img width="300" alt="Breeding suggestions" src="https://github.com/user-attachments/assets/729f1a70-73fe-4247-ba42-19dd21ddc8a4" /></td>
   </tr>
   <tr>
     <td align="center"><em>Pair check with coefficient</em></td>
@@ -176,6 +176,27 @@ Cull recommendations based on excess male ratio, underweight birds, and inbreedi
 ### Temperature Scheduling by Chick Age
 
 The alert engine automatically adjusts thresholds based on the youngest chick group in each brooder. Week 1: 97°F target. Steps down 5°F per week until week 6 when they're at room temperature. No manual threshold management needed.
+
+---
+
+## Android App
+
+The native Kotlin/Jetpack Compose app is the primary field interface — NFC banding, batch graduation, breeding management, and cull selection, all backed by the same REST API as the web dashboard.
+
+<table>
+  <tr>
+    <td width="50%"><img width="300" alt="Dashboard" src="docs/screenshots/dashboard.png"><br><em>Dashboard overview</em></td>
+    <td width="50%"><img width="300" alt="Hatchery" src="docs/screenshots/hatchery.png"><br><em>Chick group management</em></td>
+  </tr>
+  <tr>
+    <td width="50%"><img width="300" alt="NFC batch graduation" src="docs/screenshots/graduation_pharaoh.png"><br><em>NFC batch graduation</em></td>
+    <td width="50%"><img width="300" alt="Breeding groups" src="docs/screenshots/breeding_groups_full.png"><br><em>Breeding groups with M:F ratios</em></td>
+  </tr>
+  <tr>
+    <td width="50%"><img width="300" alt="Inbreeding risk warnings" src="docs/screenshots/breeding_group_inbreeding.png"><br><em>Inbreeding risk warnings</em></td>
+    <td width="50%"><img width="300" alt="Batch cull selection" src="docs/screenshots/cull_batch_select.png"><br><em>Batch cull selection</em></td>
+  </tr>
+</table>
 
 ---
 
