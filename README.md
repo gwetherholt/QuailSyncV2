@@ -633,13 +633,34 @@ The Pi runs locally and connects to the cloud server:
 - [x] CI pipeline (fmt, clippy, test)
 - [x] Brooder deletion with cascade cleanup
 - [x] Configurable server URL (Android Settings)
+- [x] Bird photo upload with timestamped history, serving, and history browsing (dashboard + Android app)
+- [x] Dropped-tag deduction system (constraint elimination + Jaccard soft-trait ranking, Sole vs Forced confidence)
+- [x] Breeding group normalization (single source of truth via junction table, infertile status when males removed)
+- [x] Breeding group creation with inbreeding/relatedness warnings and male ratio alerts
+- [x] Configurable culling guardrails (warn and recommend, never hard-block)
+- [x] Batch cull selection with excess male and inbreeding risk detection
+- [x] Overnight photo backup pipeline (systemd timer, checksum-gated, ntfy failure alerts)
+- [x] Playwright E2E test suite (14 tests, page object pattern)
+- [x] Android Compose UI test suite
+- [x] Hutch vs Brooder vs Incubator housing types
+- [x] Hutch resident management with assign/unassign
+- [x] Graduate flow — move chick groups from brooder to hutch with NFC batch banding
+- [x] Multi-lineage display on chick group cards
+- [x] qsync Go CLI tool (separate repo: [github.com/gwetherholt/qsync](https://github.com/gwetherholt/qsync))
+- [x] Azure AKS deployment with Caddy TLS sidecar, GitHub Actions CI/CD (infrastructure proven, later migrated back to Pi + Tailscale Funnel)
+- [x] AZ-900 Azure Fundamentals certification
+- [x] Tailscale Funnel for public HTTPS access
+- [x] Trail camera pipeline — SPYPOINT cloud poller, YOLO detector, QuailSync bridge, 94 tests (awaiting real camera integration)
+- [x] SSH/rsync backup migration (replaced SMB)
+- [x] CI/CD with path-based filtering
+- [x] Bloodline to lineage many-to-many refactor
+- [x] Dev mode with seed/restore endpoints for safe testing
 
 ### Planned
-- [ ] YOLOv8 quail detection from camera feeds
-- [ ] Automated headcount from video
-- [ ] Male/female classification by plumage
-- [ ] Behavior anomaly detection
-- [ ] Weight estimation from camera (no scale needed)
+- [ ] Trail camera production deployment (SPYPOINT account setup, real camera testing, `POST /api/trailcam/observation` endpoint)
+- [ ] YOLOv8 quail detection from trail cam images
+- [ ] Automated headcount from trail cam captures
+- [ ] Vision-based bird re-identification (embedding model feeding Jaccard ranking as a soft signal, not a hard eliminator)
 - [ ] Historical data export (CSV/JSON)
 - [ ] Multi-Pi support (separate sensor clusters)
 - [ ] Second camera on Pi cam1 port
