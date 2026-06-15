@@ -12,3 +12,4 @@ pub mod processing;
 pub mod reconcile;
 pub mod settings;
 pub mod telemetry;
+pub mod trailcam;

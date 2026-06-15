@@ -124,6 +124,17 @@ pub fn build_app(state: AppState) -> Router {
             "/api/birds/{id}/photos/{filename}",
             get(photos::serve_bird_photo_file),
         )
+        // Trail-cam read endpoints: latest observation per camera + image
+        // serving. Reads the pipeline's processed/observations.jsonl. See
+        // routes/trailcam.rs.
+        .route(
+            "/api/trailcam/latest/{camera_id}",
+            get(trailcam::trailcam_latest),
+        )
+        .route(
+            "/api/trailcam/image/{camera_id}/{filename}",
+            get(trailcam::trailcam_image),
+        )
         .route(
             "/api/birds/{id}/weights/{wid}",
             axum::routing::delete(birds::delete_weight),

@@ -55,6 +55,9 @@ async fn spawn_app(photos: PhotoConfig) -> String {
         last_seen: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         metrics_handle,
         photos,
+        trailcam: quailsync_server::state::TrailcamConfig::for_dir(
+            std::env::temp_dir().join("quailsync-test-trailcam"),
+        ),
     };
 
     let app = build_app(state);

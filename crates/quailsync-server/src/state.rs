@@ -64,6 +64,50 @@ impl PhotoConfig {
     }
 }
 
+/// Location of the trail-cam pipeline's output. The pipeline writes
+/// `observations.jsonl` to `processed_dir` and the per-camera JPEGs to
+/// `processed_dir/{camera_id}/`. The server reads both to surface the latest
+/// observation and serve images.
+#[derive(Clone)]
+pub struct TrailcamConfig {
+    pub processed_dir: Arc<PathBuf>,
+}
+
+impl TrailcamConfig {
+    /// From the environment: `TRAILCAM_PROCESSED_DIR` wins; otherwise
+    /// `{TRAILCAM_BASE_DIR or ~/trailcam}/processed`.
+    pub fn from_env() -> Self {
+        let dir = if let Ok(p) = std::env::var("TRAILCAM_PROCESSED_DIR") {
+            PathBuf::from(p)
+        } else {
+            let base = std::env::var("TRAILCAM_BASE_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    let home = std::env::var("HOME")
+                        .or_else(|_| std::env::var("USERPROFILE"))
+                        .unwrap_or_else(|_| ".".to_string());
+                    PathBuf::from(home).join("trailcam")
+                });
+            base.join("processed")
+        };
+        Self {
+            processed_dir: Arc::new(dir),
+        }
+    }
+
+    /// Test/explicit config pointing at a specific processed dir.
+    pub fn for_dir(dir: impl Into<PathBuf>) -> Self {
+        Self {
+            processed_dir: Arc::new(dir.into()),
+        }
+    }
+
+    /// Path to the appended observations log.
+    pub fn observations_path(&self) -> PathBuf {
+        self.processed_dir.join("observations.jsonl")
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
@@ -76,6 +120,8 @@ pub struct AppState {
     pub metrics_handle: PrometheusHandle,
     /// Bird-photo upload storage + alert configuration.
     pub photos: PhotoConfig,
+    /// Trail-cam pipeline output location (observations + images).
+    pub trailcam: TrailcamConfig,
 }
 
 /// Record that we just received telemetry for a brooder.

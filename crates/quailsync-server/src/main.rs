@@ -103,6 +103,7 @@ async fn main() {
         last_seen: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         metrics_handle: prometheus_handle,
         photos,
+        trailcam: quailsync_server::state::TrailcamConfig::from_env(),
     };
 
     let app = build_app(state);
