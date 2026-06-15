@@ -105,15 +105,17 @@ pub fn build_app(state: AppState) -> Router {
             "/api/birds/{id}/weights",
             get(birds::list_weights).post(birds::create_weight),
         )
-        // Bird-photo upload (multipart). Raise the body limit above the
-        // handler's own size cap so a marginally-oversized upload reaches the
-        // handler and gets a clean 413 + alert rather than Axum's generic
-        // rejection. See routes/photos.rs.
+        // Bird-photo upload (POST, multipart) + serving (GET). The raised body
+        // limit lets a marginally-oversized upload reach the handler for a
+        // clean 413 + alert rather than Axum's generic rejection; it's harmless
+        // on GET (no request body). See routes/photos.rs.
         .route(
             "/api/birds/{id}/photo",
-            axum::routing::post(photos::upload_bird_photo).layer(
-                axum::extract::DefaultBodyLimit::max(photos::PHOTO_BODY_LIMIT),
-            ),
+            axum::routing::get(photos::serve_bird_photo)
+                .post(photos::upload_bird_photo)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    photos::PHOTO_BODY_LIMIT,
+                )),
         )
         .route(
             "/api/birds/{id}/weights/{wid}",

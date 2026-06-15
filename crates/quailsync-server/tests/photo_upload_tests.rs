@@ -346,8 +346,91 @@ async fn write_failure_leaves_db_untouched() {
 async fn unknown_bird_is_404_and_writes_nothing() {
     let dir = unique_temp_dir();
     let base = spawn_app(photos_no_alerts(&dir)).await;
+    let id = seed_bird(&base).await;
 
-    let resp = upload(&base, 9999, jpeg_bytes(1024), "image/jpeg").await;
+    // Upload to an id guaranteed not to exist (one past the only seeded bird).
+    let resp = upload(&base, id + 1, jpeg_bytes(1024), "image/jpeg").await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     assert_eq!(count_files(&dir), 0);
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/birds/{id}/photo — serving
+// ---------------------------------------------------------------------------
+
+async fn get_photo(base: &str, id: i64) -> reqwest::Response {
+    client()
+        .get(format!("{base}/api/birds/{id}/photo"))
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn get_serves_uploaded_photo_with_jpeg_content_type() {
+    let dir = unique_temp_dir();
+    let base = spawn_app(photos_no_alerts(&dir)).await;
+    let id = seed_bird(&base).await;
+
+    let bytes = jpeg_bytes(2048);
+    assert_eq!(
+        upload(&base, id, bytes.clone(), "image/jpeg")
+            .await
+            .status(),
+        StatusCode::OK
+    );
+
+    let resp = get_photo(&base, id).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        content_type.contains("image/jpeg"),
+        "unexpected content-type: {content_type}"
+    );
+    // The served bytes are exactly what we uploaded.
+    let body = resp.bytes().await.unwrap();
+    assert_eq!(body.as_ref(), bytes.as_slice());
+}
+
+#[tokio::test]
+async fn get_serves_latest_photo_after_reupload() {
+    let dir = unique_temp_dir();
+    let base = spawn_app(photos_no_alerts(&dir)).await;
+    let id = seed_bird(&base).await;
+
+    upload(&base, id, jpeg_bytes(2048), "image/jpeg").await;
+    let newest = jpeg_bytes(4096);
+    upload(&base, id, newest.clone(), "image/jpeg").await;
+
+    // History is kept on disk (two files), but GET returns the most recent.
+    assert_eq!(count_files(&dir), 2);
+    let body = get_photo(&base, id).await.bytes().await.unwrap();
+    assert_eq!(body.as_ref(), newest.as_slice());
+}
+
+#[tokio::test]
+async fn get_photo_404_when_bird_has_no_photo() {
+    let dir = unique_temp_dir();
+    let base = spawn_app(photos_no_alerts(&dir)).await;
+    let id = seed_bird(&base).await; // seeded but never uploaded
+
+    assert_eq!(get_photo(&base, id).await.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn get_photo_404_for_unknown_bird() {
+    let dir = unique_temp_dir();
+    let base = spawn_app(photos_no_alerts(&dir)).await;
+    let id = seed_bird(&base).await;
+
+    // An id guaranteed not to exist (one past the only seeded bird).
+    assert_eq!(
+        get_photo(&base, id + 1).await.status(),
+        StatusCode::NOT_FOUND
+    );
 }
