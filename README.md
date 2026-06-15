@@ -220,78 +220,40 @@ The native Kotlin/Jetpack Compose app is the primary field interface — NFC ban
 
 ## Testing
 
-```bash
-cargo fmt --check    # Formatting
-cargo clippy         # Lints
-cargo test           # Unit + integration tests
-```
-
-### Rust — 59 tests across two suites
-
-**`boundary_tests.rs` — 40 boundary & stress tests**
-
-These are the "try to break it" tests. They cover:
-- **API input validation** — empty names, 10,000-character strings, SQL injection attempts, XSS payloads, unicode/emoji, null bytes in every POST/PUT endpoint
-- **Database boundaries** — inserting readings for non-existent brooders, duplicate NFC tag IDs, deleting lineages that have birds referencing them, querying brooders with zero readings vs. 100,000 readings
-- **WebSocket edge cases** — connect and immediately disconnect, send empty messages, send 1MB messages, send binary instead of text, send 1,000 messages per second, 100 concurrent client connections
-- **Alert engine boundaries** — readings exactly at threshold, rapid oscillation above/below threshold, alerts with no config set, negative values, NaN, Infinity
-- **Path traversal / security** — backup restore with filenames like `../../etc/passwd`, null bytes, encoded characters (`%2e%2e%2f`), extremely long URL paths
-- **Concurrent write stress** — 50 simultaneous tasks inserting readings to verify SQLite handles contention without data loss
-
-**`api_tests.rs` — 19 unit + integration tests**
-
-Each test spins up a fresh Axum server on a random port with an in-memory SQLite database — fully isolated, no shared state:
-- Serde roundtrip tests for all `TelemetryPayload` variants (System, Brooder, Detection, Unknown)
-- `AlertConfig` default values and serialization
-- `InbreedingCoefficient` threshold logic — safe below 6.25%, unsafe at/above, serde roundtrip
-- `ClutchStatus` enum behavior and JSON string values
-- Full API integration: create and list lineages, create and list birds, breeding suggestions for same-lineage pairs (coefficient 0.25, unsafe), different-lineage pairs (coefficient 0.0, safe), and full siblings (coefficient 0.5, unsafe)
-
-### Python — 152 tests
-
-**`pi-agent/tests/test_pi_agent.py` — 58 tests**
-- **Sensor edge cases** — `None` temperature, `None` humidity, both `None`, checksum failures 10 times in a row, extreme values (-40°C, 80°C, 0% humidity, 100% humidity)
-- **WebSocket resilience** — server unreachable on startup, connection drops mid-send, reconnection backoff verification (confirms it actually backs off instead of hammering the server)
-- **Camera stream** — multi-client MJPEG serving, snapshot endpoint under load
-- **QR code parsing** — empty strings, 10,000-character payloads, XSS injection, SQL injection, null bytes, unicode, brooder IDs of 0, -1, and 999999999
-
-**Trail-camera pipeline — `trailcam/tests/` — 94 tests**
-
-The trail-cam pipeline (SpyPoint poll → YOLO detect → QuailSync post) ships its own pytest suite. Everything is hermetic — no test touches the real SpyPoint API, real model weights, or the network (the third-party client, HTTP session, and DNS resolver are all mocked; filesystem tests use `tmp_path`):
+QuailSync ships **~377 automated tests** across Rust, Python, and Kotlin. Every suite is isolated — Rust integration tests spin up a fresh Axum server on a random port with an in-memory SQLite DB, the trail-cam pipeline mocks all I/O, and the e2e suites run against a freshly seeded dev DB.
 
 ```bash
-cd trailcam
-pip install pytest                # pipeline deps are in requirements.txt
-pytest -m "not integration"       # fast suite (93 tests; skips the real-model test)
-pytest -m integration             # the one slow test: downloads stock yolov8n.pt + real inference
+# Rust — server + shared crates (unit + integration + boundary)
+cargo fmt --check && cargo clippy && cargo test
+
+# Trail-cam pipeline (Python / pytest)
+cd trailcam && pytest -m "not integration"   # fast; add -m integration for the real-model test
+
+# Web dashboard e2e (Playwright) and Android e2e (Jetpack Compose, on device/emulator)
+pytest tests/test_dashboard_e2e.py
+cd android && ./gradlew connectedDebugAndroidTest
 ```
 
-*Functional suites:*
-- **`test_config.py` (5)** — settings load from environment variables, defaults are correct (incl. `QUAILSYNC_API_URL`, confidence, poll interval, photo limit), the `pathlib` directory layout, and `ensure_dirs()` creating the `staging/processed/archive/models` tree.
-- **`test_photo_state.py` (6)** — the JSON dedup ledger: missing/corrupt files start empty, ids normalize to strings, save→reload persists, and the write is atomic (no `.tmp` left behind).
-- **`test_poller.py` (5)** — the SpyPoint poller with **`spypoint.Client` and `requests.Session` fully mocked**: downloads new photos with metadata sidecars, skips already-seen ids, retries with exponential backoff then succeeds, gives up after max retries while leaving the photo *unseen* (so the next poll retries it), and the login wiring.
-- **`test_detector.py` (6)** — YOLO detection with **a mocked Ultralytics model** (predictable one-`quail` result): `DetectionResult` shape, confidence passthrough, camera-id fallback to the directory name when the sidecar is missing, and `process_staging()` moving files staging→processed while writing `*_detections.json`. Includes one `@pytest.mark.integration` test that runs the **real stock `yolov8n.pt`** end-to-end (structure only — no detection-count assertions, since it's COCO- not quail-trained).
-- **`test_bridge.py` (6)** — the QuailSync observation payload + JSONL output: field shape, average/min confidence (`None` when there are no detections), `bird_count` tracking `total_count`, `post_batch()` success/failure counts, and write-failure handling.
-- **`test_integration.py` (1)** — the full chain end-to-end with PIL-generated 640×640 JPEGs and the mocked model: images move staging→processed, detection JSON is written, and observations are logged.
+| Suite | Type | Tests | What it covers |
+|---|---|---:|---|
+| `quailsync-common` | Rust unit | 16 | Serde round-trips + domain logic for shared types — `Sex`/`BirdStatus`/`ClutchStatus` enums, telemetry payload variants, `InbreedingCoefficient` thresholds (safe < 6.25%, unsafe ≥). |
+| `quailsync-server` | Rust unit | 44 | In-crate logic: temperature alert engine, dropped-tag reconciliation deduction, relatedness/inbreeding scoring, chick-group graduation, DB helpers. |
+| `tests/api_tests.rs` | Rust integration | 46 | Fresh Axum server + in-memory SQLite per test — lineages, birds, breeding groups + pairing suggestions, tag reconciliation over HTTP, and schema migrations (legacy bloodline→lineage, breeding-group `male_id`→junction). |
+| `tests/boundary_tests.rs` | Rust boundary / stress | 68 | "Try to break it": input validation (SQLi / XSS / null bytes / 10k-char strings), DB boundaries, WebSocket abuse (1MB messages, 100 concurrent clients), alert edge values (NaN / Infinity), path traversal, 50-task concurrent-write stress, breeding-group lifecycle. |
+| `tests/photo_upload_tests.rs` | Rust integration | 15 | Bird-photo upload + serving — multipart validation (10MB → 413, JPEG magic bytes → 415), timestamped history, copy-then-commit DB, ntfy alert on oversized, GET serving + history listing + per-file 404 scoping. |
+| `pi-agent/tests/test_pi_agent.py` | Python (pytest) | 66 | DHT22 sensor edge cases (None / checksum-fail / extremes), WebSocket resilience + reconnect backoff, multi-client MJPEG stream under load, QR-code parsing abuse. |
+| `trailcam/tests/test_config.py` | Python (pytest) | 5 | Env-driven settings, defaults, `pathlib` directory layout, `ensure_dirs()`. |
+| `trailcam/tests/test_photo_state.py` | Python (pytest) | 6 | JSON dedup ledger — missing/corrupt → empty, id normalization, atomic save → reload. |
+| `trailcam/tests/test_poller.py` | Python (pytest) | 5 | SpyPoint poller (`spypoint.Client` + `requests` mocked): new-photo download + sidecars, skip-seen, retry/backoff, give-up-leaves-unseen. |
+| `trailcam/tests/test_detector.py` | Python (pytest) | 6 | YOLO detection (Ultralytics mocked): result shape, confidence passthrough, sidecar fallback, `process_staging()` file moves. One `@pytest.mark.integration` test runs the real stock `yolov8n.pt`. |
+| `trailcam/tests/test_bridge.py` | Python (pytest) | 6 | Observation payload + JSONL output, average/min confidence, `post_batch()` counts, write-failure handling. |
+| `trailcam/tests/test_integration.py` | Python (pytest) | 1 | Full chain (PIL images + mocked model): staging → processed move, detection JSON written, observations logged. |
+| `trailcam/tests/test_security.py` | Python (pytest) | 25 | Hardening: path traversal / `sanitize_filename`, download size caps, HTTPS-only, credential non-leakage (logs + files), `0o600` state file, model integrity (world-writable warning + optional SHA-256). |
+| `trailcam/tests/test_advanced_security.py` | Python (pytest) | 40 | Deeper attack vectors: TLS verification, SSRF + DNS rebinding (incl. the `169.254.169.254` metadata endpoint), malformed responses (payload bomb / 1000-level nesting), image validation (PNG / HTML / garbage), EXIF stripping, credential & `repr()` redaction, bridge input sanitization. |
+| `tests/test_dashboard_e2e.py` | Python (Playwright) | 14 | Browser end-to-end of the web dashboard SPA against a freshly seeded dev DB — navigation, hatchery, NFC banding, breeding, and cull flows. |
+| `android/…/DashboardE2ETest.kt` | Kotlin (Compose, instrumented) | 14 | On-device / emulator UI end-to-end of the Android app. |
 
-*Security suites (a deliberate threat-modeling pass over the third-party integration):*
-- **`test_security.py` (25)** — first-pass hardening:
-  - **Path traversal** — `camera_id`/`photo_id` from the API are sanitized; a `../../etc` camera or `../../../tmp/pwned` photo id still writes *inside* staging (verified with `Path.resolve()`), plus direct `sanitize_filename()` cases (separators, null bytes, length cap, dot-only fallback).
-  - **Download size caps** — an oversized `Content-Length` and an oversized stream are both rejected (and not retried); nothing is written.
-  - **HTTPS enforcement** — an `http://` photo URL is refused before any request is made.
-  - **Credential leakage** — the password never appears in logs (on login error) or in any file the poller writes.
-  - **State-file permissions** — `PhotoState.save()` produces a `0o600` file (POSIX-only; skipped on Windows).
-  - **Model integrity** — a world-writable `.pt` logs a warning, and an optional `YOLO_MODEL_SHA256` mismatch refuses to load (PyTorch `.pt` files are unpickled — i.e. arbitrary code execution if swapped).
-- **`test_advanced_security.py` (40)** — second-pass, deeper attack vectors:
-  - **TLS verification** — the session keeps `verify=True`, downloads never disable it, and `_validate_url()` requires HTTPS.
-  - **SSRF** — `_is_safe_url()` rejects loopback / RFC1918 / link-local (incl. the `169.254.169.254` cloud-metadata endpoint) / IPv6 loopback, catches **DNS rebinding** (a public hostname resolving to a private IP, resolver mocked), and allows legitimate public CDNs — wired into the download path.
-  - **Malformed API responses** — invalid JSON, payload bombs, 1000-level nesting, and photos missing `id`/`url` or carrying a nested-object `id` are all handled gracefully (logged, empty result, no crash).
-  - **Image validation** — `_validate_image()` rejects a renamed PNG, a zero-byte file, a spoofed-magic-then-garbage file, and an HTML login page; a full poll discards an HTML response without staging it.
-  - **EXIF sanitization** — `_strip_exif()` removes embedded metadata, verified both directly and through a real download.
-  - **Credential/token leak** — `repr(poller)` redacts the username and hides the password; secrets stay out of logs (success *and* failure paths) and every written file.
-  - **Bridge input sanitization** — `camera_id` and `class_name` posted to QuailSync are stripped of SQL metacharacters (`'; DROP TABLE`), HTML/script tags, and null bytes, while clean values pass through untouched.
-
-**`trailcam/test_pipeline.py`** — a standalone (non-pytest) smoke test that exercises the real pipeline mechanics against the stock `yolov8n.pt` using downloaded Creative-Commons bird photos (falling back to PIL-generated images offline). Run with `python test_pipeline.py`.
+> **Isolation notes.** The trail-cam pytest suites are **hermetic** — no test hits the real SpyPoint API, real model weights, or the network (the client, HTTP session, and DNS resolver are mocked; filesystem tests use `tmp_path`). The lone `@pytest.mark.integration` detector test (and the standalone, non-pytest `trailcam/test_pipeline.py` smoke test — run with `python trailcam/test_pipeline.py`) exercise the *real* `yolov8n.pt` end-to-end and are skipped by default.
 
 ### CI Pipeline
 
