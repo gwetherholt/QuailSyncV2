@@ -1444,8 +1444,7 @@ async fn cmd_breeding_group_create(
     let today = Local::now().date_naive();
     let body = CreateBreedingGroup {
         name,
-        male_id: Some(male),
-        male_ids: Vec::new(),
+        male_ids: vec![male],
         female_ids: female_ids.clone(),
         start_date: today,
         notes,
@@ -1461,18 +1460,24 @@ async fn cmd_breeding_group_create(
     struct GroupResp {
         id: i64,
         name: String,
-        male_id: i64,
+        male_ids: Vec<i64>,
         female_ids: Vec<i64>,
         warning: Option<String>,
     }
 
     let g: GroupResp = resp.json().await?;
+    let males_str = g
+        .male_ids
+        .iter()
+        .map(|id| format!("#{id}"))
+        .collect::<Vec<_>>()
+        .join(",");
     println!(
-        "{} breeding group #{} \"{}\" — male #{}, {} females {:?}",
+        "{} breeding group #{} \"{}\" — males {}, {} females {:?}",
         "Created".green().bold(),
         g.id,
         g.name,
-        g.male_id,
+        males_str,
         g.female_ids.len(),
         g.female_ids,
     );
@@ -1496,27 +1501,42 @@ async fn cmd_breeding_group_list(base: &str) -> anyhow::Result<()> {
     println!("{}", "Breeding Groups".bold().underline());
     println!();
     println!(
-        "  {:<5} {:<16} {:<8} {:<20} {:<12} {}",
+        "  {:<5} {:<16} {:<10} {:<16} {:<12} {:<10}",
         "ID".bold(),
         "Name".bold(),
-        "Male#".bold(),
+        "Males".bold(),
         "Females".bold(),
         "Start Date".bold(),
-        "Ratio".bold(),
+        "Status".bold(),
     );
-    println!("  {}", "-".repeat(70));
+    println!("  {}", "-".repeat(74));
 
     for g in &groups {
+        let males_str = g
+            .male_ids
+            .iter()
+            .map(|id| format!("#{id}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let males_str = if males_str.is_empty() {
+            "—".to_string()
+        } else {
+            males_str
+        };
         let females_str = g
             .female_ids
             .iter()
             .map(|id| id.to_string())
             .collect::<Vec<_>>()
             .join(",");
-        let ratio = format!("1:{}", g.female_ids.len());
+        let status = if g.status == "infertile" {
+            g.status.yellow().to_string()
+        } else {
+            g.status.clone()
+        };
         println!(
-            "  {:<5} {:<16} {:<8} {:<20} {:<12} {}",
-            g.id, g.name, g.male_id, females_str, g.start_date, ratio,
+            "  {:<5} {:<16} {:<10} {:<16} {:<12} {:<10}",
+            g.id, g.name, males_str, females_str, g.start_date, status,
         );
     }
     Ok(())

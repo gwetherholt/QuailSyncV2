@@ -51,24 +51,17 @@ pub(crate) async fn list_breeding_pairs(State(state): State<AppState>) -> Json<V
 
 // --- Breeding Groups ---
 
-/// Reads a group's full male list. Falls back to the scalar `primary` (the
-/// `breeding_groups.male_id` column) for legacy rows created before the
-/// `breeding_group_males` junction table existed.
-fn read_group_male_ids(conn: &rusqlite::Connection, group_id: i64, primary: i64) -> Vec<i64> {
+/// Reads a group's full male list from the `breeding_group_males` junction —
+/// the single source of truth. Ordered by insertion (rowid) so the first male
+/// added stays first. May be empty (an `infertile` group has no males).
+fn read_group_male_ids(conn: &rusqlite::Connection, group_id: i64) -> Vec<i64> {
     let mut stmt = conn
-        .prepare("SELECT male_id FROM breeding_group_males WHERE group_id = ?1 ORDER BY male_id")
+        .prepare("SELECT male_id FROM breeding_group_males WHERE group_id = ?1 ORDER BY rowid")
         .expect("prepare failed");
-    let mut ids: Vec<i64> = stmt
-        .query_map(params![group_id], |row| row.get(0))
+    stmt.query_map(params![group_id], |row| row.get(0))
         .unwrap()
         .filter_map(|r| r.ok())
-        .collect();
-    // Keep the primary male first so it stays stable across reads.
-    if let Some(pos) = ids.iter().position(|&m| m == primary) {
-        ids.remove(pos);
-    }
-    ids.insert(0, primary);
-    ids
+        .collect()
 }
 
 fn read_group_female_ids(conn: &rusqlite::Connection, group_id: i64) -> Vec<i64> {
@@ -86,7 +79,7 @@ pub(crate) async fn create_breeding_group(
     Json(body): Json<CreateBreedingGroup>,
 ) -> impl IntoResponse {
     let males = body.males();
-    let Some(&primary) = males.first() else {
+    if males.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
@@ -95,7 +88,7 @@ pub(crate) async fn create_breeding_group(
             })),
         )
             .into_response();
-    };
+    }
 
     let count = body.female_ids.len();
     let warning = if !(MIN_FEMALES_PER_MALE..=MAX_FEMALES_PER_MALE).contains(&count) {
@@ -105,9 +98,10 @@ pub(crate) async fn create_breeding_group(
     };
 
     let conn = acquire_db(&state);
+    // A new group always has at least one male (checked above) → 'active'.
     if let Err(e) = conn.execute(
-        "INSERT INTO breeding_groups (name, male_id, start_date, notes) VALUES (?1, ?2, ?3, ?4)",
-        params![body.name, primary, body.start_date.to_string(), body.notes],
+        "INSERT INTO breeding_groups (name, start_date, notes, status) VALUES (?1, ?2, ?3, 'active')",
+        params![body.name, body.start_date.to_string(), body.notes],
     ) {
         return db_error(e);
     }
@@ -151,11 +145,11 @@ pub(crate) async fn create_breeding_group(
             group: BreedingGroup {
                 id,
                 name: body.name,
-                male_id: primary,
                 male_ids: males,
                 female_ids: body.female_ids,
                 start_date: body.start_date,
                 notes: body.notes,
+                status: "active".to_string(),
             },
             warning,
         }),
@@ -168,15 +162,15 @@ pub(crate) async fn list_breeding_groups(
 ) -> Json<Vec<BreedingGroup>> {
     let conn = acquire_db(&state);
     let mut stmt = conn
-        .prepare("SELECT id, name, male_id, start_date, notes FROM breeding_groups ORDER BY id")
+        .prepare("SELECT id, name, start_date, notes, status FROM breeding_groups ORDER BY id")
         .expect("prepare failed");
-    let groups: Vec<(i64, String, i64, String, Option<String>)> = stmt
+    let groups: Vec<(i64, String, String, Option<String>, String)> = stmt
         .query_map([], |row| {
             Ok((
                 row.get(0)?,
                 row.get(1)?,
-                row.get(2)?,
-                row.get::<_, String>(3)?,
+                row.get::<_, String>(2)?,
+                row.get(3)?,
                 row.get(4)?,
             ))
         })
@@ -185,17 +179,17 @@ pub(crate) async fn list_breeding_groups(
         .collect();
 
     let mut result = Vec::new();
-    for (id, name, male_id, start_str, notes) in groups {
-        let male_ids = read_group_male_ids(&conn, id, male_id);
+    for (id, name, start_str, notes, status) in groups {
+        let male_ids = read_group_male_ids(&conn, id);
         let female_ids = read_group_female_ids(&conn, id);
         result.push(BreedingGroup {
             id,
             name,
-            male_id,
             male_ids,
             female_ids,
             start_date: NaiveDate::parse_from_str(&start_str, "%Y-%m-%d").unwrap_or_default(),
             notes,
+            status,
         });
     }
     Json(result)
@@ -207,33 +201,33 @@ pub(crate) async fn get_breeding_group(
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
     let group = conn.query_row(
-        "SELECT id, name, male_id, start_date, notes FROM breeding_groups WHERE id = ?1",
+        "SELECT id, name, start_date, notes, status FROM breeding_groups WHERE id = ?1",
         params![id],
         |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, Option<String>>(4)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
             ))
         },
     );
     match group {
-        Ok((gid, name, male_id, start_str, notes)) => {
-            let male_ids = read_group_male_ids(&conn, gid, male_id);
+        Ok((gid, name, start_str, notes, status)) => {
+            let male_ids = read_group_male_ids(&conn, gid);
             let female_ids = read_group_female_ids(&conn, gid);
             (
                 StatusCode::OK,
                 Json(Some(BreedingGroup {
                     id: gid,
                     name,
-                    male_id,
                     male_ids,
                     female_ids,
                     start_date: NaiveDate::parse_from_str(&start_str, "%Y-%m-%d")
                         .unwrap_or_default(),
                     notes,
+                    status,
                 })),
             )
                 .into_response()
@@ -253,15 +247,15 @@ pub(crate) async fn update_breeding_group(
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
 
-    // Confirm the group exists and grab its current primary male as a fallback.
-    let existing_male: Option<i64> = conn
+    // Confirm the group exists.
+    let exists: bool = conn
         .query_row(
-            "SELECT male_id FROM breeding_groups WHERE id = ?1",
+            "SELECT 1 FROM breeding_groups WHERE id = ?1",
             params![id],
-            |row| row.get(0),
+            |_| Ok(()),
         )
-        .ok();
-    let Some(existing_male) = existing_male else {
+        .is_ok();
+    if !exists {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({
@@ -270,7 +264,7 @@ pub(crate) async fn update_breeding_group(
             })),
         )
             .into_response();
-    };
+    }
 
     if let Some(name) = &body.name {
         if let Err(e) = conn.execute(
@@ -289,9 +283,11 @@ pub(crate) async fn update_breeding_group(
         }
     }
 
-    // Replace males if supplied.
+    // Replace males if supplied. A non-empty male set means the group is
+    // fertile again, so flip status back to 'active' (covers re-adding a male
+    // to a previously infertile group).
     if let Some(males) = body.males() {
-        let Some(&primary) = males.first() else {
+        if males.is_empty() {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({
@@ -300,7 +296,7 @@ pub(crate) async fn update_breeding_group(
                 })),
             )
                 .into_response();
-        };
+        }
         if let Err(e) = conn.execute(
             "DELETE FROM breeding_group_males WHERE group_id = ?1",
             params![id],
@@ -316,8 +312,8 @@ pub(crate) async fn update_breeding_group(
             }
         }
         if let Err(e) = conn.execute(
-            "UPDATE breeding_groups SET male_id = ?1 WHERE id = ?2",
-            params![primary, id],
+            "UPDATE breeding_groups SET status = 'active' WHERE id = ?1",
+            params![id],
         ) {
             return db_error(e);
         }
@@ -349,39 +345,38 @@ pub(crate) async fn update_breeding_group(
 
     // Re-read the resulting group for the response.
     let row = conn.query_row(
-        "SELECT name, male_id, start_date, notes FROM breeding_groups WHERE id = ?1",
+        "SELECT name, start_date, notes, status FROM breeding_groups WHERE id = ?1",
         params![id],
         |r| {
             Ok((
                 r.get::<_, String>(0)?,
-                r.get::<_, i64>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, Option<String>>(3)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, String>(3)?,
             ))
         },
     );
     match row {
-        Ok((name, male_id, start_str, notes)) => {
-            let male_ids = read_group_male_ids(&conn, id, male_id);
+        Ok((name, start_str, notes, status)) => {
+            let male_ids = read_group_male_ids(&conn, id);
             let female_ids = read_group_female_ids(&conn, id);
             (
                 StatusCode::OK,
                 Json(BreedingGroup {
                     id,
                     name,
-                    male_id,
                     male_ids,
                     female_ids,
                     start_date: NaiveDate::parse_from_str(&start_str, "%Y-%m-%d")
                         .unwrap_or_default(),
                     notes,
+                    status,
                 }),
             )
                 .into_response()
         }
         Err(_) => {
             // Should not happen — we verified existence above.
-            let _ = existing_male;
             (StatusCode::NOT_FOUND, Json(None::<BreedingGroup>)).into_response()
         }
     }

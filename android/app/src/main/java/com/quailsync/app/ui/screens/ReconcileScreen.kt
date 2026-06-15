@@ -160,7 +160,7 @@ class ReconcileViewModel(
                 val birds = api.getBirds()
                 if (group != null) {
                     _groupName.value = group.name
-                    val memberIds = (listOf(group.maleId) + group.femaleIds).toSet()
+                    val memberIds = (group.males + group.femaleIds).toSet()
                     _lineageOptions.value = birds
                         .filter { it.id in memberIds }
                         .flatMap { it.lineages }

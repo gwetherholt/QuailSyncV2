@@ -363,15 +363,16 @@ data class MoveBirdRequest(
 data class BreedingGroupDto(
     @SerializedName("id") val id: Int,
     @SerializedName("name") val name: String,
-    /** Primary male (first assigned). [maleIds] is the full roster. */
-    @SerializedName("male_id") val maleId: Int,
     @SerializedName("male_ids") val maleIds: List<Int> = emptyList(),
     @SerializedName("female_ids") val femaleIds: List<Int> = emptyList(),
     @SerializedName("start_date") val startDate: String? = null,
     @SerializedName("notes") val notes: String? = null,
+    /** "active" (>=1 male) or "infertile" (no males). */
+    @SerializedName("status") val status: String = "active",
 ) {
-    /** Roster with a legacy fallback: older payloads only carry [maleId]. */
-    val males: List<Int> get() = maleIds.ifEmpty { listOf(maleId) }
+    /** Full male roster — the junction is the only source of truth. */
+    val males: List<Int> get() = maleIds
+    val isInfertile: Boolean get() = status == "infertile" || maleIds.isEmpty()
 }
 
 data class CreateBreedingGroupRequest(

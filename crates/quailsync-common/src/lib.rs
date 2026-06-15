@@ -439,26 +439,23 @@ pub struct UpdateProcessingRecord {
 pub struct BreedingGroup {
     pub id: i64,
     pub name: String,
-    /// Primary male — the first male assigned to the group. Retained as a
-    /// scalar for backward compatibility (e.g. tag reconciliation, the
-    /// per-bird cull cascade). `male_ids` is the authoritative full list.
-    pub male_id: i64,
-    /// All males in the group (usually one). Always includes `male_id` as
-    /// its first element.
+    /// All males in the group, from the `breeding_group_males` junction (the
+    /// single source of truth). Empty when the group is `infertile`.
     pub male_ids: Vec<i64>,
     pub female_ids: Vec<i64>,
     pub start_date: NaiveDate,
     pub notes: Option<String>,
+    /// `"active"` (has at least one male) or `"infertile"` (no males). The
+    /// females stay assigned regardless — the group is birds cohabiting a hutch.
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateBreedingGroup {
     pub name: String,
-    /// Legacy single-male field. Still accepted so existing callers keep
-    /// working; folded into `male_ids` by [`CreateBreedingGroup::males`].
-    #[serde(default)]
-    pub male_id: Option<i64>,
-    /// Preferred multi-male field. The first entry becomes the primary male.
+    /// Males are managed only through the junction table (this list). At least
+    /// one is required. A scalar `male_id` is no longer accepted — any such
+    /// field on the request is ignored.
     #[serde(default)]
     pub male_ids: Vec<i64>,
     pub female_ids: Vec<i64>,
@@ -467,15 +464,9 @@ pub struct CreateBreedingGroup {
 }
 
 impl CreateBreedingGroup {
-    /// Resolves the effective male list from the legacy `male_id` and the
-    /// `male_ids` fields, de-duplicated while preserving order. When both are
-    /// supplied, `male_id` (if not already present) is prepended so it stays
-    /// the primary male.
+    /// The male list, de-duplicated while preserving order.
     pub fn males(&self) -> Vec<i64> {
         let mut out: Vec<i64> = Vec::new();
-        if let Some(m) = self.male_id {
-            out.push(m);
-        }
         for &m in &self.male_ids {
             if !out.contains(&m) {
                 out.push(m);
@@ -491,8 +482,8 @@ impl CreateBreedingGroup {
 pub struct UpdateBreedingGroup {
     #[serde(default)]
     pub name: Option<String>,
-    #[serde(default)]
-    pub male_id: Option<i64>,
+    /// Replacement male roster. `None` leaves males unchanged. A scalar
+    /// `male_id` is no longer accepted — any such field is ignored.
     #[serde(default)]
     pub male_ids: Option<Vec<i64>>,
     #[serde(default)]
@@ -502,26 +493,18 @@ pub struct UpdateBreedingGroup {
 }
 
 impl UpdateBreedingGroup {
-    /// Resolves the new male list if either male field was supplied, else
-    /// `None` (meaning "leave males unchanged").
+    /// The new male list if `male_ids` was supplied (de-duplicated, order
+    /// preserved), else `None` (meaning "leave males unchanged").
     pub fn males(&self) -> Option<Vec<i64>> {
-        match (self.male_id, &self.male_ids) {
-            (None, None) => None,
-            _ => {
-                let mut out: Vec<i64> = Vec::new();
-                if let Some(m) = self.male_id {
+        self.male_ids.as_ref().map(|ids| {
+            let mut out: Vec<i64> = Vec::new();
+            for &m in ids {
+                if !out.contains(&m) {
                     out.push(m);
                 }
-                if let Some(ids) = &self.male_ids {
-                    for &m in ids {
-                        if !out.contains(&m) {
-                            out.push(m);
-                        }
-                    }
-                }
-                Some(out)
             }
-        }
+            out
+        })
     }
 }
 

@@ -426,15 +426,15 @@ pub(crate) async fn reconcile_tags(
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
 
-    // Validate the group exists and is a breeding group; reject otherwise.
-    let male_id: Option<i64> = conn
+    // Validate the group exists; reject otherwise.
+    let exists: bool = conn
         .query_row(
-            "SELECT male_id FROM breeding_groups WHERE id = ?1",
+            "SELECT 1 FROM breeding_groups WHERE id = ?1",
             params![group_id],
-            |row| row.get(0),
+            |_| Ok(()),
         )
-        .ok();
-    let Some(male_id) = male_id else {
+        .is_ok();
+    if !exists {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({
@@ -443,11 +443,23 @@ pub(crate) async fn reconcile_tags(
             })),
         )
             .into_response();
-    };
+    }
 
-    // Membership = the male plus every female row for this group.
+    // Membership = every male (from the breeding_group_males junction — there
+    // may be more than one) plus every female row for this group.
     let mut member_ids: HashSet<i64> = HashSet::new();
-    member_ids.insert(male_id);
+    {
+        let mut stmt = conn
+            .prepare("SELECT male_id FROM breeding_group_males WHERE group_id = ?1")
+            .expect("prepare failed");
+        let males = stmt
+            .query_map(params![group_id], |row| row.get::<_, i64>(0))
+            .unwrap()
+            .filter_map(|r| r.ok());
+        for m in males {
+            member_ids.insert(m);
+        }
+    }
     {
         let mut stmt = conn
             .prepare("SELECT female_id FROM breeding_group_members WHERE group_id = ?1")

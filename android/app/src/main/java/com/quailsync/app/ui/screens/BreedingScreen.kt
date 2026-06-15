@@ -285,7 +285,22 @@ private fun BreedingGroupsTab(viewModel: BreedingViewModel, onReconcileGroup: (I
                 ) {
                     Column(Modifier.padding(14.dp)) {
                         Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                            Text(group.name, style = MaterialTheme.typography.titleMedium)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(group.name, style = MaterialTheme.typography.titleMedium)
+                                if (group.isInfertile) {
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        "Infertile",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = AlertYellow,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(AlertYellow.copy(alpha = 0.18f))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                                    )
+                                }
+                            }
                             Text(
                                 "${group.males.size}M : ${females.size}F",
                                 style = MaterialTheme.typography.labelMedium,
@@ -294,7 +309,16 @@ private fun BreedingGroupsTab(viewModel: BreedingViewModel, onReconcileGroup: (I
                             )
                         }
                         Spacer(Modifier.height(8.dp))
-                        // Males (usually one, but a group may hold extras)
+                        // Males (usually one, but a group may hold extras). An
+                        // infertile group has none — call that out explicitly.
+                        if (group.males.isEmpty()) {
+                            Text(
+                                "No male assigned — group is infertile",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = AlertYellow,
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                            )
+                        }
                         group.males.forEachIndexed { i, mid ->
                             val m = birdMap[mid]
                             Row {

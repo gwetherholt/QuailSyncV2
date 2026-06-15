@@ -536,6 +536,14 @@
     background:var(--cream);border-radius:var(--radius);
     padding:1rem;box-shadow:var(--shadow);margin-bottom:.75rem;
   }
+  /* Infertile (no males) — visually distinct with an amber left accent. */
+  .breed-group-card.infertile{
+    border-left:4px solid #e6a100;background:#fffaf0;
+  }
+  .infertile-badge{
+    font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:10px;
+    background:#fef3e2;color:#b35900;text-transform:uppercase;letter-spacing:.03em;
+  }
   .breed-group-card h4{font-size:.9rem;margin-bottom:.5rem;display:flex;align-items:center;gap:.5rem}
   .ratio-badge{
     font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:10px;
@@ -2688,23 +2696,37 @@
       }
       var html = '';
       this._groups.forEach(function(g){
-        var male = findBird(g.male_id);
+        var males = g.male_ids || [];
+        var isInfertile = g.status === 'infertile' || males.length === 0;
         var femaleCount = g.female_ids ? g.female_ids.length : 0;
         var ratioOk = femaleCount >= 3 && femaleCount <= 5;
         var ratioWarn = femaleCount >= 2 && femaleCount <= 6;
         var ratioCls = ratioOk ? 'good' : ratioWarn ? 'warn' : 'bad';
         var ratioText = '1:'+femaleCount;
 
-        html += '<div class="breed-group-card">';
-        html += '<h4>'+escapeHtml(g.name)+' <span class="ratio-badge '+ratioCls+'">'+ratioText+'</span></h4>';
-
-        // Male
-        html += '<div style="font-size:.78rem;color:#888;margin-bottom:.3rem">MALE</div>';
-        html += '<div class="breed-birds">';
-        if(male){
-          html += '<span class="breed-bird-chip">'+bandDot(male.band_color, 10)+' '+birdLink(male.id)+' <span style="color:#888;font-size:.72rem">'+formatLineages(male.lineages)+'</span></span>';
+        html += '<div class="breed-group-card'+(isInfertile ? ' infertile' : '')+'">';
+        html += '<h4>'+escapeHtml(g.name);
+        if(isInfertile){
+          html += ' <span class="infertile-badge">Infertile</span>';
         } else {
-          html += '<span class="breed-bird-chip">'+birdLink(g.male_id)+'</span>';
+          html += ' <span class="ratio-badge '+ratioCls+'">'+ratioText+'</span>';
+        }
+        html += '</h4>';
+
+        // Male(s) — the junction can hold more than one.
+        html += '<div style="font-size:.78rem;color:#888;margin-bottom:.3rem">'+(males.length > 1 ? 'MALES' : 'MALE')+'</div>';
+        html += '<div class="breed-birds">';
+        if(males.length > 0){
+          males.forEach(function(mid){
+            var male = findBird(mid);
+            if(male){
+              html += '<span class="breed-bird-chip">'+bandDot(male.band_color, 10)+' '+birdLink(male.id)+' <span style="color:#888;font-size:.72rem">'+formatLineages(male.lineages)+'</span></span>';
+            } else {
+              html += '<span class="breed-bird-chip">'+birdLink(mid)+'</span>';
+            }
+          });
+        } else {
+          html += '<span style="font-size:.8rem;color:#c77800;font-style:italic">No male assigned &mdash; group is infertile</span>';
         }
         html += '</div>';
 

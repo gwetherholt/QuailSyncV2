@@ -218,36 +218,46 @@ pub(crate) async fn delete_bird(
         params![id],
     )
     .ok();
+    // If this bird was a female member, remove her membership row.
     conn.execute(
         "DELETE FROM breeding_group_members WHERE female_id = ?1",
         params![id],
     )
     .ok();
-    // Drop this bird from any group's male roster.
+    // If this bird was a male, capture which groups he belonged to, drop him
+    // from the junction, then mark any now-male-less group 'infertile'. The
+    // group is NOT dissolved and the females stay assigned — the group
+    // represents birds cohabiting a hutch, which doesn't change when a male
+    // dies/leaves.
+    let affected_groups: Vec<i64> = {
+        let mut stmt = conn
+            .prepare("SELECT group_id FROM breeding_group_males WHERE male_id = ?1")
+            .expect("prepare failed");
+        stmt.query_map(params![id], |row| row.get::<_, i64>(0))
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default()
+    };
     conn.execute(
         "DELETE FROM breeding_group_males WHERE male_id = ?1",
         params![id],
     )
     .ok();
-    // Groups whose primary male is this bird are dissolved (preserves prior
-    // behavior); clean their membership/roster rows first to avoid orphans.
-    conn.execute(
-        "DELETE FROM breeding_group_members WHERE group_id IN \
-         (SELECT id FROM breeding_groups WHERE male_id = ?1)",
-        params![id],
-    )
-    .ok();
-    conn.execute(
-        "DELETE FROM breeding_group_males WHERE group_id IN \
-         (SELECT id FROM breeding_groups WHERE male_id = ?1)",
-        params![id],
-    )
-    .ok();
-    conn.execute(
-        "DELETE FROM breeding_groups WHERE male_id = ?1",
-        params![id],
-    )
-    .ok();
+    for gid in affected_groups {
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM breeding_group_males WHERE group_id = ?1",
+                params![gid],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if remaining == 0 {
+            conn.execute(
+                "UPDATE breeding_groups SET status = 'infertile' WHERE id = ?1",
+                params![gid],
+            )
+            .ok();
+        }
+    }
     conn.execute(
         "DELETE FROM processing_records WHERE bird_id = ?1",
         params![id],

@@ -1527,7 +1527,7 @@ async fn breeding_group_with_no_females() {
         .post(format!("{base}/api/breeding-groups"))
         .json(&json!({
             "name": "Solo Male",
-            "male_id": male.id,
+            "male_ids": [male.id],
             "female_ids": [],
             "start_date": "2026-03-01",
         }))
@@ -1558,8 +1558,9 @@ async fn breeding_group_accepts_multiple_males() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED);
     let group: Value = resp.json().await.unwrap();
-    // Primary male is the first supplied; full roster echoes both.
-    assert_eq!(group["male_id"].as_i64(), Some(m1.id));
+    // No scalar male_id anymore — males come from the junction-backed roster.
+    assert!(group.get("male_id").is_none() || group["male_id"].is_null());
+    assert_eq!(group["status"].as_str(), Some("active"));
     let males: Vec<i64> = group["male_ids"]
         .as_array()
         .unwrap()
@@ -1583,9 +1584,10 @@ async fn breeding_group_accepts_multiple_males() {
 }
 
 #[tokio::test]
-async fn legacy_single_male_id_still_accepted() {
-    // Pre-multi-male clients send a scalar `male_id`; it must keep working
-    // and surface in `male_ids`.
+async fn scalar_male_id_input_is_ignored() {
+    // The legacy scalar `male_id` is no longer accepted as input. A request
+    // that supplies ONLY male_id (no male_ids) is treated as having no males
+    // and is rejected — proving the field is ignored, not silently honored.
     let base = spawn_test_server().await;
     let bl = seed_lineage(&base).await;
     let male = seed_bird(&base, bl.id, Sex::Male).await;
@@ -1601,10 +1603,100 @@ async fn legacy_single_male_id_still_accepted() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::CREATED);
-    let group: Value = resp.json().await.unwrap();
-    assert_eq!(group["male_id"].as_i64(), Some(male.id));
-    assert_eq!(group["male_ids"].as_array().unwrap().len(), 1);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"].as_str(), Some("missing_male"));
+}
+
+#[tokio::test]
+async fn deleting_last_male_marks_group_infertile_keeping_females() {
+    let base = spawn_test_server().await;
+    let bl = seed_lineage(&base).await;
+    let male = seed_bird(&base, bl.id, Sex::Male).await;
+    let hen = seed_bird(&base, bl.id, Sex::Female).await;
+
+    let group: Value = client()
+        .post(format!("{base}/api/breeding-groups"))
+        .json(&json!({
+            "name": "Solo Tom", "male_ids": [male.id],
+            "female_ids": [hen.id], "start_date": "2026-03-01",
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let gid = group["id"].as_i64().unwrap();
+    assert_eq!(group["status"].as_str(), Some("active"));
+
+    // Delete the only male.
+    let del = client()
+        .delete(format!("{base}/api/birds/{}", male.id))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(del.status(), StatusCode::NO_CONTENT);
+
+    // Group is NOT dissolved: it survives, flips to 'infertile', has no males,
+    // and the female stays assigned.
+    let g: Value = client()
+        .get(format!("{base}/api/breeding-groups/{gid}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(g["status"].as_str(), Some("infertile"));
+    assert!(g["male_ids"].as_array().unwrap().is_empty());
+    assert_eq!(g["female_ids"].as_array().unwrap().len(), 1);
+    assert_eq!(g["female_ids"][0].as_i64(), Some(hen.id));
+}
+
+#[tokio::test]
+async fn adding_male_to_infertile_group_restores_active() {
+    let base = spawn_test_server().await;
+    let bl = seed_lineage(&base).await;
+    let m1 = seed_bird(&base, bl.id, Sex::Male).await;
+    let m2 = seed_bird(&base, bl.id, Sex::Male).await;
+    let hen = seed_bird(&base, bl.id, Sex::Female).await;
+
+    let group: Value = client()
+        .post(format!("{base}/api/breeding-groups"))
+        .json(&json!({
+            "name": "Rebound", "male_ids": [m1.id],
+            "female_ids": [hen.id], "start_date": "2026-03-01",
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let gid = group["id"].as_i64().unwrap();
+
+    // Lose the male -> infertile.
+    client()
+        .delete(format!("{base}/api/birds/{}", m1.id))
+        .send()
+        .await
+        .unwrap();
+
+    // Add a new male via PUT -> back to active, female still present.
+    let updated: Value = client()
+        .put(format!("{base}/api/breeding-groups/{gid}"))
+        .json(&json!({ "male_ids": [m2.id] }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(updated["status"].as_str(), Some("active"));
+    assert_eq!(updated["male_ids"].as_array().unwrap().len(), 1);
+    assert_eq!(updated["male_ids"][0].as_i64(), Some(m2.id));
+    assert_eq!(updated["female_ids"].as_array().unwrap().len(), 1);
 }
 
 #[tokio::test]

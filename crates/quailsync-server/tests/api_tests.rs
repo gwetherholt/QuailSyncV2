@@ -1156,6 +1156,104 @@ mod lineage_tests {
     }
 
     #[tokio::test]
+    async fn legacy_breeding_group_male_id_migrates_to_junction() {
+        // Seed an OLD-shape breeding_groups (scalar male_id column) plus its
+        // female members, then run init_db and assert the normalization
+        // migration rebuilt the table: male_id dropped, status added, the male
+        // backfilled into the junction, and the rest of the row intact.
+        use quailsync_server::init_db;
+        use rusqlite::Connection;
+
+        let conn = Connection::open_in_memory().unwrap();
+        // male_id / female_id are plain INTEGERs here (no birds FK) — init_db
+        // creates the real birds table itself, and the ids are dangling on
+        // purpose; the migration cares only about the column + values. The
+        // members -> breeding_groups FK is kept so the rebuild is exercised
+        // with a dependent FK present.
+        conn.execute_batch(
+            "CREATE TABLE breeding_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                male_id INTEGER NOT NULL,
+                start_date TEXT NOT NULL,
+                notes TEXT
+            );
+             CREATE TABLE breeding_group_members (
+                group_id INTEGER NOT NULL REFERENCES breeding_groups(id),
+                female_id INTEGER NOT NULL,
+                PRIMARY KEY (group_id, female_id)
+             );
+             INSERT INTO breeding_groups (id, name, male_id, start_date, notes)
+                 VALUES (1, 'Legacy Group', 42, '2026-01-01', 'kept note');
+             INSERT INTO breeding_group_members (group_id, female_id) VALUES (1, 99);
+             INSERT INTO breeding_group_members (group_id, female_id) VALUES (1, 100);",
+        )
+        .unwrap();
+
+        // Run the migration.
+        init_db(&conn);
+
+        // (1) male_id column is gone; status column is present.
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(breeding_groups)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            !cols.contains(&"male_id".to_string()),
+            "male_id should be dropped"
+        );
+        assert!(
+            cols.contains(&"status".to_string()),
+            "status should be added"
+        );
+
+        // (2) the junction was backfilled from the old male_id.
+        let males: Vec<i64> = conn
+            .prepare("SELECT male_id FROM breeding_group_males WHERE group_id = 1")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert_eq!(males, vec![42]);
+
+        // (3) status is 'active' (the group had a male).
+        let status: String = conn
+            .query_row("SELECT status FROM breeding_groups WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(status, "active");
+
+        // (4) the rest of the group survived the rebuild: name/start_date/notes
+        // and the female membership rows.
+        let (name, start_date, notes): (String, String, Option<String>) = conn
+            .query_row(
+                "SELECT name, start_date, notes FROM breeding_groups WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(name, "Legacy Group");
+        assert_eq!(start_date, "2026-01-01");
+        assert_eq!(notes.as_deref(), Some("kept note"));
+
+        let females: Vec<i64> = conn
+            .prepare(
+                "SELECT female_id FROM breeding_group_members WHERE group_id = 1 ORDER BY female_id",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert_eq!(females, vec![99, 100]);
+    }
+
+    #[tokio::test]
     async fn legacy_bloodline_id_rows_migrate_into_junction() {
         // Seed an OLD-shape DB (bloodlines table, chick_groups.bloodline_id,
         // birds.bloodline_id NOT NULL), then run init_db and assert that the
@@ -2333,7 +2431,7 @@ mod reconcile_tests {
             .post(format!("{base}/api/breeding-groups"))
             .json(&json!({
                 "name": "Group 1",
-                "male_id": male,
+                "male_ids": [male],
                 "female_ids": [hen_a, hen_b],
                 "start_date": "2026-01-01",
                 "notes": null,
@@ -2494,5 +2592,94 @@ mod reconcile_tests {
         let hen = results.iter().find(|r| r["ref_id"] == "a-hen").unwrap();
         assert_eq!(hen["outcome"]["kind"], "resolved");
         assert_eq!(hen["outcome"]["tag_id"], "T-HEN-A");
+    }
+
+    /// Reconcile membership is read from the `breeding_group_males` junction,
+    /// so EVERY male counts — not just a scalar "primary". A group with two
+    /// males must treat both their tags as members (the second male's tag was
+    /// the case the old scalar `male_id` got wrong).
+    #[tokio::test]
+    async fn reconcile_reads_all_junction_males() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let lineage_id = seed_lineage(&base, &client, "Multi").await;
+        let m1 = make_bird(
+            &base,
+            &client,
+            Sex::Male,
+            Some("green"),
+            Some("T-MALE-1"),
+            lineage_id,
+        )
+        .await;
+        let m2 = make_bird(
+            &base,
+            &client,
+            Sex::Male,
+            Some("black"),
+            Some("T-MALE-2"),
+            lineage_id,
+        )
+        .await;
+        let hen = make_bird(
+            &base,
+            &client,
+            Sex::Female,
+            Some("red"),
+            Some("T-HEN-A"),
+            lineage_id,
+        )
+        .await;
+
+        let group: Value = client
+            .post(format!("{base}/api/breeding-groups"))
+            .json(&json!({
+                "name": "Two Toms", "male_ids": [m1, m2],
+                "female_ids": [hen], "start_date": "2026-01-01",
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(group["male_ids"].as_array().unwrap().len(), 2);
+        let gid = group["id"].as_i64().unwrap();
+
+        // The SECOND male's tag must be recognized as a member (not unmatched).
+        let body: Value = client
+            .post(format!("{base}/api/groups/{gid}/reconcile-tags"))
+            .json(&json!({ "orphan_tag_ids": ["T-MALE-2"], "observed_birds": [] }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(
+            body["unmatched_tags"].as_array().unwrap().is_empty(),
+            "the second junction male's tag should be a member, got: {body}"
+        );
+
+        // Contrast: a non-member tag still lands in unmatched (single-male path
+        // intact — the first male's tag is a member, the outsider's isn't).
+        make_bird(&base, &client, Sex::Female, None, Some("T-OUT"), lineage_id).await;
+        let body2: Value = client
+            .post(format!("{base}/api/groups/{gid}/reconcile-tags"))
+            .json(&json!({ "orphan_tag_ids": ["T-MALE-1", "T-OUT"], "observed_birds": [] }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let unmatched: Vec<String> = body2["unmatched_tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(unmatched.contains(&"T-OUT".to_string()));
+        assert!(!unmatched.contains(&"T-MALE-1".to_string()));
     }
 }

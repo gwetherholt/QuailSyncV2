@@ -177,12 +177,15 @@ pub fn init_db(conn: &Connection) {
             notes              TEXT
         );
 
+        -- Males live in the breeding_group_males junction (single source of
+        -- truth). `status` is 'active' (>=1 male) or 'infertile' (no males);
+        -- the group still represents birds cohabiting a hutch even with no male.
         CREATE TABLE IF NOT EXISTS breeding_groups (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             name       TEXT    NOT NULL,
-            male_id    INTEGER NOT NULL REFERENCES birds(id),
             start_date TEXT    NOT NULL,
-            notes      TEXT
+            notes      TEXT,
+            status     TEXT    NOT NULL DEFAULT 'active'
         );
 
         CREATE TABLE IF NOT EXISTS breeding_group_members (
@@ -191,10 +194,9 @@ pub fn init_db(conn: &Connection) {
             PRIMARY KEY (group_id, female_id)
         );
 
-        -- Males assigned to a group. Most groups have a single male, but the
-        -- UI allows extra males behind a confirmation step. `breeding_groups.
-        -- male_id` mirrors the primary (first) male for backward compatibility;
-        -- this table is the authoritative full list.
+        -- Males assigned to a group — the SINGLE source of truth for a group's
+        -- males. Most groups have one; the UI allows extra males behind a
+        -- confirmation step. A group with zero rows here is 'infertile'.
         CREATE TABLE IF NOT EXISTS breeding_group_males (
             group_id INTEGER NOT NULL REFERENCES breeding_groups(id),
             male_id  INTEGER NOT NULL REFERENCES birds(id),
@@ -272,6 +274,49 @@ pub fn init_db(conn: &Connection) {
     // on disk. See routes/photos.rs.
     conn.execute("ALTER TABLE birds ADD COLUMN photo_uploaded_at TEXT", [])
         .ok();
+
+    // Breeding-group male normalization: `breeding_group_males` junction table
+    // is the single source of truth for males. If the old `male_id` column
+    // still exists, backfill the junction, rebuild the table without it,
+    // and add the `status` column ('active' / 'infertile').
+    //
+    // SQLite can't DROP a column that's part of a FOREIGN KEY constraint
+    // (male_id REFERENCES birds), so we rebuild the table. Only runs on legacy
+    // DBs — fresh ones are already created in the new shape above.
+    if column_exists(conn, "breeding_groups", "male_id") {
+        conn.execute_batch(
+            "PRAGMA foreign_keys = OFF;
+
+             -- Make sure every legacy male_id is represented in the junction
+             -- before we drop the column (older rows may predate the junction).
+             INSERT OR IGNORE INTO breeding_group_males (group_id, male_id)
+                 SELECT id, male_id FROM breeding_groups WHERE male_id IS NOT NULL;
+
+             CREATE TABLE breeding_groups_new (
+                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                 name       TEXT    NOT NULL,
+                 start_date TEXT    NOT NULL,
+                 notes      TEXT,
+                 status     TEXT    NOT NULL DEFAULT 'active'
+             );
+
+             -- Carry ids over verbatim; derive status from junction membership.
+             INSERT INTO breeding_groups_new (id, name, start_date, notes, status)
+                 SELECT bg.id, bg.name, bg.start_date, bg.notes,
+                        CASE WHEN EXISTS (
+                            SELECT 1 FROM breeding_group_males m WHERE m.group_id = bg.id
+                        ) THEN 'active' ELSE 'infertile' END
+                 FROM breeding_groups bg;
+
+             DROP TABLE breeding_groups;
+             ALTER TABLE breeding_groups_new RENAME TO breeding_groups;
+
+             PRAGMA foreign_keys = ON;",
+        )
+        .expect("breeding_groups male_id->junction migration failed");
+        println!("[migration] normalized breeding_groups (dropped male_id, added status)");
+    }
+
     // Issue #13: permanent housing assignment for adult birds. Distinct from
     // current_brooder_id (live location). Nullable — unhoused birds have NULL.
     if !column_exists(conn, "birds", "housing_id") {
