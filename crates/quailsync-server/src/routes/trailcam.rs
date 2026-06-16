@@ -19,6 +19,41 @@ fn err(status: StatusCode, code: &str, message: &str) -> Response {
     (status, Json(json!({ "error": code, "message": message }))).into_response()
 }
 
+/// `GET /api/trailcam/cameras` — distinct cameras seen in `observations.jsonl`.
+///
+/// Returns `[{ "camera_id", "label" }]` with labels "Outdoor Cam 1", "Outdoor
+/// Cam 2", … numbered by order of first appearance. A missing/empty log yields
+/// `[]` (clients then show no outdoor cameras).
+pub(crate) async fn trailcam_cameras(State(state): State<AppState>) -> Response {
+    let content = match std::fs::read_to_string(state.trailcam.observations_path()) {
+        Ok(c) => c,
+        Err(_) => return Json(json!([])).into_response(),
+    };
+
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut cameras: Vec<Value> = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let obs: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let camera_id = match obs.get("camera_id").and_then(Value::as_str) {
+            Some(c) if !c.is_empty() => c,
+            _ => continue,
+        };
+        if seen.insert(camera_id.to_string()) {
+            let n = cameras.len() + 1;
+            cameras.push(json!({ "camera_id": camera_id, "label": format!("Outdoor Cam {n}") }));
+        }
+    }
+
+    Json(cameras).into_response()
+}
+
 /// `GET /api/trailcam/latest/{camera_id}` — most recent observation for a camera.
 ///
 /// Scans `observations.jsonl` for the matching camera_id with the greatest

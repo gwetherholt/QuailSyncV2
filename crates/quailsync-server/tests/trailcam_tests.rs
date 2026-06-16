@@ -175,6 +175,52 @@ async fn latest_404_when_no_observations_file() {
 }
 
 // ---------------------------------------------------------------------------
+// cameras
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cameras_lists_distinct_in_first_appearance_order() {
+    let processed = unique_processed_dir();
+    // camB appears first, then camA, then camB again (dup). Order of FIRST
+    // appearance is camB, camA; labels number accordingly.
+    write_observation(&processed, "camB", "2026-06-15T05:00:00", 1, 0.9, "b1.jpg");
+    write_observation(&processed, "camA", "2026-06-15T05:30:00", 2, 0.8, "a1.jpg");
+    write_observation(&processed, "camB", "2026-06-15T06:00:00", 3, 0.7, "b2.jpg");
+
+    let base = spawn_app(&processed).await;
+    let cams: Value = client()
+        .get(format!("{base}/api/trailcam/cameras"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let arr = cams.as_array().unwrap();
+    assert_eq!(arr.len(), 2);
+    assert_eq!(arr[0]["camera_id"], "camB");
+    assert_eq!(arr[0]["label"], "Outdoor Cam 1");
+    assert_eq!(arr[1]["camera_id"], "camA");
+    assert_eq!(arr[1]["label"], "Outdoor Cam 2");
+}
+
+#[tokio::test]
+async fn cameras_empty_when_no_observations_file() {
+    let processed = unique_processed_dir(); // no observations.jsonl
+    let base = spawn_app(&processed).await;
+
+    let resp = client()
+        .get(format!("{base}/api/trailcam/cameras"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let cams: Value = resp.json().await.unwrap();
+    assert!(cams.as_array().unwrap().is_empty());
+}
+
+// ---------------------------------------------------------------------------
 // image serving
 // ---------------------------------------------------------------------------
 

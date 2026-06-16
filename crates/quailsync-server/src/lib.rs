@@ -124,9 +124,10 @@ pub fn build_app(state: AppState) -> Router {
             "/api/birds/{id}/photos/{filename}",
             get(photos::serve_bird_photo_file),
         )
-        // Trail-cam read endpoints: latest observation per camera + image
-        // serving. Reads the pipeline's processed/observations.jsonl. See
-        // routes/trailcam.rs.
+        // Trail-cam read endpoints: distinct cameras, latest observation per
+        // camera, and image serving. Reads the pipeline's
+        // processed/observations.jsonl. See routes/trailcam.rs.
+        .route("/api/trailcam/cameras", get(trailcam::trailcam_cameras))
         .route(
             "/api/trailcam/latest/{camera_id}",
             get(trailcam::trailcam_latest),

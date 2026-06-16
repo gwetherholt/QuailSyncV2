@@ -107,6 +107,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.ColorPainter
 import coil.compose.AsyncImage
+import com.quailsync.app.data.TrailcamCamera
 import com.quailsync.app.data.TrailcamLatest
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
@@ -142,6 +143,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _brooders = MutableStateFlow<List<Brooder>>(emptyList())
     val brooders: StateFlow<List<Brooder>> = _brooders.asStateFlow()
+
+    // Outdoor (SPYPOINT) cameras, discovered from the server's observations log.
+    private val _outdoorCameras = MutableStateFlow<List<TrailcamCamera>>(emptyList())
+    val outdoorCameras: StateFlow<List<TrailcamCamera>> = _outdoorCameras.asStateFlow()
 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -220,6 +225,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         _cameraItems.value = items
+
+        // Outdoor cameras come from the server's trail-cam observations log.
+        // Best-effort: on failure or empty, no outdoor tabs are shown.
+        _outdoorCameras.value = try {
+            api.getTrailcamCameras()
+        } catch (e: Exception) {
+            Log.e("QuailSync", "Failed to load outdoor cameras", e)
+            emptyList()
+        }
+
         _isLoading.value = false
     }
 
@@ -376,15 +391,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 // Camera Screen
 // =====================================================================
 
-// Hardcoded SPYPOINT camera IDs for the outdoor cams. Replace these with the
-// real device IDs from your SPYPOINT account. Tabs are labelled positionally
-// ("Outdoor Cam 1", "Outdoor Cam 2", …) regardless of the underlying id; this
-// list can later be served by an API endpoint instead of being hardcoded.
-private val OUTDOOR_CAMERA_IDS = listOf(
-    "spypoint-cam-1",
-    "spypoint-cam-2",
-)
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
@@ -392,6 +398,7 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
     val isLoading by viewModel.isLoading.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val allBrooders by viewModel.brooders.collectAsState()
+    val outdoorCameras by viewModel.outdoorCameras.collectAsState()
     var showAddDialog by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableIntStateOf(0) }
 
@@ -409,9 +416,12 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // Tab 0 is the live IMX477 hutch stream; one tab per hardcoded outdoor cam.
-    val tabTitles = remember {
-        listOf("Hutch Camera") + OUTDOOR_CAMERA_IDS.indices.map { "Outdoor Cam ${it + 1}" }
+    // Tab 0 is the live IMX477 hutch stream; one tab per outdoor camera the
+    // server reports (server-supplied labels). Empty list -> no outdoor tabs.
+    val tabTitles = listOf("Hutch Camera") + outdoorCameras.map { it.label }
+    // If the outdoor list shrinks/empties while a later tab is selected, fall back.
+    LaunchedEffect(tabTitles.size) {
+        if (selectedTab > tabTitles.lastIndex) selectedTab = 0
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -494,10 +504,9 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
             }
         } else {
             // --- Outdoor Cam N ---
-            OutdoorCamTab(
-                cameraId = OUTDOOR_CAMERA_IDS[selectedTab - 1],
-                label = tabTitles[selectedTab],
-            )
+            outdoorCameras.getOrNull(selectedTab - 1)?.let { cam ->
+                OutdoorCamTab(cameraId = cam.cameraId, label = cam.label)
+            }
         }
     }
 

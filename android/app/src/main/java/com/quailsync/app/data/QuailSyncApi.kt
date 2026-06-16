@@ -308,6 +308,13 @@ data class TrailcamDetection(
     @SerializedName("bbox") val bbox: List<Double> = emptyList(),
 )
 
+/** A distinct outdoor camera (GET /api/trailcam/cameras), labelled by the
+ *  server in order of first appearance ("Outdoor Cam 1", …). */
+data class TrailcamCamera(
+    @SerializedName("camera_id") val cameraId: String,
+    @SerializedName("label") val label: String,
+)
+
 data class TargetTempResponse(
     @SerializedName("brooder_id") val brooderId: Int,
     @SerializedName("target_temp_f") val targetTempF: Double,
@@ -643,6 +650,9 @@ interface QuailSyncApi {
 
     @GET("api/birds/{id}/photos")
     suspend fun getBirdPhotos(@Path("id") id: Int): List<BirdPhoto>
+
+    @GET("api/trailcam/cameras")
+    suspend fun getTrailcamCameras(): List<TrailcamCamera>
 
     @GET("api/trailcam/latest/{camera_id}")
     suspend fun getTrailcamLatest(@Path("camera_id") cameraId: String): TrailcamLatest
