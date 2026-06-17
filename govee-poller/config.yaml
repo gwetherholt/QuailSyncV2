@@ -1,0 +1,15 @@
+# QuailSync Govee sensor poller — configuration.
+#
+# This file holds the Govee API key, so keep it out of version control on the
+# Pi and lock it down: `chmod 600 config.yaml`. Alternatively, leave the key as
+# the placeholder here and supply it via the GOVEE_API_KEY environment variable
+# (the env var wins when set), which keeps the secret out of the file entirely.
+
+govee_api_key: "YOUR_API_KEY_HERE"
+quailsync_api_url: "http://localhost:3000"
+poll_interval_seconds: 300  # 5 minutes
+
+# Optional. Unit the Govee API reports temperature in for your sensors; readings
+# are forwarded to QuailSync as Fahrenheit. Use "C" if your devices report
+# Celsius. Defaults to "F".
+# temperature_unit: "F"
