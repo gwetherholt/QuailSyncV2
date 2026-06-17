@@ -516,6 +516,51 @@ pub fn init_db(conn: &Connection) {
     )
     .expect("failed to create headcounts table");
 
+    // --- Govee H5179 WiFi sensors ---
+    // Commercial replacement for the DIY ESP32 sensors. Sensors auto-register
+    // on first reading (govee_device_id is the natural key) and are movable
+    // between brooders/hutches via sensor_assignments. The partial unique index
+    // enforces "at most one active (unassigned_at IS NULL) assignment per
+    // sensor" — re-assigning closes the old row before opening a new one.
+    // govee_sensors is created first so the FKs below resolve.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS govee_sensors (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            govee_device_id TEXT    UNIQUE NOT NULL,
+            name            TEXT,
+            model           TEXT,
+            first_seen      TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_seen       TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS sensor_assignments (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            govee_sensor_id INTEGER NOT NULL REFERENCES govee_sensors(id),
+            brooder_id      INTEGER NOT NULL REFERENCES brooders(id),
+            assigned_at     TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            unassigned_at   TEXT
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sensor_active_assignment
+            ON sensor_assignments(govee_sensor_id)
+            WHERE unassigned_at IS NULL;
+
+        CREATE TABLE IF NOT EXISTS govee_readings (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            govee_sensor_id INTEGER NOT NULL REFERENCES govee_sensors(id),
+            temperature_f   REAL    NOT NULL,
+            humidity        REAL    NOT NULL,
+            recorded_at     TEXT    NOT NULL,
+            created_at      TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_govee_readings_sensor
+            ON govee_readings(govee_sensor_id, recorded_at);
+        CREATE INDEX IF NOT EXISTS idx_sensor_assignments_brooder
+            ON sensor_assignments(brooder_id, unassigned_at);",
+    )
+    .expect("failed to create govee sensor tables");
+
     // --- Performance indexes ---
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_readings_brooder_received ON brooder_readings(brooder_id, received_at);

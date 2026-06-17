@@ -7,6 +7,7 @@ pub mod cameras;
 pub mod chick_groups;
 pub mod clutches;
 pub mod dev;
+pub mod govee;
 pub mod photos;
 pub mod processing;
 pub mod reconcile;

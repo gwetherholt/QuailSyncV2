@@ -240,6 +240,19 @@ pub fn build_app(state: AppState) -> Router {
             "/api/brooders/{id}/assign-graduated-group",
             axum::routing::post(brooders::assign_graduated_group),
         )
+        .route("/api/brooders/{id}/sensors", get(govee::brooder_sensors))
+        // Govee H5179 sensor ingest + management. The poller POSTs reading
+        // batches; sensors auto-register and are assignable to housing units.
+        // See routes/govee.rs.
+        .route(
+            "/api/govee/readings",
+            axum::routing::post(govee::ingest_readings),
+        )
+        .route("/api/govee/sensors", get(govee::list_sensors))
+        .route(
+            "/api/govee/sensors/{id}/assign",
+            axum::routing::put(govee::assign_sensor).delete(govee::unassign_sensor),
+        )
         .route("/api/birds/{id}/move", axum::routing::put(birds::move_bird))
         .route(
             "/api/cameras",

@@ -913,6 +913,79 @@ pub struct InbreedingCoefficient {
     pub safe: bool,
 }
 
+// ---------------------------------------------------------------------------
+// Govee H5179 WiFi temp/humidity sensors
+//
+// A separate Python poller hits the Govee cloud API and POSTs batches of
+// readings. Sensors auto-register on first sight and are dynamically
+// assignable to brooders/hutches (one active assignment per sensor at a time).
+// ---------------------------------------------------------------------------
+
+/// One reading in a `POST /api/govee/readings` batch. `model`/`name` are
+/// optional so the poller can omit metadata it doesn't have; they backfill the
+/// sensor's columns when it auto-registers. `recorded_at` is the timestamp the
+/// Govee API reported the reading at (ISO-8601), kept verbatim.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoveeReadingInput {
+    pub device_id: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub temperature_f: f64,
+    pub humidity: f64,
+    pub recorded_at: String,
+}
+
+/// Body of `POST /api/govee/readings`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoveeReadingsRequest {
+    pub readings: Vec<GoveeReadingInput>,
+}
+
+/// Response for `POST /api/govee/readings` — how many rows were stored.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoveeReadingsResponse {
+    pub stored: i64,
+}
+
+/// A sensor's current (open) assignment to a housing unit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoveeAssignment {
+    pub brooder_id: i64,
+    pub brooder_name: String,
+    pub assigned_at: String,
+}
+
+/// The most recent reading recorded for a sensor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoveeLatestReading {
+    pub temperature_f: f64,
+    pub humidity: f64,
+    pub recorded_at: String,
+}
+
+/// A registered Govee sensor with its current assignment (if any) and latest
+/// reading (if any). Returned by `GET /api/govee/sensors`,
+/// `GET /api/brooders/{id}/sensors`, and the assign endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoveeSensor {
+    pub id: i64,
+    pub govee_device_id: String,
+    pub name: Option<String>,
+    pub model: Option<String>,
+    pub first_seen: String,
+    pub last_seen: String,
+    pub assignment: Option<GoveeAssignment>,
+    pub latest_reading: Option<GoveeLatestReading>,
+}
+
+/// Body of `PUT /api/govee/sensors/{id}/assign`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssignSensorRequest {
+    pub brooder_id: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

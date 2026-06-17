@@ -2837,3 +2837,319 @@ mod reconcile_tests {
         assert!(!unmatched.contains(&"T-MALE-1".to_string()));
     }
 }
+
+// ---------------------------------------------------------------------------
+// Govee H5179 sensor ingest + dynamic assignment
+// ---------------------------------------------------------------------------
+
+mod govee_tests {
+    use super::*;
+    use quailsync_common::{
+        AssignSensorRequest, CreateBrooder, GoveeReadingInput, GoveeReadingsRequest,
+        GoveeReadingsResponse, GoveeSensor, HousingType, LifeStage,
+    };
+
+    /// Create a housing unit and return its id.
+    async fn create_brooder(base: &str, client: &reqwest::Client, name: &str) -> i64 {
+        let b: serde_json::Value = client
+            .post(format!("{base}/api/brooders"))
+            .json(&CreateBrooder {
+                name: name.into(),
+                lineage_id: None,
+                life_stage: LifeStage::Adult,
+                qr_code: String::new(),
+                notes: None,
+                camera_url: None,
+                housing_type: Some(HousingType::Brooder),
+            })
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        b["id"].as_i64().unwrap()
+    }
+
+    fn reading(device_id: &str, temp: f64, hum: f64, at: &str) -> GoveeReadingInput {
+        GoveeReadingInput {
+            device_id: device_id.into(),
+            model: Some("H5179".into()),
+            name: Some("Sensor A - White Label".into()),
+            temperature_f: temp,
+            humidity: hum,
+            recorded_at: at.into(),
+        }
+    }
+
+    async fn post_readings(
+        base: &str,
+        client: &reqwest::Client,
+        readings: Vec<GoveeReadingInput>,
+    ) -> reqwest::Response {
+        client
+            .post(format!("{base}/api/govee/readings"))
+            .json(&GoveeReadingsRequest { readings })
+            .send()
+            .await
+            .unwrap()
+    }
+
+    async fn list_sensors(base: &str, client: &reqwest::Client) -> Vec<GoveeSensor> {
+        client
+            .get(format!("{base}/api/govee/sensors"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn ingest_auto_registers_sensor_and_stores_reading() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+
+        let resp = post_readings(
+            &base,
+            &client,
+            vec![reading(
+                "AA:BB:CC:DD:EE:FF",
+                78.5,
+                45.2,
+                "2025-06-17T12:00:00Z",
+            )],
+        )
+        .await;
+        assert_eq!(resp.status(), 201);
+        let body: GoveeReadingsResponse = resp.json().await.unwrap();
+        assert_eq!(body.stored, 1);
+
+        let sensors = list_sensors(&base, &client).await;
+        assert_eq!(sensors.len(), 1, "device auto-registered exactly once");
+        let s = &sensors[0];
+        assert_eq!(s.govee_device_id, "AA:BB:CC:DD:EE:FF");
+        assert_eq!(s.name.as_deref(), Some("Sensor A - White Label"));
+        assert_eq!(s.model.as_deref(), Some("H5179"));
+        assert!(s.assignment.is_none(), "unassigned on first sight");
+        let latest = s.latest_reading.as_ref().expect("has a latest reading");
+        assert!((latest.temperature_f - 78.5).abs() < f64::EPSILON);
+        assert!((latest.humidity - 45.2).abs() < f64::EPSILON);
+        assert_eq!(latest.recorded_at, "2025-06-17T12:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn ingest_known_device_does_not_duplicate_sensor() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+
+        post_readings(
+            &base,
+            &client,
+            vec![reading("DEV-1", 70.0, 40.0, "2025-06-17T10:00:00Z")],
+        )
+        .await;
+        // Same device, later reading — must reuse the sensor and update latest.
+        post_readings(
+            &base,
+            &client,
+            vec![reading("DEV-1", 72.5, 41.0, "2025-06-17T11:00:00Z")],
+        )
+        .await;
+
+        let sensors = list_sensors(&base, &client).await;
+        assert_eq!(sensors.len(), 1, "no duplicate sensor for the same device");
+        let latest = sensors[0].latest_reading.as_ref().unwrap();
+        assert_eq!(latest.recorded_at, "2025-06-17T11:00:00Z");
+        assert!((latest.temperature_f - 72.5).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn ingest_batch_stores_all_and_registers_each_device() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+
+        let resp = post_readings(
+            &base,
+            &client,
+            vec![
+                reading("DEV-A", 71.0, 40.0, "2025-06-17T12:00:00Z"),
+                reading("DEV-B", 80.0, 50.0, "2025-06-17T12:00:00Z"),
+                reading("DEV-A", 71.5, 41.0, "2025-06-17T12:05:00Z"),
+            ],
+        )
+        .await;
+        assert_eq!(resp.status(), 201);
+        let body: GoveeReadingsResponse = resp.json().await.unwrap();
+        assert_eq!(body.stored, 3);
+
+        let sensors = list_sensors(&base, &client).await;
+        assert_eq!(sensors.len(), 2, "two distinct devices registered");
+    }
+
+    #[tokio::test]
+    async fn assign_reassign_and_query_by_brooder() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let brooder_a = create_brooder(&base, &client, "Brooder A").await;
+        let brooder_b = create_brooder(&base, &client, "Brooder B").await;
+
+        post_readings(
+            &base,
+            &client,
+            vec![reading("DEV-MOVE", 75.0, 44.0, "2025-06-17T12:00:00Z")],
+        )
+        .await;
+        let sensor_id = list_sensors(&base, &client).await[0].id;
+
+        // Assign to A — response carries the new assignment.
+        let resp = client
+            .put(format!("{base}/api/govee/sensors/{sensor_id}/assign"))
+            .json(&AssignSensorRequest {
+                brooder_id: brooder_a,
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let s: GoveeSensor = resp.json().await.unwrap();
+        let asg = s.assignment.as_ref().expect("assigned");
+        assert_eq!(asg.brooder_id, brooder_a);
+        assert_eq!(asg.brooder_name, "Brooder A");
+
+        // Brooder A lists it (with its latest reading); B doesn't.
+        let a_sensors: Vec<GoveeSensor> = client
+            .get(format!("{base}/api/brooders/{brooder_a}/sensors"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(a_sensors.len(), 1);
+        assert!(a_sensors[0].latest_reading.is_some());
+        let b_sensors: Vec<GoveeSensor> = client
+            .get(format!("{base}/api/brooders/{brooder_b}/sensors"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(b_sensors.is_empty());
+
+        // Reassign to B — exactly one active assignment moves over.
+        let resp = client
+            .put(format!("{base}/api/govee/sensors/{sensor_id}/assign"))
+            .json(&AssignSensorRequest {
+                brooder_id: brooder_b,
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let s: GoveeSensor = resp.json().await.unwrap();
+        assert_eq!(s.assignment.as_ref().unwrap().brooder_id, brooder_b);
+
+        let a_after: Vec<GoveeSensor> = client
+            .get(format!("{base}/api/brooders/{brooder_a}/sensors"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(a_after.is_empty(), "old assignment was closed");
+        let b_after: Vec<GoveeSensor> = client
+            .get(format!("{base}/api/brooders/{brooder_b}/sensors"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(b_after.len(), 1, "exactly one active assignment");
+    }
+
+    #[tokio::test]
+    async fn unassign_clears_active_assignment() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let brooder = create_brooder(&base, &client, "Brooder").await;
+        post_readings(
+            &base,
+            &client,
+            vec![reading("DEV-X", 70.0, 40.0, "2025-06-17T12:00:00Z")],
+        )
+        .await;
+        let sensor_id = list_sensors(&base, &client).await[0].id;
+
+        client
+            .put(format!("{base}/api/govee/sensors/{sensor_id}/assign"))
+            .json(&AssignSensorRequest {
+                brooder_id: brooder,
+            })
+            .send()
+            .await
+            .unwrap();
+
+        let resp = client
+            .delete(format!("{base}/api/govee/sensors/{sensor_id}/assign"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 204);
+
+        // No longer assigned, and the brooder lists no sensors.
+        let sensors = list_sensors(&base, &client).await;
+        assert!(sensors[0].assignment.is_none());
+        let b_sensors: Vec<GoveeSensor> = client
+            .get(format!("{base}/api/brooders/{brooder}/sensors"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(b_sensors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn assign_unknown_sensor_is_404() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let brooder = create_brooder(&base, &client, "Brooder").await;
+
+        let resp = client
+            .put(format!("{base}/api/govee/sensors/9999/assign"))
+            .json(&AssignSensorRequest {
+                brooder_id: brooder,
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[tokio::test]
+    async fn assign_unknown_brooder_is_400() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        post_readings(
+            &base,
+            &client,
+            vec![reading("DEV-Y", 70.0, 40.0, "2025-06-17T12:00:00Z")],
+        )
+        .await;
+        let sensor_id = list_sensors(&base, &client).await[0].id;
+
+        let resp = client
+            .put(format!("{base}/api/govee/sensors/{sensor_id}/assign"))
+            .json(&AssignSensorRequest { brooder_id: 9999 })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+    }
+}
