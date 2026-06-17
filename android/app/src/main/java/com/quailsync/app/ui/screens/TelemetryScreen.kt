@@ -106,19 +106,22 @@ class TelemetryViewModel(application: Application) : AndroidViewModel(applicatio
 
     private suspend fun loadDataSuspend() {
         try {
-            // Telemetry screen is sensor-only: temperature, humidity, and the
-            // alerts they generate. Hutches don't have environmental sensors
-            // attached, so they have nothing to show here — filtering at fetch
-            // time also skips the per-id readings/alerts/target-temp round
-            // trips for them.
-            val brooderList = api.getBrooders()
-                .distinctBy { it.id }
-                .filter { (it.housingType ?: "brooder").lowercase() != "hutch" }
+            // List every housing unit so all types (brooder, incubator, hutch)
+            // can be managed — including deleted — from here. Hutches have no
+            // environmental sensors, so we skip the per-id readings/alerts/
+            // target-temp round trips for them (they'd just be empty) and show
+            // them with no telemetry, but still render the card + delete action.
+            val brooderList = api.getBrooders().distinctBy { it.id }
             val states = brooderList.map { brooder ->
-                val readings = try { api.getBrooderReadings(brooder.id) } catch (_: Exception) { emptyList() }
-                val alerts = try { api.getBrooderAlerts(brooder.id) } catch (_: Exception) { emptyList() }
-                val targetTemp = try { api.getBrooderTargetTemp(brooder.id) } catch (_: Exception) { null }
-                BrooderState(brooder, readings, alerts, targetTemp)
+                val isHutch = (brooder.housingType ?: "brooder").lowercase() == "hutch"
+                if (isHutch) {
+                    BrooderState(brooder, emptyList(), emptyList(), null)
+                } else {
+                    val readings = try { api.getBrooderReadings(brooder.id) } catch (_: Exception) { emptyList() }
+                    val alerts = try { api.getBrooderAlerts(brooder.id) } catch (_: Exception) { emptyList() }
+                    val targetTemp = try { api.getBrooderTargetTemp(brooder.id) } catch (_: Exception) { null }
+                    BrooderState(brooder, readings, alerts, targetTemp)
+                }
             }
             _brooders.value = states
             _chickGroups.value = try { api.getChickGroups() } catch (_: Exception) { emptyList() }
