@@ -292,13 +292,16 @@ data class BirdPhoto(
 )
 
 /** Latest outdoor-camera observation (GET /api/trailcam/latest/{camera_id}).
- *  `imageUrl` is server-relative — prepend the configured server base URL. */
+ *  `imageUrl`/`annotatedImageUrl` are server-relative — prepend the configured
+ *  server base URL. `annotatedImageUrl` (bounding boxes drawn on) is null when
+ *  no annotated copy exists; fall back to `imageUrl` then. */
 data class TrailcamLatest(
     @SerializedName("camera_id") val cameraId: String? = null,
     @SerializedName("bird_count") val birdCount: Int? = null,
     @SerializedName("timestamp") val timestamp: String? = null,
     @SerializedName("confidence_avg") val confidenceAvg: Double? = null,
     @SerializedName("image_url") val imageUrl: String? = null,
+    @SerializedName("annotated_image_url") val annotatedImageUrl: String? = null,
     @SerializedName("detections") val detections: List<TrailcamDetection> = emptyList(),
 )
 

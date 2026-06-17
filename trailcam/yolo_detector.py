@@ -229,6 +229,62 @@ def _read_sidecar(image_path: Path) -> tuple[str, str | None]:
     return image_path.parent.name, None
 
 
+def annotate_image(image_path: Path | str, result: DetectionResult, dest_path: Path | str) -> bool:
+    """Draw ``result``'s detections onto a copy of the image and save it.
+
+    Each detection gets a green rectangle around its bbox plus a caption like
+    ``"Quail 87%"`` (title-cased class name + confidence percentage). The
+    annotated copy is written as JPEG to ``dest_path``.
+
+    Best-effort: returns ``True`` on success, ``False`` (with a warning) if the
+    image can't be opened/drawn/saved — annotation never aborts the pipeline.
+    Pillow is imported lazily so importing this module stays cheap.
+    """
+    image_path = Path(image_path)
+    dest_path = Path(dest_path)
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+
+        with Image.open(image_path) as src:
+            img = src.convert("RGB")
+
+        draw = ImageDraw.Draw(img)
+        try:
+            font = ImageFont.load_default()
+        except Exception:  # pragma: no cover - font backend missing
+            font = None
+
+        green = (0, 200, 0)
+        white = (255, 255, 255)
+        for det in result.detections:
+            if len(det.bbox) != 4:
+                continue
+            x1, y1, x2, y2 = det.bbox
+            draw.rectangle([x1, y1, x2, y2], outline=green, width=3)
+
+            label = f"{det.class_name.title()} {round(det.confidence * 100)}%"
+            # Measure the caption so its background box hugs the text.
+            try:
+                left, top, right, bottom = draw.textbbox((0, 0), label, font=font)
+                tw, th = right - left, bottom - top
+            except Exception:  # pragma: no cover - very old Pillow
+                tw, th = len(label) * 6, 11
+
+            # Caption sits just above the bbox; tuck it inside if there's no room.
+            ly = y1 - th - 4
+            if ly < 0:
+                ly = y1 + 2
+            draw.rectangle([x1, ly, x1 + tw + 6, ly + th + 4], fill=green)
+            draw.text((x1 + 3, ly + 2), label, fill=white, font=font)
+
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(dest_path, format="JPEG", quality=90)
+        return True
+    except Exception as exc:  # noqa: BLE001 — annotation is best-effort
+        logger.warning("Could not annotate %s: %s", image_path, exc)
+        return False
+
+
 # ===========================================================================
 # Staging-directory batch processing
 # ===========================================================================
@@ -278,13 +334,18 @@ def process_staging(
             json.dumps(result.to_dict(), indent=2), encoding="utf-8"
         )
 
+        # …and an annotated copy with bounding boxes drawn on it. Best-effort:
+        # if it fails the original still gets processed (just no annotated file).
+        annotated_path = image_path.with_name(f"{image_path.stem}_annotated.jpg")
+        annotate_image(image_path, result, annotated_path)
+
         # …then move the whole set into processed/, preserving the camera subdir.
         relative_dir = image_path.parent.relative_to(staging_dir)
         dest_dir = processed_dir / relative_dir
         dest_dir.mkdir(parents=True, exist_ok=True)
 
         sidecar_path = image_path.with_suffix(".json")
-        for src in (image_path, sidecar_path, detections_path):
+        for src in (image_path, sidecar_path, detections_path, annotated_path):
             if src.exists():
                 shutil.move(str(src), str(dest_dir / src.name))
 

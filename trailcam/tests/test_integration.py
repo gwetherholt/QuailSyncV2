@@ -48,7 +48,10 @@ def test_full_chain(tmp_path, mock_yolo):
     # Images moved out of staging into processed/, camera subdir preserved.
     assert list(camera_dir.glob("*.jpg")) == []
     processed_camera = processed / "test_camera"
-    assert len(list(processed_camera.glob("*.jpg"))) == 3
+    # Three raw originals, each with its annotated (bounding-box) copy.
+    raw_jpgs = [p for p in processed_camera.glob("*.jpg") if not p.name.endswith("_annotated.jpg")]
+    assert len(raw_jpgs) == 3
+    assert len(list(processed_camera.glob("*_annotated.jpg"))) == 3
 
     # Detection results + original sidecars all landed in processed/.
     assert len(list(processed_camera.glob("*_detections.json"))) == 3

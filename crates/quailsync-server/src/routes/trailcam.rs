@@ -113,12 +113,30 @@ pub(crate) async fn trailcam_latest(
 
     // Build the image URL from the stored image_path's filename (basename only,
     // so the server never echoes a host path).
-    let image_url = obs
+    let filename = obs
         .get("image_path")
         .and_then(Value::as_str)
         .and_then(|p| p.rsplit(['/', '\\']).next())
-        .filter(|f| !f.is_empty())
-        .map(|filename| json!(format!("/api/trailcam/image/{camera_id}/{filename}")))
+        .filter(|f| !f.is_empty());
+
+    let image_url = filename
+        .map(|f| json!(format!("/api/trailcam/image/{camera_id}/{f}")))
+        .unwrap_or(Value::Null);
+
+    // The detector writes a `{stem}_annotated.jpg` copy with bounding boxes
+    // drawn on. Only advertise it when it's actually on disk, so the client can
+    // fall back to the raw image when there's no annotated version.
+    let annotated_image_url = filename
+        .and_then(annotated_filename)
+        .filter(|annotated| {
+            state
+                .trailcam
+                .processed_dir
+                .join(&camera_id)
+                .join(annotated)
+                .is_file()
+        })
+        .map(|annotated| json!(format!("/api/trailcam/image/{camera_id}/{annotated}")))
         .unwrap_or(Value::Null);
 
     let body = json!({
@@ -128,8 +146,20 @@ pub(crate) async fn trailcam_latest(
         "confidence_avg": obs.get("average_confidence").cloned().unwrap_or(Value::Null),
         "detections": obs.get("detections").cloned().unwrap_or_else(|| json!([])),
         "image_url": image_url,
+        "annotated_image_url": annotated_image_url,
     });
     (StatusCode::OK, Json(body)).into_response()
+}
+
+/// `foo.jpg` -> `foo_annotated.jpg` (case-insensitive `.jpg`); `None` for any
+/// name that isn't a `.jpg`.
+fn annotated_filename(filename: &str) -> Option<String> {
+    let len = filename.len();
+    if len >= 4 && filename[len - 4..].eq_ignore_ascii_case(".jpg") {
+        Some(format!("{}_annotated.jpg", &filename[..len - 4]))
+    } else {
+        None
+    }
 }
 
 /// `GET /api/trailcam/image/{camera_id}/{filename}` — serve a processed JPEG.

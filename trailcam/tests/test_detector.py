@@ -6,7 +6,7 @@ import json
 import pytest
 from PIL import Image
 
-from yolo_detector import Detection, DetectionResult, detect, process_staging
+from yolo_detector import Detection, DetectionResult, annotate_image, detect, process_staging
 
 
 def test_detect_returns_expected_result(tmp_path, mock_yolo, make_image_with_sidecar):
@@ -61,7 +61,11 @@ def test_process_staging_moves_files_and_writes_detections(tmp_path, mock_yolo, 
     # Staging emptied of images; processed populated.
     assert list(camera_dir.glob("*.jpg")) == []
     processed_camera = processed / "test_camera"
-    assert len(list(processed_camera.glob("*.jpg"))) == 2
+    # Two raw originals plus their two annotated copies.
+    raw_jpgs = [p for p in processed_camera.glob("*.jpg") if not p.name.endswith("_annotated.jpg")]
+    annotated_jpgs = list(processed_camera.glob("*_annotated.jpg"))
+    assert len(raw_jpgs) == 2
+    assert len(annotated_jpgs) == 2
 
     detection_files = list(processed_camera.glob("*_detections.json"))
     assert len(detection_files) == 2
@@ -150,6 +154,63 @@ def test_process_staging_uses_per_camera_models(
     payload_b = json.loads(next((processed / "cam-b").glob("*_detections.json")).read_text())
     assert payload_a["model_version"] == "a.pt"  # mapped camera
     assert payload_b["model_version"] == "global.pt"  # unmapped -> fallback
+
+
+def test_annotate_image_writes_jpeg(tmp_path):
+    from PIL import Image
+
+    src = tmp_path / "src.jpg"
+    Image.new("RGB", (640, 480), color=(30, 60, 90)).save(src, format="JPEG")
+    result = DetectionResult(
+        image_path=str(src),
+        camera_id="cam",
+        timestamp=None,
+        total_count=1,
+        detections=[Detection(class_name="quail", confidence=0.87, bbox=[100.0, 100.0, 200.0, 200.0])],
+        inference_time_ms=1.0,
+        model_version="stub.pt",
+    )
+
+    dest = tmp_path / "src_annotated.jpg"
+    assert annotate_image(src, result, dest) is True
+
+    # A real, openable JPEG with the same dimensions as the source.
+    assert dest.exists()
+    with Image.open(dest) as out:
+        assert out.format == "JPEG"
+        assert out.size == (640, 480)
+
+
+def test_annotate_image_bad_source_returns_false(tmp_path):
+    result = DetectionResult(
+        image_path="missing.jpg",
+        camera_id="cam",
+        timestamp=None,
+        total_count=0,
+        detections=[],
+        inference_time_ms=0.0,
+        model_version="stub.pt",
+    )
+    # Non-existent source -> best-effort failure, no exception.
+    assert annotate_image(tmp_path / "nope.jpg", result, tmp_path / "out.jpg") is False
+    assert not (tmp_path / "out.jpg").exists()
+
+
+def test_process_staging_writes_annotated_image(tmp_path, mock_yolo, make_image_with_sidecar):
+    from PIL import Image
+
+    staging = tmp_path / "staging"
+    processed = tmp_path / "processed"
+    make_image_with_sidecar(staging / "test_camera", stem="20260101-120000_a")
+
+    process_staging(staging_dir=staging, processed_dir=processed, model_path="stub.pt")
+
+    annotated = processed / "test_camera" / "20260101-120000_a_annotated.jpg"
+    assert annotated.exists()
+    with Image.open(annotated) as out:
+        assert out.format == "JPEG"
+    # Raw original is moved across too, alongside the annotated copy.
+    assert (processed / "test_camera" / "20260101-120000_a.jpg").exists()
 
 
 def test_process_staging_empty_dir_returns_nothing(tmp_path, mock_yolo):

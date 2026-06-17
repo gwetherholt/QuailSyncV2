@@ -416,13 +416,9 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // Tab 0 is the live IMX477 hutch stream; one tab per outdoor camera the
-    // server reports (server-supplied labels). Empty list -> no outdoor tabs.
-    val tabTitles = listOf("Hutch Camera") + outdoorCameras.map { it.label }
-    // If the outdoor list shrinks/empties while a later tab is selected, fall back.
-    LaunchedEffect(tabTitles.size) {
-        if (selectedTab > tabTitles.lastIndex) selectedTab = 0
-    }
+    // Two fixed tabs: the live IMX477 hutch stream, and a scrollable list of all
+    // outdoor cameras the server reports (one card each, dynamically).
+    val tabTitles = listOf("Hutch Camera", "Outdoor Cams")
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
@@ -503,10 +499,12 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
                 }
             }
         } else {
-            // --- Outdoor Cam N ---
-            outdoorCameras.getOrNull(selectedTab - 1)?.let { cam ->
-                OutdoorCamTab(cameraId = cam.cameraId, label = cam.label)
-            }
+            // --- Outdoor Cams: vertical scrollable list, one card per camera ---
+            OutdoorCamsList(
+                cameras = outdoorCameras,
+                isLoadingCameras = isLoading,
+                onRefresh = { viewModel.refresh() },
+            )
         }
     }
 
@@ -516,7 +514,7 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
 }
 
 // =====================================================================
-// Outdoor Cam tab — latest still capture + bird-count overlay
+// Outdoor Cams — scrollable list of every outdoor camera, one card each
 // =====================================================================
 
 private sealed interface OutdoorState {
@@ -526,110 +524,157 @@ private sealed interface OutdoorState {
     data class Data(val latest: TrailcamLatest) : OutdoorState
 }
 
+/** The "Outdoor Cams" tab: a pull-to-refresh vertical list with one
+ *  [OutdoorCamCard] per camera. New cameras in [cameras] appear automatically. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun OutdoorCamTab(cameraId: String, label: String) {
-    val context = LocalContext.current
-    val baseUrl = remember { ServerConfig.getServerUrl(context).trimEnd('/') }
-    val api = remember { QuailSyncApi.create(ServerConfig.getServerUrl(context)) }
+fun OutdoorCamsList(
+    cameras: List<TrailcamCamera>,
+    isLoadingCameras: Boolean,
+    onRefresh: () -> Unit,
+) {
     val scope = rememberCoroutineScope()
-
-    var state by remember(cameraId) { mutableStateOf<OutdoorState>(OutdoorState.Loading) }
-    var isRefreshing by remember(cameraId) { mutableStateOf(false) }
-
-    suspend fun fetchLatest() {
-        try {
-            val latest = withContext(Dispatchers.IO) { api.getTrailcamLatest(cameraId) }
-            state = OutdoorState.Data(latest)
-        } catch (e: retrofit2.HttpException) {
-            // 404 = nothing captured for this camera yet (vs. a real error).
-            state = if (e.code() == 404) OutdoorState.Empty else OutdoorState.Error("Server error (HTTP ${e.code()})")
-        } catch (e: Exception) {
-            Log.e("QuailSync", "Failed to load outdoor cam $cameraId", e)
-            state = OutdoorState.Error(e.message ?: "Couldn't reach the server")
-        }
-    }
-
-    LaunchedEffect(cameraId) {
-        state = OutdoorState.Loading
-        fetchLatest()
-    }
+    var isRefreshing by remember { mutableStateOf(false) }
+    // Bumped on pull-to-refresh so every card re-fetches its latest capture.
+    var refreshKey by remember { mutableIntStateOf(0) }
 
     PullToRefreshBox(
         isRefreshing = isRefreshing,
         onRefresh = {
             scope.launch {
                 isRefreshing = true
-                fetchLatest()
+                onRefresh()
+                refreshKey++
                 isRefreshing = false
             }
         },
         modifier = Modifier.fillMaxSize(),
     ) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-        ) {
-            when (val s = state) {
-                is OutdoorState.Loading ->
-                    OutdoorMessage(label) {
-                        CircularProgressIndicator(color = SageGreen, modifier = Modifier.size(32.dp), strokeWidth = 2.dp)
+        when {
+            cameras.isEmpty() && isLoadingCameras -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = SageGreen)
+                }
+            }
+            cameras.isEmpty() -> {
+                // Empty state — still scrollable so the pull-to-refresh works.
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Spacer(Modifier.height(64.dp))
+                    Icon(Icons.Default.PhotoCamera, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "No outdoor cameras yet.\nPull down to refresh.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+            else -> {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    items(cameras, key = { it.cameraId }) { cam ->
+                        OutdoorCamCard(cameraId = cam.cameraId, label = cam.label, refreshKey = refreshKey)
                     }
-                is OutdoorState.Empty ->
-                    OutdoorMessage(label) {
-                        Icon(Icons.Default.PhotoCamera, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            "No captures yet from $label.\nPull down to refresh.",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                        )
-                    }
-                is OutdoorState.Error ->
-                    OutdoorMessage(label) {
-                        Icon(Icons.Default.VideocamOff, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            "${s.message}.\nPull down to retry.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                        )
-                    }
-                is OutdoorState.Data -> OutdoorCamContent(s.latest, baseUrl, label)
+                    item { Spacer(Modifier.height(8.dp)) }
+                }
             }
         }
     }
 }
 
-/** Centered single-message column (loading / empty / error), kept tall enough
- *  that the pull-to-refresh gesture is comfortable. */
+/** One outdoor camera: header label + its latest annotated capture, bird-count
+ *  badge, timestamp, and average confidence. Fetches its own latest observation;
+ *  re-fetches when [refreshKey] changes. */
 @Composable
-private fun OutdoorMessage(label: String, content: @Composable ColumnScope.() -> Unit) {
-    Column(Modifier.fillMaxWidth()) {
-        Text(label, style = MaterialTheme.typography.titleLarge)
-        Spacer(Modifier.height(48.dp))
-        Column(
-            Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            content = content,
-        )
+fun OutdoorCamCard(cameraId: String, label: String, refreshKey: Int) {
+    val context = LocalContext.current
+    val baseUrl = remember { ServerConfig.getServerUrl(context).trimEnd('/') }
+    val api = remember { QuailSyncApi.create(ServerConfig.getServerUrl(context)) }
+
+    var state by remember(cameraId) { mutableStateOf<OutdoorState>(OutdoorState.Loading) }
+
+    LaunchedEffect(cameraId, refreshKey) {
+        state = OutdoorState.Loading
+        state = try {
+            val latest = withContext(Dispatchers.IO) { api.getTrailcamLatest(cameraId) }
+            OutdoorState.Data(latest)
+        } catch (e: retrofit2.HttpException) {
+            // 404 = nothing captured for this camera yet (vs. a real error).
+            if (e.code() == 404) OutdoorState.Empty else OutdoorState.Error("Server error (HTTP ${e.code()})")
+        } catch (e: Exception) {
+            Log.e("QuailSync", "Failed to load outdoor cam $cameraId", e)
+            OutdoorState.Error(e.message ?: "Couldn't reach the server")
+        }
+    }
+
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(2.dp),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(label, style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(12.dp))
+            when (val s = state) {
+                is OutdoorState.Loading -> OutdoorCardMessage {
+                    CircularProgressIndicator(color = SageGreen, modifier = Modifier.size(32.dp), strokeWidth = 2.dp)
+                }
+                is OutdoorState.Empty -> OutdoorCardMessage {
+                    Icon(Icons.Default.PhotoCamera, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "No captures yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                is OutdoorState.Error -> OutdoorCardMessage {
+                    Icon(Icons.Default.VideocamOff, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        s.message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                is OutdoorState.Data -> OutdoorCamCardContent(s.latest, baseUrl, label)
+            }
+        }
     }
 }
 
+/** Centered single-message column (loading / empty / error) inside a card. */
 @Composable
-private fun OutdoorCamContent(latest: TrailcamLatest, baseUrl: String, label: String) {
-    val imageUrl = latest.imageUrl?.let { if (it.startsWith("http")) it else "$baseUrl$it" }
+private fun OutdoorCardMessage(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        content = content,
+    )
+}
+
+@Composable
+private fun OutdoorCamCardContent(latest: TrailcamLatest, baseUrl: String, label: String) {
+    fun absolute(url: String?): String? = url?.let { if (it.startsWith("http")) it else "$baseUrl$it" }
+    // Prefer the annotated image (bounding boxes); fall back to the raw capture.
+    val imageUrl = absolute(latest.annotatedImageUrl) ?: absolute(latest.imageUrl)
     val count = latest.birdCount ?: 0
     val placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant)
 
     Column(Modifier.fillMaxWidth()) {
-        Text(label, style = MaterialTheme.typography.titleLarge)
-        Spacer(Modifier.height(12.dp))
-
         Box(
             Modifier
                 .fillMaxWidth()

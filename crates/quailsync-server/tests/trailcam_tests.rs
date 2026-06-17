@@ -148,6 +148,74 @@ async fn latest_returns_most_recent_for_camera() {
 }
 
 #[tokio::test]
+async fn latest_annotated_url_null_when_no_annotated_file() {
+    let processed = unique_processed_dir();
+    write_observation(
+        &processed,
+        "camA",
+        "2026-06-15T07:30:00",
+        2,
+        0.8,
+        "20260615-073000_c.jpg",
+    );
+    // No `_annotated.jpg` on disk -> annotated_image_url is null, raw url stands.
+    let base = spawn_app(&processed).await;
+    let body: Value = client()
+        .get(format!("{base}/api/trailcam/latest/camA"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        body["image_url"],
+        "/api/trailcam/image/camA/20260615-073000_c.jpg"
+    );
+    assert!(body["annotated_image_url"].is_null());
+}
+
+#[tokio::test]
+async fn latest_returns_annotated_url_when_file_present() {
+    let processed = unique_processed_dir();
+    write_observation(
+        &processed,
+        "camA",
+        "2026-06-15T07:30:00",
+        2,
+        0.8,
+        "20260615-073000_c.jpg",
+    );
+    // The detector's annotated copy exists on disk -> it's advertised.
+    write_image(
+        &processed,
+        "camA",
+        "20260615-073000_c_annotated.jpg",
+        &[0xFF, 0xD8, 0xFF],
+    );
+
+    let base = spawn_app(&processed).await;
+    let body: Value = client()
+        .get(format!("{base}/api/trailcam/latest/camA"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        body["image_url"],
+        "/api/trailcam/image/camA/20260615-073000_c.jpg"
+    );
+    assert_eq!(
+        body["annotated_image_url"],
+        "/api/trailcam/image/camA/20260615-073000_c_annotated.jpg"
+    );
+}
+
+#[tokio::test]
 async fn latest_404_for_unknown_camera() {
     let processed = unique_processed_dir();
     write_observation(&processed, "camA", "2026-06-15T05:00:00", 3, 0.8, "x.jpg");
