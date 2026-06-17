@@ -31,11 +31,13 @@ try:
     from .spypoint_poller import PhotoState, SpypointPoller
     from .yolo_detector import process_staging
     from .quailsync_bridge import QuailSyncBridge
+    from .roboflow_uploader import upload_if_enabled
 except ImportError:
     import config
     from spypoint_poller import PhotoState, SpypointPoller
     from yolo_detector import process_staging
     from quailsync_bridge import QuailSyncBridge
+    from roboflow_uploader import upload_if_enabled
 
 logger = logging.getLogger("trailcam.pipeline")
 
@@ -88,6 +90,12 @@ def run_once(
     # 3. Post the detections to QuailSync (currently the JSONL fallback).
     success, failure = bridge.post_batch(results)
     logger.info("Cycle complete: %d observation(s) posted, %d failed", success, failure)
+
+    # 4. Optionally push images + predictions to Roboflow as reviewable
+    #    pre-labels. Opt-in (ROBOFLOW_UPLOAD_ENABLED) and best-effort — a no-op
+    #    when disabled / unconfigured, and never raises into the cycle.
+    upload_if_enabled(results)
+
     return success, failure
 
 

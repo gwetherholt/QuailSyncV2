@@ -81,6 +81,25 @@ def model_for_camera(camera_id: str | None) -> Path:
             return override
     return YOLO_MODEL_PATH
 
+
+# --- Roboflow pre-annotation upload (optional, opt-in) ---------------------
+# After detection, optionally push each processed image plus its YOLO
+# predictions to Roboflow as *reviewable pre-labels* (is_prediction=True), so a
+# human can correct them in Roboflow's annotation UI before they become training
+# data. Strictly opt-in and best-effort: the upload only runs when
+# ROBOFLOW_UPLOAD_ENABLED is truthy AND ROBOFLOW_API_KEY is set, and any failure
+# is swallowed so it never breaks the pipeline.
+def _env_flag(name: str, default: str = "false") -> bool:
+    return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
+
+
+ROBOFLOW_UPLOAD_ENABLED: bool = _env_flag("ROBOFLOW_UPLOAD_ENABLED", "false")
+ROBOFLOW_API_KEY: str | None = os.environ.get("ROBOFLOW_API_KEY")
+ROBOFLOW_WORKSPACE: str = os.environ.get("ROBOFLOW_WORKSPACE", "quail")
+ROBOFLOW_PROJECT: str = os.environ.get("ROBOFLOW_PROJECT", "quail-detector-3bm3l")
+# Roboflow groups uploads into named batches in the annotation UI.
+ROBOFLOW_BATCH_NAME: str = os.environ.get("ROBOFLOW_BATCH_NAME", "trailcam-auto")
+
 # --- QuailSync server ------------------------------------------------------
 QUAILSYNC_API_URL: str = os.environ.get(
     "QUAILSYNC_API_URL", "https://quailsync.tail01d133.ts.net"
@@ -120,6 +139,9 @@ if __name__ == "__main__":
     print(f"CAMERA_MODEL_MAP  = {len(CAMERA_MODEL_MAP)} override(s): {dict(CAMERA_MODEL_MAP)}")
     print(f"YOLO_CONFIDENCE   = {YOLO_CONFIDENCE}")
     print(f"QUAILSYNC_API_URL = {QUAILSYNC_API_URL}")
+    print(f"ROBOFLOW_UPLOAD   = {'enabled' if ROBOFLOW_UPLOAD_ENABLED else 'disabled'}")
+    print(f"ROBOFLOW_API_KEY  = {'<set>' if ROBOFLOW_API_KEY else '<unset>'}")
+    print(f"ROBOFLOW_PROJECT  = {ROBOFLOW_WORKSPACE}/{ROBOFLOW_PROJECT}")
     print(f"POLL_INTERVAL     = {POLL_INTERVAL}s")
     print(f"PHOTO_LIMIT       = {PHOTO_LIMIT}")
     print(f"SPYPOINT_USERNAME = {'<set>' if SPYPOINT_USERNAME else '<unset>'}")

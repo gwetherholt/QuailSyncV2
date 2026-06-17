@@ -1,3 +1,6 @@
 pyspypoint>=2.0.0
 requests
 ultralytics
+
+# Optional — only needed when ROBOFLOW_UPLOAD_ENABLED=true (pre-annotation push).
+roboflow
