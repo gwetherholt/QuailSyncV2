@@ -1624,6 +1624,7 @@ mod housing_assignment_tests {
             pre.individual_birds.is_empty(),
             "no residents before assignment"
         );
+        assert_eq!(pre.active_bird_count, 0, "headcount starts at zero");
 
         // Assign both birds.
         let resp = client
@@ -1647,6 +1648,10 @@ mod housing_assignment_tests {
                 .await
                 .unwrap();
         assert_eq!(post.individual_birds.len(), 2);
+        assert_eq!(
+            post.active_bird_count, 2,
+            "headcount counts active housed birds"
+        );
         let returned_ids: std::collections::HashSet<i64> =
             post.individual_birds.iter().map(|b| b.id).collect();
         assert_eq!(returned_ids, bird_ids.iter().copied().collect());
@@ -1692,6 +1697,9 @@ mod housing_assignment_tests {
                 .unwrap();
         assert_eq!(residents.individual_birds.len(), 1);
         assert_eq!(residents.individual_birds[0].id, bird_ids[1]);
+        // Headcount drops to reflect the unassignment — the count is "active
+        // birds housed here right now", not a stale tally.
+        assert_eq!(residents.active_bird_count, 1);
     }
 
     #[tokio::test]
@@ -1793,7 +1801,7 @@ mod graduate_to_hutch_tests {
     use quailsync_common::{
         AssignGraduatedGroupRequest, AssignGraduatedGroupResponse, BrooderResidentsResponse,
         ChickGroupStatus, CreateBrooder, CreateChickGroup, GraduateBird, GraduateRequest,
-        HousingType, LifeStage,
+        HousingType, LifeStage, UpdateBird,
     };
     use serde_json::json;
 
@@ -1936,6 +1944,77 @@ mod graduate_to_hutch_tests {
         assert_eq!(residents.chick_groups.len(), 1);
         assert_eq!(residents.chick_groups[0].id, group_id);
         assert_eq!(residents.individual_birds.len(), 2);
+        assert_eq!(residents.active_bird_count, 2);
+    }
+
+    /// The headcount is "Active birds housed here right now" — it must drop when
+    /// a resident is sold/culled, while the graduated group's `current_count`
+    /// (provenance) stays put.
+    #[tokio::test]
+    async fn headcount_tracks_active_birds_not_stale_group_count() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (_b, hutch_id, group_id) = seed_pipeline(&base, &client).await;
+
+        // Graduate two birds straight into the hutch.
+        let resp = client
+            .post(format!("{base}/api/chick-groups/{group_id}/graduate"))
+            .json(&GraduateRequest {
+                birds: two_birds(),
+                target_housing_id: Some(hutch_id),
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let birds: Vec<Bird> = resp.json().await.unwrap();
+        assert_eq!(birds.len(), 2);
+
+        let before: BrooderResidentsResponse =
+            reqwest::get(format!("{base}/api/brooders/{hutch_id}/residents"))
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+        assert_eq!(before.active_bird_count, 2);
+        let group_count = before.chick_groups[0].current_count;
+
+        // Sell one of the two — its status leaves 'Active'.
+        let resp = client
+            .put(format!("{base}/api/birds/{}", birds[0].id))
+            .json(&UpdateBird {
+                status: Some(BirdStatus::Sold),
+                notes: None,
+                nfc_tag_id: None,
+                band_color: None,
+                sex: None,
+                hatch_date: None,
+                housing_id: None,
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let after: BrooderResidentsResponse =
+            reqwest::get(format!("{base}/api/brooders/{hutch_id}/residents"))
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+        // Headcount reflects reality: one active bird remains.
+        assert_eq!(
+            after.active_bird_count, 1,
+            "sold bird drops out of the headcount"
+        );
+        assert_eq!(after.individual_birds.len(), 1);
+        // The graduated group is provenance only — its count is unchanged.
+        assert_eq!(
+            after.chick_groups[0].current_count, group_count,
+            "graduated group current_count must not change with the sale"
+        );
     }
 
     #[tokio::test]
@@ -2026,6 +2105,7 @@ mod graduate_to_hutch_tests {
                 .unwrap();
         assert_eq!(residents.chick_groups.len(), 1);
         assert_eq!(residents.individual_birds.len(), 2);
+        assert_eq!(residents.active_bird_count, 2);
     }
 
     #[tokio::test]

@@ -1412,33 +1412,12 @@
 
     /* ---------- Issue #13: hutch residents (assign / unassign) ---------- */
 
-    // Total birds housed in a hutch, de-duplicated the same way the detail
-    // modal lists them: every bird in a graduated chick group counts via the
-    // group's current_count, plus any individually-assigned birds that don't
-    // belong to one of those groups. assign_graduated_group sets housing_id on
-    // a group's banded birds, so those show up in individual_birds too — they
-    // carry the group's chick_group_id, so we count them once (via the group),
-    // never twice. Count-only groups (no per-bird rows yet) still contribute
-    // their current_count, which is what fixes the "0 residents" bug.
-    _countHutchResidents: function(res){
-      if (!res) return 0;
-      var groups = (res.chick_groups || []).filter(function(g){ return g.status === 'Graduated'; });
-      var groupIds = {};
-      var total = 0;
-      for (var gi = 0; gi < groups.length; gi++) {
-        groupIds[groups[gi].id] = true;
-        total += (groups[gi].current_count || 0);
-      }
-      var birds = res.individual_birds || [];
-      for (var bi = 0; bi < birds.length; bi++) {
-        var cg = birds[bi].chick_group_id;
-        if (cg == null || !groupIds[cg]) total += 1;
-      }
-      return total;
-    },
-
     // Called after _pollBrooder renders to backfill resident counts on
     // every hutch card. Each card has `data-residents-hc="<id>"` we look up.
+    // The headcount is purely "Active birds housed here right now" — the
+    // server's active_bird_count. Graduated chick groups are provenance only
+    // (shown in the detail modal) and never drive this number, so culls/sales/
+    // deaths since graduation are reflected.
     _pollHutchResidents: async function(){
       var els = document.querySelectorAll('[data-residents-hc]');
       if (!els.length) return;
@@ -1447,7 +1426,7 @@
         var hid = el.getAttribute('data-residents-hc');
         try {
           var res = await API.get('/api/brooders/' + hid + '/residents');
-          var count = this._countHutchResidents(res);
+          var count = (res && res.active_bird_count != null) ? res.active_bird_count : 0;
           var countEl = el.querySelector('.reading-value');
           if (countEl) countEl.textContent = String(count);
         } catch (e) { /* leave the placeholder */ }

@@ -374,10 +374,13 @@ fun DashboardScreen(
                     items(entries, key = { "brooder-${it.brooder.id}" }) { state ->
                         val activeGroup = chickGroups.find { it.brooderId == state.brooder.id && it.status == "Active" }
                         // Resident count — housing-type aware:
-                        //   • Hutch: count active birds with housing_id == this. Birds
-                        //     that graduated from a group are stamped with both
-                        //     housing_id and chick_group_id, so counting birds gives
-                        //     the right total without double-counting the group.
+                        //   • Hutch: the headcount is purely "Active birds housed here
+                        //     right now" — count birds whose housing_id points here and
+                        //     status is Active. Graduated chick groups are provenance
+                        //     only (shown in the detail view) and must NOT drive this
+                        //     number; their currentCount is stale (graduation-time) and
+                        //     ignores culls/sales/deaths. This mirrors the server's
+                        //     active_bird_count.
                         //   • Brooder / Incubator: the chick group's currentCount is
                         //     the live tally (birds don't exist as rows yet during
                         //     the nursery / incubation stages).

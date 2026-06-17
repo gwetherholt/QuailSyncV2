@@ -537,10 +537,16 @@ pub(crate) async fn brooder_residents(
         .collect();
     populate_bird_lineages(&conn, &mut birds);
 
+    // The headcount is purely "Active birds housed here right now" — the same
+    // set as `individual_birds` above. Graduated groups are provenance only and
+    // must not inflate this number with stale graduation-time counts.
+    let active_bird_count = birds.len() as i64;
+
     Json(BrooderResidentsResponse {
         brooder_id,
         chick_groups: groups,
         individual_birds: birds,
+        active_bird_count,
     })
 }
 

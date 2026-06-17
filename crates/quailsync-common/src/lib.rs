@@ -898,6 +898,10 @@ pub struct BrooderResidentsResponse {
     pub brooder_id: i64,
     pub chick_groups: Vec<ChickGroup>,
     pub individual_birds: Vec<Bird>,
+    /// The headcount: how many Active birds have `housing_id` pointing at this
+    /// unit right now. This is the source of truth for the resident count —
+    /// graduated chick groups are provenance only and never feed this number.
+    pub active_bird_count: i64,
 }
 
 /// Inbreeding coefficient for a potential male-female pairing.
