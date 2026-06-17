@@ -1,0 +1,39 @@
+# QuailSync Govee sensor poller — systemd service
+# Polls the Govee cloud API for H5179 temp/humidity sensors and forwards their
+# readings to QuailSync (POST /api/govee/readings).
+#
+# Install:
+#   sudo cp govee-poller.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now govee-poller
+#
+# Logs:
+#   journalctl -u govee-poller -f
+
+[Unit]
+Description=QuailSync Govee sensor poller (Govee cloud API -> QuailSync)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gwetherholt
+WorkingDirectory=/home/gwetherholt/govee-poller
+
+# The Govee API key lives in config.yaml in the WorkingDirectory. Keep that file
+# readable only by this user (`chmod 600 config.yaml`). Alternatively, leave the
+# key as the placeholder in config.yaml and set it here instead — uncomment:
+# Environment=GOVEE_API_KEY=your-key-here
+
+Environment=PYTHONUNBUFFERED=1
+
+# Use the project's virtualenv interpreter, e.g.:
+#   python3 -m venv /home/gwetherholt/govee-poller/venv
+#   /home/gwetherholt/govee-poller/venv/bin/pip install -r requirements.txt
+ExecStart=/home/gwetherholt/govee-poller/venv/bin/python /home/gwetherholt/govee-poller/govee_poller.py --log-level INFO
+
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
