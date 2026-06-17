@@ -75,6 +75,83 @@ def test_process_staging_moves_files_and_writes_detections(tmp_path, mock_yolo, 
     assert payload["camera_id"] == "test_camera"
 
 
+def test_detect_selects_per_camera_model(tmp_path, mock_yolo, make_image_with_sidecar, monkeypatch):
+    import yolo_detector
+    from pathlib import Path
+
+    monkeypatch.setattr(
+        yolo_detector.config, "CAMERA_MODEL_MAP", {"cam-special": Path("/models/special.pt")}
+    )
+    monkeypatch.setattr(yolo_detector.config, "YOLO_MODEL_PATH", Path("/models/global.pt"))
+
+    camera_dir = tmp_path / "staging" / "cam-special"
+    image = make_image_with_sidecar(camera_dir, stem="20260101-120000_a", camera_id="cam-special")
+
+    # No explicit model_path -> model chosen from the sidecar's camera_id.
+    result = detect(image)
+    assert result.model_version == "special.pt"
+
+
+def test_detect_falls_back_to_global_model_for_unmapped_camera(
+    tmp_path, mock_yolo, make_image_with_sidecar, monkeypatch
+):
+    import yolo_detector
+    from pathlib import Path
+
+    monkeypatch.setattr(
+        yolo_detector.config, "CAMERA_MODEL_MAP", {"cam-special": Path("/models/special.pt")}
+    )
+    monkeypatch.setattr(yolo_detector.config, "YOLO_MODEL_PATH", Path("/models/global.pt"))
+
+    camera_dir = tmp_path / "staging" / "cam-other"
+    image = make_image_with_sidecar(camera_dir, stem="20260101-120000_b", camera_id="cam-other")
+
+    result = detect(image)
+    assert result.model_version == "global.pt"
+
+
+def test_explicit_model_path_overrides_per_camera(
+    tmp_path, mock_yolo, make_image_with_sidecar, monkeypatch
+):
+    import yolo_detector
+    from pathlib import Path
+
+    monkeypatch.setattr(
+        yolo_detector.config, "CAMERA_MODEL_MAP", {"cam-special": Path("/models/special.pt")}
+    )
+    camera_dir = tmp_path / "staging" / "cam-special"
+    image = make_image_with_sidecar(camera_dir, stem="20260101-120000_c", camera_id="cam-special")
+
+    # An explicit model_path wins over the per-camera map.
+    result = detect(image, model_path="forced.pt")
+    assert result.model_version == "forced.pt"
+
+
+def test_process_staging_uses_per_camera_models(
+    tmp_path, mock_yolo, make_image_with_sidecar, monkeypatch
+):
+    import yolo_detector
+    from pathlib import Path
+
+    monkeypatch.setattr(
+        yolo_detector.config, "CAMERA_MODEL_MAP", {"cam-a": Path("/models/a.pt")}
+    )
+    monkeypatch.setattr(yolo_detector.config, "YOLO_MODEL_PATH", Path("/models/global.pt"))
+
+    staging = tmp_path / "staging"
+    processed = tmp_path / "processed"
+    make_image_with_sidecar(staging / "cam-a", stem="20260101-120000_a", camera_id="cam-a")
+    make_image_with_sidecar(staging / "cam-b", stem="20260101-120000_b", camera_id="cam-b")
+
+    # No explicit model_path: each image's camera_id drives model selection.
+    process_staging(staging_dir=staging, processed_dir=processed)
+
+    payload_a = json.loads(next((processed / "cam-a").glob("*_detections.json")).read_text())
+    payload_b = json.loads(next((processed / "cam-b").glob("*_detections.json")).read_text())
+    assert payload_a["model_version"] == "a.pt"  # mapped camera
+    assert payload_b["model_version"] == "global.pt"  # unmapped -> fallback
+
+
 def test_process_staging_empty_dir_returns_nothing(tmp_path, mock_yolo):
     results = process_staging(
         staging_dir=tmp_path / "staging",

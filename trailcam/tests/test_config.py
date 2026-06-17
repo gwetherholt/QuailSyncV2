@@ -1,6 +1,7 @@
 """Tests for config.py — env-driven settings and directory creation."""
 
 import importlib
+from pathlib import Path
 
 import config
 
@@ -62,6 +63,52 @@ def test_env_overrides(monkeypatch, tmp_path):
     assert config.PHOTO_LIMIT == 7
     assert config.QUAILSYNC_API_URL == "https://example.test/"
     assert config.YOLO_MODEL_PATH == tmp_path / "custom.pt"
+
+
+def test_camera_model_map_parsed_from_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRAILCAM_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv(
+        "CAMERA_MODELS",
+        '{"cam-abc": "/models/abc.pt", "cam-xyz": "~/models/xyz.pt"}',
+    )
+    importlib.reload(config)
+
+    assert config.CAMERA_MODEL_MAP["cam-abc"] == Path("/models/abc.pt")
+    # ``~`` is expanded so a tilde path in the JSON resolves to the home dir.
+    assert config.CAMERA_MODEL_MAP["cam-xyz"] == Path("~/models/xyz.pt").expanduser()
+
+
+def test_model_for_camera_falls_back_to_global(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRAILCAM_BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("YOLO_MODEL_PATH", str(tmp_path / "global.pt"))
+    monkeypatch.setenv("CAMERA_MODELS", '{"cam-abc": "/models/abc.pt"}')
+    importlib.reload(config)
+
+    # Mapped camera -> its override; everything else -> the global model.
+    assert config.model_for_camera("cam-abc") == Path("/models/abc.pt")
+    assert config.model_for_camera("cam-unknown") == config.YOLO_MODEL_PATH
+    assert config.model_for_camera(None) == config.YOLO_MODEL_PATH
+
+
+def test_camera_models_unset_is_empty(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRAILCAM_BASE_DIR", str(tmp_path))
+    monkeypatch.delenv("CAMERA_MODELS", raising=False)
+    importlib.reload(config)
+
+    assert config.CAMERA_MODEL_MAP == {}
+
+
+def test_camera_models_invalid_json_ignored(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRAILCAM_BASE_DIR", str(tmp_path))
+    # Malformed JSON, and a valid-JSON-but-not-an-object value, are both ignored
+    # (warned, not raised) so a typo can't take the pipeline down on import.
+    monkeypatch.setenv("CAMERA_MODELS", "{not valid json")
+    importlib.reload(config)
+    assert config.CAMERA_MODEL_MAP == {}
+
+    monkeypatch.setenv("CAMERA_MODELS", '["not", "an", "object"]')
+    importlib.reload(config)
+    assert config.CAMERA_MODEL_MAP == {}
 
 
 def test_credentials_from_env(monkeypatch, tmp_path):

@@ -158,19 +158,28 @@ def _load_model(model_path: Path | str):
 
 def detect(
     image_path: Path | str,
-    model_path: Path | str = config.YOLO_MODEL_PATH,
+    camera_id: str | None = None,
+    model_path: Path | str | None = None,
     confidence: float = config.YOLO_CONFIDENCE,
 ) -> DetectionResult:
     """Run YOLO inference on a single image and return a ``DetectionResult``.
 
-    ``camera_id`` and ``timestamp`` are read from the image's JSON sidecar
-    (``{stem}.json``, written by the poller); if it's missing we fall back to
-    the parent directory name for the camera and ``None`` for the timestamp.
+    ``camera_id`` / ``timestamp`` default to the image's JSON sidecar
+    (``{stem}.json``, written by the poller); pass ``camera_id`` to override the
+    sidecar's value (and to drive model selection).
+
+    The model is chosen **per camera** via :func:`config.model_for_camera`
+    (which falls back to ``YOLO_MODEL_PATH`` for cameras with no override),
+    unless ``model_path`` is passed explicitly — then that model is used as-is.
     """
     image_path = Path(image_path)
-    camera_id, timestamp = _read_sidecar(image_path)
+    sidecar_camera_id, timestamp = _read_sidecar(image_path)
+    camera_id = camera_id if camera_id is not None else sidecar_camera_id
 
-    model = _load_model(model_path)
+    resolved_model = (
+        Path(model_path) if model_path is not None else config.model_for_camera(camera_id)
+    )
+    model = _load_model(resolved_model)
 
     start = time.perf_counter()
     results = model.predict(source=str(image_path), conf=confidence, verbose=False)
@@ -200,7 +209,7 @@ def detect(
         total_count=len(detections),
         detections=detections,
         inference_time_ms=inference_time_ms,
-        model_version=Path(model_path).name,
+        model_version=resolved_model.name,
     )
 
 
@@ -228,7 +237,7 @@ def _read_sidecar(image_path: Path) -> tuple[str, str | None]:
 def process_staging(
     staging_dir: Path | str = config.STAGING_DIR,
     processed_dir: Path | str = config.PROCESSED_DIR,
-    model_path: Path | str = config.YOLO_MODEL_PATH,
+    model_path: Path | str | None = None,
     confidence: float = config.YOLO_CONFIDENCE,
 ) -> list[DetectionResult]:
     """Detect over every staged ``*.jpg``, write results, and move the finished
@@ -238,6 +247,10 @@ def process_staging(
     ``processed/CAM/img.jpg``. Returns the list of ``DetectionResult``s
     produced (images that error out are logged and skipped, left in staging so
     they can be retried).
+
+    Each image's camera_id is read from its JSON sidecar and passed to
+    :func:`detect`, which selects that camera's model (``config.model_for_camera``).
+    Pass ``model_path`` to force a single model for every image instead.
     """
     staging_dir = Path(staging_dir)
     processed_dir = Path(processed_dir)
@@ -247,8 +260,14 @@ def process_staging(
 
     results: list[DetectionResult] = []
     for image_path in images:
+        camera_id, _ = _read_sidecar(image_path)
         try:
-            result = detect(image_path, model_path=model_path, confidence=confidence)
+            result = detect(
+                image_path,
+                camera_id=camera_id,
+                model_path=model_path,
+                confidence=confidence,
+            )
         except Exception as exc:  # noqa: BLE001 — skip a bad image, keep going
             logger.exception("Detection failed for %s: %s — left in staging", image_path, exc)
             continue
