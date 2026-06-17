@@ -707,6 +707,25 @@ pub(crate) async fn assign_graduated_group(
         None => return (StatusCode::NOT_FOUND, "chick group not found").into_response(),
     }
 
+    // A graduated group can only move into a hutch once it has individual bird
+    // records. The hutch headcount is driven by Active birds with housing_id, so
+    // assigning a count-only (un-banded) group would house "0 birds" — refuse it
+    // and tell the caller to band the group first.
+    let active_birds: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM birds WHERE chick_group_id = ?1 AND status = 'Active'",
+            params![body.group_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if active_birds == 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            "This group hasn't been banded yet — band the group first to create individual bird records.",
+        )
+            .into_response();
+    }
+
     if let Err(e) = conn.execute(
         "UPDATE chick_groups SET housing_id = ?1 WHERE id = ?2",
         params![brooder_id, body.group_id],

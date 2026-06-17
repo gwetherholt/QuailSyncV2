@@ -312,6 +312,17 @@ pub(crate) async fn graduate_chick_group(
                     .into_response();
             }
         }
+
+        // Graduating straight into a hutch must create individual bird records —
+        // the banding batch IS those records. An empty batch would leave the
+        // group housed but bird-less, so the hutch headcount would read 0.
+        if body.birds.is_empty() {
+            return (
+                StatusCode::BAD_REQUEST,
+                "This group hasn't been banded yet — band the group first to create individual bird records.",
+            )
+                .into_response();
+        }
     }
 
     // Birds inherit the group's lineages by default.

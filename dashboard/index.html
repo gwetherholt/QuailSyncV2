@@ -1665,19 +1665,28 @@
       var picked = document.querySelector('.m-grad-group:checked');
       if (!picked) { toast('Select a group', 'error'); return; }
       var groupId = parseInt(picked.value, 10);
+      // Direct fetch (not API.post, which swallows the body on non-2xx) so we
+      // can surface the server's warning — e.g. a group that hasn't been banded
+      // yet has no individual bird records and can't be housed in a hutch.
       try {
-        var resp = await API.post('/api/brooders/' + housingId + '/assign-graduated-group', { group_id: groupId });
-        if (resp && resp.group_id != null) {
-          toast('Group #' + resp.group_id + ' assigned (' + resp.birds_updated + ' birds)');
-          this.closeAssignGradGroupModal();
-          // Detail modal stays open behind the picker — refresh it so the
-          // new group appears immediately.
-          var detail = document.getElementById('hutch-detail-overlay');
-          if (detail) await this._renderHutchDetailContents(housingId);
-          this._pollBrooder();
-        } else {
-          toast('Failed to assign group', 'error');
+        var r = await fetch('/api/brooders/' + housingId + '/assign-graduated-group', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ group_id: groupId }),
+        });
+        if (!r.ok) {
+          var msg = await r.text();
+          toast(msg || 'Failed to assign group', 'error');
+          return;
         }
+        var resp = await r.json();
+        toast('Group #' + resp.group_id + ' assigned (' + resp.birds_updated + ' birds)');
+        this.closeAssignGradGroupModal();
+        // Detail modal stays open behind the picker — refresh it so the
+        // new group appears immediately.
+        var detail = document.getElementById('hutch-detail-overlay');
+        if (detail) await this._renderHutchDetailContents(housingId);
+        this._pollBrooder();
       } catch (e) {
         toast('Failed to assign group: ' + (e && e.message ? e.message : 'unknown'), 'error');
       }

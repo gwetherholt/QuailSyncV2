@@ -2063,6 +2063,77 @@ mod graduate_to_hutch_tests {
         assert_eq!(resp.status(), 400);
     }
 
+    /// Graduating straight into a hutch with an empty banding batch is refused —
+    /// there'd be no individual bird records to house.
+    #[tokio::test]
+    async fn graduate_into_hutch_requires_banded_birds() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (_b, hutch_id, group_id) = seed_pipeline(&base, &client).await;
+
+        let resp = client
+            .post(format!("{base}/api/chick-groups/{group_id}/graduate"))
+            .json(&GraduateRequest {
+                birds: vec![],
+                target_housing_id: Some(hutch_id),
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+        let msg = resp.text().await.unwrap();
+        assert!(msg.contains("hasn't been banded"), "unexpected body: {msg}");
+    }
+
+    /// A count-only graduated group (graduated without banding) cannot be
+    /// assigned to a hutch — the server returns the "band first" warning and the
+    /// group stays unhoused.
+    #[tokio::test]
+    async fn assign_graduated_group_requires_banded_birds() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (_b, hutch_id, group_id) = seed_pipeline(&base, &client).await;
+
+        // Graduate with no birds and no target — a count-only group, no records.
+        let resp = client
+            .post(format!("{base}/api/chick-groups/{group_id}/graduate"))
+            .json(&GraduateRequest {
+                birds: vec![],
+                target_housing_id: None,
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        // Assigning it to a hutch must be refused with the banding warning.
+        let resp = client
+            .post(format!(
+                "{base}/api/brooders/{hutch_id}/assign-graduated-group"
+            ))
+            .json(&AssignGraduatedGroupRequest { group_id })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+        let msg = resp.text().await.unwrap();
+        assert!(msg.contains("hasn't been banded"), "unexpected body: {msg}");
+
+        // The group must NOT have been housed.
+        let residents: BrooderResidentsResponse =
+            reqwest::get(format!("{base}/api/brooders/{hutch_id}/residents"))
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+        assert_eq!(residents.active_bird_count, 0);
+        assert!(
+            residents.chick_groups.is_empty(),
+            "un-banded group must not be housed in the hutch"
+        );
+    }
+
     #[tokio::test]
     async fn assign_graduated_group_moves_group_and_birds() {
         let base = spawn_test_server().await;

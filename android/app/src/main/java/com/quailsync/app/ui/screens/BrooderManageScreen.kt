@@ -742,6 +742,17 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
                                 showAssignGroupDialog.value = false
                                 pickedId.value = null
                                 refreshKey++
+                            } catch (e: retrofit2.HttpException) {
+                                // Surface the server's message — e.g. a group that
+                                // hasn't been banded yet has no individual bird
+                                // records and can't be housed in a hutch.
+                                val body = e.response()?.errorBody()?.string()
+                                Log.e("QuailSync", "assign-graduated-group failed: $body", e)
+                                Toast.makeText(
+                                    context,
+                                    body?.takeIf { it.isNotBlank() } ?: "Failed: ${e.message}",
+                                    Toast.LENGTH_LONG,
+                                ).show()
                             } catch (e: Exception) {
                                 Log.e("QuailSync", "assign-graduated-group failed", e)
                                 Toast.makeText(
