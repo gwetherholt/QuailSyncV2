@@ -705,6 +705,9 @@
     <a class="sidebar-item" data-route="#/cameras" onclick="Router.navigate('#/cameras')">
       <span class="icon">&#x1F3A5;</span><span class="label">Cameras</span>
     </a>
+    <a class="sidebar-item" data-route="#/sensors" onclick="Router.navigate('#/sensors')">
+      <span class="icon">&#x1F321;&#xFE0F;</span><span class="label">Sensors</span>
+    </a>
     <a class="sidebar-item" data-route="#/nfc/scan" onclick="Router.navigate('#/nfc/scan')">
       <span class="icon">&#x1F4F1;</span><span class="label">Scan NFC</span>
     </a>
@@ -809,6 +812,36 @@
   function birdLink(id, text){
     if(!id) return '&mdash;';
     return '<a class="bird-link" onclick="Router.navigate(\'#/flock/bird/'+id+'\')">'+(text||'#'+id)+'</a>';
+  }
+
+  // --- Govee sensor freshness helpers -------------------------------------
+  // A sensor is "stale" (warning) if we haven't heard from it in over 10 min.
+  // Server timestamps are UTC; both "YYYY-MM-DD HH:MM:SS" (no tz) and ISO-with-Z
+  // are handled, defaulting a bare timestamp to UTC.
+  var SENSOR_STALE_MINUTES = 10;
+  function parseServerTime(s){
+    if(!s) return null;
+    var iso = s.indexOf('T') >= 0 ? s : s.replace(' ', 'T');
+    if(!/[zZ]$|[+\-]\d\d:?\d\d$/.test(iso)) iso += 'Z';
+    var d = new Date(iso);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  function minutesSince(s){
+    var d = parseServerTime(s);
+    return d === null ? null : (Date.now() - d.getTime()) / 60000;
+  }
+  function sensorIsStale(lastSeen){
+    var m = minutesSince(lastSeen);
+    return m === null ? true : m > SENSOR_STALE_MINUTES;
+  }
+  function relativeTime(s){
+    var m = minutesSince(s);
+    if(m === null) return 'unknown';
+    if(m < 1) return 'just now';
+    if(m < 60) return Math.round(m)+'m ago';
+    var h = m / 60;
+    if(h < 24) return Math.round(h)+'h ago';
+    return Math.round(h / 24)+'d ago';
   }
 
   function bandDot(color, size){
@@ -992,6 +1025,9 @@
         } else if(hash === '#/cameras'){
           hdr.textContent = 'Cameras';
           Router.current = Page.Cameras;
+        } else if(hash === '#/sensors'){
+          hdr.textContent = 'Sensors';
+          Router.current = Page.Sensors;
         } else if(hash === '#/nfc/scan'){
           hdr.textContent = 'Scan NFC';
           Router.current = Page.NfcScan;
@@ -1040,6 +1076,9 @@
       // Issue #13: backfill hutch resident counts after cards render.
       setTimeout(function(){ self._pollHutchResidents(); }, 3000);
       addInterval(function(){ self._pollHutchResidents(); }, 30000);
+      // Govee: backfill assigned-sensor readings onto each housing card.
+      setTimeout(function(){ self._pollBrooderSensors(); }, 3000);
+      addInterval(function(){ self._pollBrooderSensors(); }, 60000);
       addInterval(this._pollStats, 60000);
       addInterval(this._pollFlock, 60000);
     },
@@ -1253,6 +1292,9 @@
         var residentsPlural = housing === 'incubator' ? 'eggs' : housing === 'hutch' ? 'birds' : 'chicks';
         var housingIcon = housing === 'incubator' ? '&#x1F95A;' : housing === 'hutch' ? '&#x1F426;' : '&#x1F425;';
         card+='<div data-field="headcount" data-brooder-hc="'+b.id+'" data-housing-type="'+housing+'" style="display:flex;align-items:center;gap:.4rem;font-size:.78rem;margin-top:.3rem;padding:4px 8px;background:var(--beige);border-radius:6px"><span style="font-size:1rem">'+housingIcon+'</span><span class="reading-value" style="font-weight:600;color:#7d8b6a">--</span><span style="color:#999"> '+residentsPlural+'</span></div>';
+        // Assigned Govee sensor readings — backfilled by _pollBrooderSensors
+        // after render (hidden until/unless this unit has sensors assigned).
+        card+='<div data-brooder-sensors="'+b.id+'" style="display:none;margin-top:.3rem;font-size:.74rem"></div>';
         if (alertOfflineMarkup) {
           card+='<div data-field="alert" style="font-size:.7rem;color:var(--danger);margin-top:.3rem">'+alertOfflineMarkup+'</div>';
         } else if (alertMessage) {
@@ -1407,6 +1449,47 @@
         }
       } catch (e) {
         toast('Failed to create housing: ' + (e && e.message ? e.message : 'unknown'), 'error');
+      }
+    },
+
+    /* ---------- Govee sensors: per-card readings backfill ---------- */
+
+    // Backfill assigned Govee sensor readings onto each housing card. One
+    // GET /api/govee/sensors (DB-only, no Govee API hit) grouped by assignment;
+    // cards with no assigned sensor stay hidden. Each card carries a
+    // `data-brooder-sensors="<id>"` placeholder.
+    _pollBrooderSensors: async function(){
+      var els = document.querySelectorAll('[data-brooder-sensors]');
+      if (!els.length) return;
+      var sensors = await API.get('/api/govee/sensors');
+      if (!sensors) return;
+      var byBrooder = {};
+      sensors.forEach(function(s){
+        if (s.assignment && s.assignment.brooder_id != null) {
+          (byBrooder[s.assignment.brooder_id] = byBrooder[s.assignment.brooder_id] || []).push(s);
+        }
+      });
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        var bid = parseInt(el.getAttribute('data-brooder-sensors'), 10);
+        var list = byBrooder[bid] || [];
+        if (!list.length) { el.style.display = 'none'; el.innerHTML = ''; continue; }
+        el.style.display = '';
+        el.innerHTML = list.map(function(s){
+          var name = escapeHtml(s.name || s.govee_device_id || ('Sensor #' + s.id));
+          var r = s.latest_reading;
+          var reading = r
+            ? (r.temperature_f.toFixed(1) + '°F · ' + r.humidity.toFixed(0) + '%')
+            : 'no data';
+          var warn = sensorIsStale(s.last_seen)
+            ? ' <span title="No data in over ' + SENSOR_STALE_MINUTES + ' min" style="color:var(--warning)">⚠</span>'
+            : '';
+          return '<div style="display:flex;align-items:center;gap:.3rem;padding:2px 0">'
+            + '<span>🌡️</span>'
+            + '<span style="color:#888">' + name + ':</span>'
+            + '<span style="font-weight:600;color:#7d8b6a">' + reading + '</span>' + warn
+            + '</div>';
+        }).join('');
       }
     },
 
@@ -3924,6 +4007,126 @@
       this.closeRestore();
       if(result !== null) toast('Database restored. Restart server to apply.');
       else toast('Restore failed','error');
+    }
+  };
+
+  /* ---------------------------------------------------------
+     SENSORS (Govee temp/humidity sensor assignment)
+     --------------------------------------------------------- */
+  Page.Sensors = {
+    _sensors: [],
+    _brooders: [],
+    render: function(app){
+      app.innerHTML = '<div class="page-top-bar"><h2>Sensors</h2></div>' +
+        '<div class="panel">' +
+          '<div class="panel-header"><span class="panel-header-left">&#x1F321;&#xFE0F; Govee Sensors</span>' +
+          '<a class="view-all-link" onclick="Page.Sensors._load()">Refresh</a></div>' +
+          '<div class="panel-body" id="sensors-body">'+loadingHTML()+'</div>' +
+        '</div>';
+    },
+    // Lightweight DB-only GET; auto-refresh every 60s (addInterval fires once now).
+    start: function(){ var self = this; addInterval(function(){ self._load(); }, 60000); },
+    stop: function(){},
+
+    _load: async function(){
+      var results = await Promise.all([
+        API.get('/api/govee/sensors'),
+        API.get('/api/brooders'),
+      ]);
+      this._sensors = results[0] || [];
+      this._brooders = results[1] || [];
+      this._render();
+    },
+
+    _brooderOptions: function(){
+      return this._brooders.map(function(b){
+        return '<option value="'+b.id+'">'+escapeHtml(b.name)+'</option>';
+      }).join('');
+    },
+
+    _render: function(){
+      var el = document.getElementById('sensors-body');
+      if(!el) return;
+      if(!this._sensors.length){
+        el.innerHTML = '<div class="no-data">No Govee sensors registered yet. They appear here automatically once the poller reports one.</div>';
+        return;
+      }
+      var opts = this._brooderOptions();
+      var hasBrooders = this._brooders.length > 0;
+
+      var rows = this._sensors.map(function(s){
+        var name = escapeHtml(s.name || s.govee_device_id || ('Sensor #'+s.id));
+        var model = escapeHtml(s.model || '—');
+        var r = s.latest_reading;
+        var temp = r ? r.temperature_f.toFixed(1)+'°F' : '—';
+        var hum = r ? r.humidity.toFixed(0)+'%' : '—';
+
+        // Online indicator + >10-min warning derive from the same recency check.
+        var stale = sensorIsStale(s.last_seen);
+        var dot = stale ? 'var(--warning)' : 'var(--safe)';
+        var statusText = stale ? ('No data &gt;'+SENSOR_STALE_MINUTES+'m') : 'Online';
+        var statusHtml = '<span style="display:inline-flex;align-items:center;gap:.3rem">'
+          + '<span style="width:9px;height:9px;border-radius:50%;background:'+dot+';display:inline-block"></span>'
+          + '<span style="color:'+(stale?'var(--warning)':'#666')+'">'+statusText+'</span></span>';
+
+        var assignCell;
+        if(s.assignment){
+          assignCell = '<div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">'
+            + '<span style="font-weight:600;color:var(--sage-dark)">'+escapeHtml(s.assignment.brooder_name)+'</span>'
+            + '<button class="status-btn" onclick="Page.Sensors.unassign('+s.id+')">Unassign</button></div>';
+        } else if(hasBrooders){
+          assignCell = '<div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">'
+            + '<select id="sensor-assign-'+s.id+'" style="padding:.35rem;border-radius:6px;border:1px solid #ccc">'+opts+'</select>'
+            + '<button class="btn-primary" style="padding:.35rem .7rem" onclick="Page.Sensors.assign('+s.id+')">Assign</button></div>';
+        } else {
+          assignCell = '<span style="color:#999">No brooders to assign</span>';
+        }
+
+        return '<tr style="cursor:default">'
+          + '<td>'+name+'</td>'
+          + '<td>'+model+'</td>'
+          + '<td>'+temp+'</td>'
+          + '<td>'+hum+'</td>'
+          + '<td>'+statusHtml+'</td>'
+          + '<td>'+assignCell+'</td>'
+          + '<td style="color:#888;font-size:.8rem">'+relativeTime(s.last_seen)+'</td>'
+          + '</tr>';
+      }).join('');
+
+      el.innerHTML = '<table class="data-table"><thead><tr>'
+        + '<th>Sensor</th><th>Model</th><th>Temp</th><th>Humidity</th><th>Status</th><th>Assignment</th><th>Last seen</th>'
+        + '</tr></thead><tbody>'+rows+'</tbody></table>';
+    },
+
+    assign: async function(sensorId){
+      var sel = document.getElementById('sensor-assign-'+sensorId);
+      if(!sel || !sel.value){ toast('Select a brooder first','error'); return; }
+      var brooderId = parseInt(sel.value, 10);
+      // Direct fetch (not API.put, which swallows the body on non-2xx) so we can
+      // surface the server's error message.
+      try {
+        var resp = await fetch('/api/govee/sensors/'+sensorId+'/assign', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ brooder_id: brooderId }),
+        });
+        if(!resp.ok){ var msg = await resp.text(); toast(msg || 'Assign failed','error'); return; }
+        toast('Sensor assigned');
+        this._load();
+      } catch(e){
+        toast('Assign failed: '+(e && e.message ? e.message : 'network error'),'error');
+      }
+    },
+
+    unassign: async function(sensorId){
+      try {
+        var resp = await fetch('/api/govee/sensors/'+sensorId+'/assign', { method: 'DELETE' });
+        if(!resp.ok){ var msg = await resp.text(); toast(msg || 'Unassign failed','error'); return; }
+        toast('Sensor unassigned');
+        this._load();
+      } catch(e){
+        toast('Unassign failed: '+(e && e.message ? e.message : 'network error'),'error');
+      }
     }
   };
 

@@ -74,6 +74,8 @@ import com.quailsync.app.data.BrooderAlert
 import com.quailsync.app.data.BrooderReading
 import com.quailsync.app.data.ChickGroupDto
 import com.quailsync.app.data.Clutch
+import com.quailsync.app.data.GoveeLatestReadingDto
+import com.quailsync.app.data.GoveeSensorDto
 import com.quailsync.app.data.LiveReading
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.ServerConfig
@@ -132,6 +134,10 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     private val _lineages = MutableStateFlow<List<Lineage>>(emptyList())
     val lineages: StateFlow<List<Lineage>> = _lineages.asStateFlow()
 
+    // Govee sensors — drive the assigned-unit temp/humidity shown on the tiles.
+    private val _sensors = MutableStateFlow<List<GoveeSensorDto>>(emptyList())
+    val sensors: StateFlow<List<GoveeSensorDto>> = _sensors.asStateFlow()
+
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
@@ -183,6 +189,18 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /** Lightweight sensor-only refresh for the 60s tile poll (DB read, no Govee
+     *  API hit). Keeps the existing list on failure rather than blanking tiles. */
+    fun refreshSensors() {
+        viewModelScope.launch {
+            try {
+                _sensors.value = api.getGoveeSensors()
+            } catch (e: Exception) {
+                Log.e("QuailSync", "Dashboard: sensor refresh failed", e)
+            }
+        }
+    }
+
     private fun loadData() { viewModelScope.launch { loadDataSuspend() } }
 
     private suspend fun loadDataSuspend() {
@@ -200,6 +218,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
             _clutches.value = try { api.getClutches() } catch (_: Exception) { emptyList() }
             _chickGroups.value = try { api.getChickGroups() } catch (_: Exception) { emptyList() }
             _lineages.value = try { api.getLineages() } catch (_: Exception) { emptyList() }
+            _sensors.value = try { api.getGoveeSensors() } catch (_: Exception) { emptyList() }
 
             Log.d("QuailSync", "Dashboard loaded: ${states.size} brooders, ${_birds.value.size} birds, ${_clutches.value.size} clutches, ${_chickGroups.value.size} chick groups")
         } catch (e: Exception) {
@@ -231,6 +250,27 @@ fun DashboardScreen(
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val liveReadings by viewModel.webSocketService.readings.collectAsState()
     val wsConnected by viewModel.webSocketService.isConnected.collectAsState()
+    val sensors by viewModel.sensors.collectAsState()
+
+    // Latest reading per housing unit from its assigned Govee sensor(s). Govee
+    // replaces the DIY ESP32 sensors, so this drives the tile temp/humidity —
+    // including hutches, which never had a Pi sensor. Picks the most recent
+    // reading when a unit has more than one sensor.
+    val goveeReadingByBrooder = remember(sensors) {
+        sensors.asSequence()
+            .filter { it.assignment != null && it.latestReading != null }
+            .groupBy { it.assignment!!.brooderId }
+            .mapValues { (_, list) -> list.maxByOrNull { it.latestReading!!.recordedAt ?: "" }!!.latestReading!! }
+    }
+
+    // Govee readings come from our DB (the poller writes them), not the live
+    // WebSocket — poll them every 60s so assigned-sensor tiles stay current.
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(60_000L)
+            viewModel.refreshSensors()
+        }
+    }
 
     val lifecycleOwner = androidx.compose.ui.platform.LocalContext.current as LifecycleOwner
     DisposableEffect(lifecycleOwner) {
@@ -399,6 +439,7 @@ fun DashboardScreen(
                         CompactBrooderCard(
                             state = state,
                             liveReading = liveReadings[state.brooder.id],
+                            goveeReading = goveeReadingByBrooder[state.brooder.id],
                             chickGroup = activeGroup,
                             residentCount = residentCount,
                             isOccupied = isOccupied,
@@ -690,17 +731,23 @@ private fun StatPill(modifier: Modifier, value: String, label: String, accentCol
 private fun CompactBrooderCard(
     state: BrooderState,
     liveReading: LiveReading?,
+    goveeReading: GoveeLatestReadingDto?,
     chickGroup: ChickGroupDto?,
     residentCount: Int,
     isOccupied: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val currentTemp = liveReading?.temperature
+    // An assigned Govee sensor (commercial replacement for the DIY ESP32) is the
+    // source of truth for this unit's temp/humidity when present — this is what
+    // makes a hutch tile (no Pi sensor) show a reading at all.
+    val currentTemp = goveeReading?.temperatureF
+        ?: liveReading?.temperature
         ?: state.readings.firstOrNull()?.temperature
         ?: state.brooder.latestTemperature
         ?: state.brooder.latestTemperatureF
-    val currentHumidity = liveReading?.humidity
+    val currentHumidity = goveeReading?.humidity
+        ?: liveReading?.humidity
         ?: state.readings.firstOrNull()?.humidity
         ?: state.brooder.latestHumidity
         ?: state.brooder.latestHumidityPercent
@@ -784,7 +831,7 @@ private fun CompactBrooderCard(
                     currentTemp?.let { "%.1f°F".format(it) } ?: "--",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = if (sensorStatus == SensorStatus.OFFLINE) MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (sensorStatus == SensorStatus.OFFLINE && goveeReading == null) MaterialTheme.colorScheme.onSurfaceVariant
                     else MaterialTheme.colorScheme.onSurface,
                 )
                 Text(

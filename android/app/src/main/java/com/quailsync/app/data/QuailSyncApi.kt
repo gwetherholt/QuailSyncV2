@@ -318,6 +318,39 @@ data class TrailcamCamera(
     @SerializedName("label") val label: String,
 )
 
+// --- Govee H5179 temp/humidity sensors -------------------------------------
+
+/** A registered Govee sensor with its current assignment and latest reading
+ *  (GET /api/govee/sensors). `assignment`/`latestReading` are null when the
+ *  sensor is unassigned / hasn't reported yet. */
+data class GoveeSensorDto(
+    @SerializedName("id") val id: Int,
+    @SerializedName("govee_device_id") val goveeDeviceId: String,
+    @SerializedName("name") val name: String? = null,
+    @SerializedName("model") val model: String? = null,
+    @SerializedName("first_seen") val firstSeen: String? = null,
+    @SerializedName("last_seen") val lastSeen: String? = null,
+    @SerializedName("assignment") val assignment: GoveeAssignmentDto? = null,
+    @SerializedName("latest_reading") val latestReading: GoveeLatestReadingDto? = null,
+)
+
+data class GoveeAssignmentDto(
+    @SerializedName("brooder_id") val brooderId: Int,
+    @SerializedName("brooder_name") val brooderName: String,
+    @SerializedName("assigned_at") val assignedAt: String? = null,
+)
+
+data class GoveeLatestReadingDto(
+    @SerializedName("temperature_f") val temperatureF: Double,
+    @SerializedName("humidity") val humidity: Double,
+    @SerializedName("recorded_at") val recordedAt: String? = null,
+)
+
+/** Body of PUT /api/govee/sensors/{id}/assign. */
+data class AssignSensorRequest(
+    @SerializedName("brooder_id") val brooderId: Int,
+)
+
 data class TargetTempResponse(
     @SerializedName("brooder_id") val brooderId: Int,
     @SerializedName("target_temp_f") val targetTempF: Double,
@@ -659,6 +692,19 @@ interface QuailSyncApi {
 
     @GET("api/trailcam/latest/{camera_id}")
     suspend fun getTrailcamLatest(@Path("camera_id") cameraId: String): TrailcamLatest
+
+    // Govee sensors: list all (with assignment + latest reading), assign, unassign.
+    @GET("api/govee/sensors")
+    suspend fun getGoveeSensors(): List<GoveeSensorDto>
+
+    @PUT("api/govee/sensors/{id}/assign")
+    suspend fun assignGoveeSensor(
+        @Path("id") id: Int,
+        @Body body: AssignSensorRequest,
+    ): GoveeSensorDto
+
+    @retrofit2.http.HTTP(method = "DELETE", path = "api/govee/sensors/{id}/assign", hasBody = false)
+    suspend fun unassignGoveeSensor(@Path("id") id: Int): retrofit2.Response<Unit>
 
     @GET("api/lineages")
     suspend fun getLineages(): List<Lineage>

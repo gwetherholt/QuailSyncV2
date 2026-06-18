@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
@@ -30,6 +31,8 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -40,6 +43,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +60,9 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.quailsync.app.data.AssignSensorRequest
+import com.quailsync.app.data.Brooder
+import com.quailsync.app.data.GoveeSensorDto
 import com.quailsync.app.data.LiveReading
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.ServerConfig
@@ -64,6 +71,7 @@ import com.quailsync.app.ui.theme.AlertGreen
 import com.quailsync.app.ui.theme.AlertRed
 import com.quailsync.app.ui.theme.AlertYellow
 import com.quailsync.app.ui.theme.SageGreen
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -82,6 +90,10 @@ class TelemetryViewModel(application: Application) : AndroidViewModel(applicatio
 
     private val _chickGroups = MutableStateFlow<List<com.quailsync.app.data.ChickGroupDto>>(emptyList())
     val chickGroups: StateFlow<List<com.quailsync.app.data.ChickGroupDto>> = _chickGroups.asStateFlow()
+
+    // Govee temp/humidity sensors (auto-registered by the poller).
+    private val _sensors = MutableStateFlow<List<GoveeSensorDto>>(emptyList())
+    val sensors: StateFlow<List<GoveeSensorDto>> = _sensors.asStateFlow()
 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -125,11 +137,62 @@ class TelemetryViewModel(application: Application) : AndroidViewModel(applicatio
             }
             _brooders.value = states
             _chickGroups.value = try { api.getChickGroups() } catch (_: Exception) { emptyList() }
+            _sensors.value = try { api.getGoveeSensors() } catch (_: Exception) { emptyList() }
         } catch (e: Exception) {
             Log.e("QuailSync", "Telemetry: failed to load brooders", e)
         } finally {
             _isLoading.value = false
         }
+    }
+
+    /** Lightweight DB-only sensor refresh (no Govee API hit) for the 60s loop.
+     *  Keeps the existing list on failure rather than blanking the UI. */
+    fun refreshSensors() {
+        viewModelScope.launch {
+            try {
+                _sensors.value = api.getGoveeSensors()
+            } catch (e: Exception) {
+                Log.e("QuailSync", "Telemetry: failed to refresh sensors", e)
+            }
+        }
+    }
+
+    fun assignSensor(sensorId: Int, brooderId: Int) {
+        viewModelScope.launch {
+            try {
+                api.assignGoveeSensor(sensorId, AssignSensorRequest(brooderId))
+                loadDataSuspend()
+                toast("Sensor assigned")
+            } catch (e: retrofit2.HttpException) {
+                val body = e.response()?.errorBody()?.string()
+                Log.e("QuailSync", "Assign sensor $sensorId failed: $body", e)
+                toast(body?.takeIf { it.isNotBlank() } ?: "Assign failed: ${e.message}")
+            } catch (e: Exception) {
+                Log.e("QuailSync", "Assign sensor $sensorId failed", e)
+                toast("Assign failed: ${e.message}")
+            }
+        }
+    }
+
+    fun unassignSensor(sensorId: Int) {
+        viewModelScope.launch {
+            try {
+                api.unassignGoveeSensor(sensorId)
+                loadDataSuspend()
+                toast("Sensor unassigned")
+            } catch (e: retrofit2.HttpException) {
+                val body = e.response()?.errorBody()?.string()
+                Log.e("QuailSync", "Unassign sensor $sensorId failed: $body", e)
+                toast(body?.takeIf { it.isNotBlank() } ?: "Unassign failed: ${e.message}")
+            } catch (e: Exception) {
+                Log.e("QuailSync", "Unassign sensor $sensorId failed", e)
+                toast("Unassign failed: ${e.message}")
+            }
+        }
+    }
+
+    private fun toast(msg: String) {
+        android.widget.Toast.makeText(getApplication(), msg, android.widget.Toast.LENGTH_SHORT).show()
     }
 
     fun deleteBrooderAsync(id: Int) {
@@ -168,6 +231,16 @@ fun TelemetryScreen(
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val liveReadings by viewModel.webSocketService.readings.collectAsState()
     val chickGroups by viewModel.chickGroups.collectAsState()
+    val sensors by viewModel.sensors.collectAsState()
+
+    // Govee readings come from our DB (the poller writes them), not the live
+    // WebSocket — so poll them every 60s while this screen is on top.
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(60_000)
+            viewModel.refreshSensors()
+        }
+    }
 
     // Explicit MutableState — see BreedingScreen for rationale: with the `by`
     // delegate, lambda writes (`deleteTargetId = null`) get flagged by the
@@ -215,12 +288,42 @@ fun TelemetryScreen(
                     DetailedBrooderCard(
                         state = state,
                         liveReading = live,
+                        assignedSensors = sensors.filter { it.assignment?.brooderId == state.brooder.id },
                         onClick = { onBrooderClick(state.brooder.id) },
                         onDelete = if (canDelete) ({
                             Log.d("QuailSync", "Delete icon tapped for brooder ${state.brooder.id}")
                             deleteTargetId.value = state.brooder.id
                         }) else null,
                     )
+                }
+
+                // --- Govee sensors overview + assignment ---
+                item {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "🌡️ Govee Sensors",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                    )
+                }
+                if (sensors.isEmpty()) {
+                    item {
+                        Text(
+                            "No Govee sensors registered yet. They appear here automatically once the poller reports one.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 4.dp),
+                        )
+                    }
+                } else {
+                    items(sensors, key = { "sensor-${it.id}" }) { sensor ->
+                        SensorCard(
+                            sensor = sensor,
+                            brooders = brooders.map { it.brooder },
+                            onAssign = { brooderId -> viewModel.assignSensor(sensor.id, brooderId) },
+                            onUnassign = { viewModel.unassignSensor(sensor.id) },
+                        )
+                    }
                 }
                 item { Spacer(Modifier.height(8.dp)) }
             }
@@ -256,12 +359,26 @@ fun TelemetryScreen(
 // =====================================================================
 
 @Composable
-fun DetailedBrooderCard(state: BrooderState, liveReading: LiveReading?, onClick: () -> Unit = {}, onDelete: (() -> Unit)? = null) {
-    val currentTemp = liveReading?.temperature
+fun DetailedBrooderCard(
+    state: BrooderState,
+    liveReading: LiveReading?,
+    assignedSensors: List<GoveeSensorDto> = emptyList(),
+    onClick: () -> Unit = {},
+    onDelete: (() -> Unit)? = null,
+) {
+    // An assigned Govee sensor (replaces the DIY ESP32) is the source of truth
+    // for this unit's headline temp/humidity when present — most recent reading
+    // across its assigned sensors. Makes hutch cards (no Pi sensor) show a value.
+    val goveeReading = assignedSensors.asSequence()
+        .mapNotNull { it.latestReading }
+        .maxByOrNull { it.recordedAt ?: "" }
+    val currentTemp = goveeReading?.temperatureF
+        ?: liveReading?.temperature
         ?: state.readings.firstOrNull()?.temperature
         ?: state.brooder.latestTemperature
         ?: state.brooder.latestTemperatureF
-    val currentHumidity = liveReading?.humidity
+    val currentHumidity = goveeReading?.humidity
+        ?: liveReading?.humidity
         ?: state.readings.firstOrNull()?.humidity
         ?: state.brooder.latestHumidity
         ?: state.brooder.latestHumidityPercent
@@ -343,7 +460,7 @@ fun DetailedBrooderCard(state: BrooderState, liveReading: LiveReading?, onClick:
                         Text(
                             currentTemp?.let { "%.1f°F".format(it) } ?: "--",
                             fontSize = 24.sp, fontWeight = FontWeight.Bold,
-                            color = if (sensorStatus == SensorStatus.OFFLINE) MaterialTheme.colorScheme.onSurfaceVariant
+                            color = if (sensorStatus == SensorStatus.OFFLINE && goveeReading == null) MaterialTheme.colorScheme.onSurfaceVariant
                             else MaterialTheme.colorScheme.onSurface,
                         )
                         if (currentTemp != null && previousTemp != null) {
@@ -363,7 +480,7 @@ fun DetailedBrooderCard(state: BrooderState, liveReading: LiveReading?, onClick:
                         Text(
                             currentHumidity?.let { "%.0f%%".format(it) } ?: "--",
                             fontSize = 24.sp, fontWeight = FontWeight.Bold,
-                            color = if (sensorStatus == SensorStatus.OFFLINE) MaterialTheme.colorScheme.onSurfaceVariant
+                            color = if (sensorStatus == SensorStatus.OFFLINE && goveeReading == null) MaterialTheme.colorScheme.onSurfaceVariant
                             else MaterialTheme.colorScheme.onSurface,
                         )
                         if (currentHumidity != null && previousHumidity != null) {
@@ -420,7 +537,201 @@ fun DetailedBrooderCard(state: BrooderState, liveReading: LiveReading?, onClick:
                     color = if (hasCriticalAlert) AlertRed else AlertYellow,
                 )
             }
+
+            // Assigned Govee sensors — glanceable temp/humidity readings.
+            if (assignedSensors.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                assignedSensors.forEach { s ->
+                    val r = s.latestReading
+                    val reading = if (r != null) "%.1f°F · %.0f%%".format(r.temperatureF, r.humidity) else "no data"
+                    val stale = sensorIsStale(s.lastSeen)
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("🌡️ ", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            (s.name ?: s.goveeDeviceId) + ": ",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            reading,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (stale) AlertYellow else MaterialTheme.colorScheme.onSurface,
+                        )
+                        if (stale) {
+                            Spacer(Modifier.width(4.dp))
+                            Text("⚠", style = MaterialTheme.typography.bodyMedium, color = AlertYellow)
+                        }
+                    }
+                }
+            }
         }
+    }
+}
+
+// =====================================================================
+// Govee Sensor Card (overview + assignment)
+// =====================================================================
+
+@Composable
+fun SensorCard(
+    sensor: GoveeSensorDto,
+    brooders: List<Brooder>,
+    onAssign: (brooderId: Int) -> Unit,
+    onUnassign: () -> Unit,
+) {
+    val stale = sensorIsStale(sensor.lastSeen)
+    val r = sensor.latestReading
+
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(2.dp),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        sensor.name ?: sensor.goveeDeviceId,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        sensor.model ?: "—",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                // Online indicator: green dot when fresh, amber + ">10m" when stale.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(10.dp).clip(CircleShape).background(if (stale) AlertYellow else AlertGreen))
+                    Spacer(Modifier.width(5.dp))
+                    Text(
+                        if (stale) "No data >10m" else "Online",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (stale) AlertYellow else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            Row(Modifier.fillMaxWidth(), Arrangement.SpaceEvenly) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Temperature", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        r?.let { "%.1f°F".format(it.temperatureF) } ?: "--",
+                        fontSize = 22.sp, fontWeight = FontWeight.Bold,
+                    )
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Humidity", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        r?.let { "%.0f%%".format(it.humidity) } ?: "--",
+                        fontSize = 22.sp, fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            // Assignment row: brooder name + Unassign, or a brooder picker + Assign.
+            val assignment = sensor.assignment
+            if (assignment != null) {
+                Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                    Text(
+                        "Assigned to ${assignment.brooderName}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = SageGreen,
+                    )
+                    OutlinedButton(onClick = onUnassign) { Text("Unassign") }
+                }
+            } else if (brooders.isNotEmpty()) {
+                val expanded = remember { mutableStateOf(false) }
+                val selected = remember(sensor.id, brooders) { mutableStateOf(brooders.first()) }
+                Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                    Box {
+                        OutlinedButton(onClick = { expanded.value = true }) {
+                            Text(selected.value.name)
+                            Icon(Icons.Default.ArrowDropDown, "Pick brooder")
+                        }
+                        DropdownMenu(expanded.value, onDismissRequest = { expanded.value = false }) {
+                            brooders.forEach { b ->
+                                DropdownMenuItem(
+                                    text = { Text(b.name) },
+                                    onClick = { selected.value = b; expanded.value = false },
+                                )
+                            }
+                        }
+                    }
+                    Button(
+                        onClick = { onAssign(selected.value.id) },
+                        colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
+                    ) { Text("Assign") }
+                }
+            } else {
+                Text(
+                    "No brooders to assign",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Last seen ${sensorRelativeTime(sensor.lastSeen)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+// =====================================================================
+// Sensor freshness helpers (last_seen is UTC; >10 min ⇒ stale warning)
+// =====================================================================
+
+private const val SENSOR_STALE_MINUTES = 10L
+
+/** Parse a server timestamp as an Instant. Handles both
+ *  "YYYY-MM-DD HH:MM:SS" (UTC, no zone) and ISO-with-offset/Z forms. */
+private fun parseServerInstant(s: String?): java.time.Instant? {
+    if (s.isNullOrBlank()) return null
+    return try {
+        val iso = if (s.contains('T')) s else s.replace(' ', 'T')
+        if (Regex("([zZ])$|[+-]\\d\\d:?\\d\\d$").containsMatchIn(iso)) {
+            java.time.OffsetDateTime.parse(iso).toInstant()
+        } else {
+            java.time.LocalDateTime.parse(iso).toInstant(java.time.ZoneOffset.UTC)
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
+
+private fun sensorMinutesSince(s: String?): Long? {
+    val inst = parseServerInstant(s) ?: return null
+    return java.time.Duration.between(inst, java.time.Instant.now()).toMinutes()
+}
+
+/** Stale (warning) when we haven't heard from the sensor in >10 min, or when
+ *  the timestamp is missing/unparseable. */
+private fun sensorIsStale(lastSeen: String?): Boolean {
+    val m = sensorMinutesSince(lastSeen) ?: return true
+    return m > SENSOR_STALE_MINUTES
+}
+
+private fun sensorRelativeTime(s: String?): String {
+    val m = sensorMinutesSince(s) ?: return "unknown"
+    return when {
+        m < 1 -> "just now"
+        m < 60 -> "${m}m ago"
+        m < 1440 -> "${m / 60}h ago"
+        else -> "${m / 1440}d ago"
     }
 }
 
