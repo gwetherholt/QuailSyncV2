@@ -346,3 +346,58 @@ async fn image_404_for_missing_and_non_jpg() {
         StatusCode::NOT_FOUND
     );
 }
+
+// ---------------------------------------------------------------------------
+// auto-registration: a camera seen in observations.jsonl becomes a registered
+// trail_cameras row when the server reads the observation-derived camera list.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn observed_camera_auto_registers_as_trail_camera() {
+    let processed = unique_processed_dir();
+    write_observation(
+        &processed,
+        "auto-cam-1",
+        "2026-06-15T07:30:00",
+        2,
+        0.8,
+        "p.jpg",
+    );
+    let base = spawn_app(&processed).await;
+
+    // Registry starts empty (nothing seeded, no list read yet).
+    let before: Value = client()
+        .get(format!("{base}/api/trail-cameras"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(before.as_array().unwrap().is_empty());
+
+    // Reading the observation-derived camera list auto-registers each camera.
+    let cams: Value = client()
+        .get(format!("{base}/api/trailcam/cameras"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(cams.as_array().unwrap().len(), 1);
+
+    // It's now a registered (unassigned) trail camera.
+    let after: Value = client()
+        .get(format!("{base}/api/trail-cameras"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let arr = after.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["spypoint_camera_id"], "auto-cam-1");
+    assert!(arr[0]["assignment"].is_null());
+}

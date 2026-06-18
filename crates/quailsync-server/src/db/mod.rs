@@ -594,6 +594,40 @@ pub fn init_db(conn: &Connection) {
     )
     .expect("failed to create govee sensor tables");
 
+    // --- SPYPOINT trail cameras ---
+    // Mirrors the Govee sensor tables. Cameras auto-register on first sight
+    // (spypoint_camera_id is the natural key) and are movable between
+    // brooders/hutches via camera_assignments. The partial unique index enforces
+    // "at most one active (unassigned_at IS NULL) assignment per camera" —
+    // re-assigning closes the old row before opening a new one. trail_cameras is
+    // created first so the FK below resolves.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS trail_cameras (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            spypoint_camera_id TEXT    UNIQUE NOT NULL,
+            name               TEXT,
+            model              TEXT,
+            first_seen         TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_seen          TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS camera_assignments (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            trail_camera_id INTEGER NOT NULL REFERENCES trail_cameras(id),
+            brooder_id      INTEGER NOT NULL REFERENCES brooders(id),
+            assigned_at     TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            unassigned_at   TEXT
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_camera_active_assignment
+            ON camera_assignments(trail_camera_id)
+            WHERE unassigned_at IS NULL;
+
+        CREATE INDEX IF NOT EXISTS idx_camera_assignments_brooder
+            ON camera_assignments(brooder_id, unassigned_at);",
+    )
+    .expect("failed to create trail camera tables");
+
     // --- Performance indexes ---
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_readings_brooder_received ON brooder_readings(brooder_id, received_at);

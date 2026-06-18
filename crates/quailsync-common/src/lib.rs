@@ -1153,6 +1153,54 @@ pub struct AssignSensorRequest {
     pub brooder_id: i64,
 }
 
+// ---------------------------------------------------------------------------
+// SPYPOINT trail cameras
+//
+// Trail cameras auto-register when the poller's photos are first seen (the
+// `spypoint_camera_id` is the natural key) or can be seeded manually via
+// `POST /api/trail-cameras/register`. They're assignable to brooders/hutches
+// exactly like Govee sensors — one active assignment per camera at a time.
+// ---------------------------------------------------------------------------
+
+/// A camera's current (open) assignment to a housing unit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CameraAssignment {
+    pub brooder_id: i64,
+    pub brooder_name: String,
+    pub assigned_at: String,
+}
+
+/// A registered trail camera with its current assignment (if any). Returned by
+/// `GET /api/trail-cameras`, `GET /api/brooders/{id}/cameras`, and the register
+/// + assign endpoints.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrailCamera {
+    pub id: i64,
+    pub spypoint_camera_id: String,
+    pub name: Option<String>,
+    pub model: Option<String>,
+    pub first_seen: String,
+    pub last_seen: String,
+    pub assignment: Option<CameraAssignment>,
+}
+
+/// Body of `POST /api/trail-cameras/register`. Idempotent upsert keyed on
+/// `spypoint_camera_id`; `name`/`model` update the row when provided.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterCameraRequest {
+    pub spypoint_camera_id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// Body of `PUT /api/trail-cameras/{id}/assign`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssignCameraRequest {
+    pub brooder_id: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3303,3 +3303,298 @@ mod system_settings_tests {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// SPYPOINT trail-camera registry + assignment (/api/trail-cameras)
+// ---------------------------------------------------------------------------
+
+mod trail_camera_tests {
+    use super::*;
+    use quailsync_common::{
+        AssignCameraRequest, CreateBrooder, HousingType, LifeStage, RegisterCameraRequest,
+        TrailCamera,
+    };
+
+    async fn create_brooder(base: &str, client: &reqwest::Client, name: &str) -> i64 {
+        let b: serde_json::Value = client
+            .post(format!("{base}/api/brooders"))
+            .json(&CreateBrooder {
+                name: name.into(),
+                lineage_id: None,
+                life_stage: LifeStage::Adult,
+                qr_code: String::new(),
+                notes: None,
+                camera_url: None,
+                housing_type: Some(HousingType::Brooder),
+            })
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        b["id"].as_i64().unwrap()
+    }
+
+    async fn register(
+        base: &str,
+        client: &reqwest::Client,
+        body: RegisterCameraRequest,
+    ) -> reqwest::Response {
+        client
+            .post(format!("{base}/api/trail-cameras/register"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+    }
+
+    async fn list_cameras(base: &str, client: &reqwest::Client) -> Vec<TrailCamera> {
+        client
+            .get(format!("{base}/api/trail-cameras"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn register_creates_then_updates() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+
+        // New camera -> 201 with the record.
+        let resp = register(
+            &base,
+            &client,
+            RegisterCameraRequest {
+                spypoint_camera_id: "6a304dac5a82bf1a819b56d9".into(),
+                name: Some("Front Hutch Cam".into()),
+                model: Some("Flex-M".into()),
+            },
+        )
+        .await;
+        assert_eq!(resp.status(), 201);
+        let cam: TrailCamera = resp.json().await.unwrap();
+        assert_eq!(cam.spypoint_camera_id, "6a304dac5a82bf1a819b56d9");
+        assert_eq!(cam.name.as_deref(), Some("Front Hutch Cam"));
+        assert_eq!(cam.model.as_deref(), Some("Flex-M"));
+        assert!(cam.assignment.is_none());
+
+        // Re-register same id -> 200 and updates the provided field; no duplicate.
+        let resp = register(
+            &base,
+            &client,
+            RegisterCameraRequest {
+                spypoint_camera_id: "6a304dac5a82bf1a819b56d9".into(),
+                name: Some("Renamed Cam".into()),
+                model: None,
+            },
+        )
+        .await;
+        assert_eq!(resp.status(), 200);
+        let cam: TrailCamera = resp.json().await.unwrap();
+        assert_eq!(cam.name.as_deref(), Some("Renamed Cam"));
+        assert_eq!(cam.model.as_deref(), Some("Flex-M")); // unchanged (not provided)
+
+        assert_eq!(list_cameras(&base, &client).await.len(), 1, "no duplicate");
+    }
+
+    #[tokio::test]
+    async fn register_requires_spypoint_id() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let resp = register(
+            &base,
+            &client,
+            RegisterCameraRequest {
+                spypoint_camera_id: "  ".into(),
+                name: None,
+                model: None,
+            },
+        )
+        .await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn assign_reassign_and_query_by_brooder() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let brooder_a = create_brooder(&base, &client, "Hutch A").await;
+        let brooder_b = create_brooder(&base, &client, "Hutch B").await;
+
+        register(
+            &base,
+            &client,
+            RegisterCameraRequest {
+                spypoint_camera_id: "cam-move".into(),
+                name: Some("Mover".into()),
+                model: None,
+            },
+        )
+        .await;
+        let camera_id = list_cameras(&base, &client).await[0].id;
+
+        // Assign to A — response carries the new assignment.
+        let resp = client
+            .put(format!("{base}/api/trail-cameras/{camera_id}/assign"))
+            .json(&AssignCameraRequest {
+                brooder_id: brooder_a,
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let cam: TrailCamera = resp.json().await.unwrap();
+        let asg = cam.assignment.as_ref().expect("assigned");
+        assert_eq!(asg.brooder_id, brooder_a);
+        assert_eq!(asg.brooder_name, "Hutch A");
+
+        // Brooder A lists it; B doesn't.
+        let a_cams: Vec<TrailCamera> = client
+            .get(format!("{base}/api/brooders/{brooder_a}/cameras"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(a_cams.len(), 1);
+        let b_cams: Vec<TrailCamera> = client
+            .get(format!("{base}/api/brooders/{brooder_b}/cameras"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(b_cams.is_empty());
+
+        // Reassign to B — exactly one active assignment moves over.
+        let resp = client
+            .put(format!("{base}/api/trail-cameras/{camera_id}/assign"))
+            .json(&AssignCameraRequest {
+                brooder_id: brooder_b,
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.json::<TrailCamera>()
+                .await
+                .unwrap()
+                .assignment
+                .unwrap()
+                .brooder_id,
+            brooder_b
+        );
+
+        let a_after: Vec<TrailCamera> = client
+            .get(format!("{base}/api/brooders/{brooder_a}/cameras"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(a_after.is_empty(), "old assignment was closed");
+        let b_after: Vec<TrailCamera> = client
+            .get(format!("{base}/api/brooders/{brooder_b}/cameras"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(b_after.len(), 1, "exactly one active assignment");
+    }
+
+    #[tokio::test]
+    async fn unassign_clears_active_assignment() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let brooder = create_brooder(&base, &client, "Hutch").await;
+        register(
+            &base,
+            &client,
+            RegisterCameraRequest {
+                spypoint_camera_id: "cam-x".into(),
+                name: None,
+                model: None,
+            },
+        )
+        .await;
+        let camera_id = list_cameras(&base, &client).await[0].id;
+
+        client
+            .put(format!("{base}/api/trail-cameras/{camera_id}/assign"))
+            .json(&AssignCameraRequest {
+                brooder_id: brooder,
+            })
+            .send()
+            .await
+            .unwrap();
+
+        let resp = client
+            .delete(format!("{base}/api/trail-cameras/{camera_id}/assign"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 204);
+
+        assert!(list_cameras(&base, &client).await[0].assignment.is_none());
+        let b_cams: Vec<TrailCamera> = client
+            .get(format!("{base}/api/brooders/{brooder}/cameras"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(b_cams.is_empty());
+    }
+
+    #[tokio::test]
+    async fn assign_unknown_camera_is_404() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let brooder = create_brooder(&base, &client, "Hutch").await;
+        let resp = client
+            .put(format!("{base}/api/trail-cameras/9999/assign"))
+            .json(&AssignCameraRequest {
+                brooder_id: brooder,
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[tokio::test]
+    async fn assign_unknown_brooder_is_400() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        register(
+            &base,
+            &client,
+            RegisterCameraRequest {
+                spypoint_camera_id: "cam-y".into(),
+                name: None,
+                model: None,
+            },
+        )
+        .await;
+        let camera_id = list_cameras(&base, &client).await[0].id;
+        let resp = client
+            .put(format!("{base}/api/trail-cameras/{camera_id}/assign"))
+            .json(&AssignCameraRequest { brooder_id: 9999 })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+    }
+}

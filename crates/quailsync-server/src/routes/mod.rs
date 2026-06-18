@@ -14,4 +14,5 @@ pub mod reconcile;
 pub mod settings;
 pub mod system_settings;
 pub mod telemetry;
+pub mod trail_cameras;
 pub mod trailcam;

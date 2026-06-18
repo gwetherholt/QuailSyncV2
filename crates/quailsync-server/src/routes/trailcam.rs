@@ -12,7 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Value};
 
-use crate::state::AppState;
+use crate::state::{acquire_db, AppState};
 
 /// JSON error body shared by these handlers.
 fn err(status: StatusCode, code: &str, message: &str) -> Response {
@@ -24,12 +24,18 @@ fn err(status: StatusCode, code: &str, message: &str) -> Response {
 /// Returns `[{ "camera_id", "label" }]` with labels "Outdoor Cam 1", "Outdoor
 /// Cam 2", … numbered by order of first appearance. A missing/empty log yields
 /// `[]` (clients then show no outdoor cameras).
+///
+/// This is also the trail-camera auto-registration point: the poller writes
+/// observations to disk (there's no photo-ingest HTTP endpoint), so the first
+/// time the server sees a camera_id here it upserts a `trail_cameras` row (and
+/// bumps `last_seen`), the same way the Govee ingest auto-registers sensors.
 pub(crate) async fn trailcam_cameras(State(state): State<AppState>) -> Response {
     let content = match std::fs::read_to_string(state.trailcam.observations_path()) {
         Ok(c) => c,
         Err(_) => return Json(json!([])).into_response(),
     };
 
+    let conn = acquire_db(&state);
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut cameras: Vec<Value> = Vec::new();
     for line in content.lines() {
@@ -46,6 +52,8 @@ pub(crate) async fn trailcam_cameras(State(state): State<AppState>) -> Response 
             _ => continue,
         };
         if seen.insert(camera_id.to_string()) {
+            // Auto-register (or bump last_seen on) this trail camera.
+            super::trail_cameras::ensure_trail_camera(&conn, camera_id);
             let n = cameras.len() + 1;
             cameras.push(json!({ "camera_id": camera_id, "label": format!("Outdoor Cam {n}") }));
         }

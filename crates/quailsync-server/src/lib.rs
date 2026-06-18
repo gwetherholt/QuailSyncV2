@@ -259,6 +259,22 @@ pub fn build_app(state: AppState) -> Router {
             "/api/govee/sensors/{id}/assign",
             axum::routing::put(govee::assign_sensor).delete(govee::unassign_sensor),
         )
+        // SPYPOINT trail-camera registry + assignment. Distinct from the
+        // `/api/cameras` (MJPEG camera_feeds) and `/api/trailcam/*` (observation
+        // read) resources. See routes/trail_cameras.rs.
+        .route(
+            "/api/brooders/{id}/cameras",
+            get(trail_cameras::brooder_cameras),
+        )
+        .route("/api/trail-cameras", get(trail_cameras::list_cameras))
+        .route(
+            "/api/trail-cameras/register",
+            axum::routing::post(trail_cameras::register_camera),
+        )
+        .route(
+            "/api/trail-cameras/{id}/assign",
+            axum::routing::put(trail_cameras::assign_camera).delete(trail_cameras::unassign_camera),
+        )
         .route("/api/birds/{id}/move", axum::routing::put(birds::move_bird))
         .route(
             "/api/cameras",
