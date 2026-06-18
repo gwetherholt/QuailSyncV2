@@ -22,7 +22,7 @@ async fn spawn_test_server() -> String {
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         agent_connected: Arc::new(AtomicBool::new(false)),
-        alert_config: quailsync_common::AlertConfig::default(),
+        settings: Arc::new(std::sync::RwLock::new(quailsync_common::Settings::default())),
         live_tx,
         last_seen: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         metrics_handle,
@@ -3151,5 +3151,155 @@ mod govee_tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), 400);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// System settings (GET/PUT /api/system-settings)
+// ---------------------------------------------------------------------------
+
+mod system_settings_tests {
+    use super::*;
+    use quailsync_common::Settings;
+    use serde_json::{json, Value};
+
+    async fn fetch(base: &str) -> Settings {
+        reqwest::get(format!("{base}/api/system-settings"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    }
+
+    async fn fetch_raw(base: &str) -> Value {
+        reqwest::get(format!("{base}/api/system-settings"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn get_returns_all_keys_with_correct_types_and_defaults() {
+        let base = spawn_test_server().await;
+        let v = fetch_raw(&base).await;
+
+        // Floats serialize as JSON numbers with a fractional part.
+        assert_eq!(v["alert_temp_min_f"], json!(68.0));
+        assert_eq!(v["alert_temp_max_f"], json!(72.0));
+        assert_eq!(v["alert_humidity_min"], json!(40.0));
+        assert_eq!(v["alert_humidity_max"], json!(60.0));
+        assert_eq!(v["adult_temp_min_f"], json!(65.0));
+        assert_eq!(v["adult_temp_max_f"], json!(75.0));
+        assert_eq!(v["butcher_weight_grams"], json!(250.0));
+        assert_eq!(v["min_breeding_weight_grams"], json!(200.0));
+        // Integers.
+        assert_eq!(v["incubation_days"], json!(17));
+        assert_eq!(v["ready_to_transition_age_days"], json!(35));
+        assert_eq!(v["sensor_stale_seconds"], json!(15));
+        // Array.
+        assert!(v["brooder_week_temps_f"].is_array());
+        assert_eq!(v["brooder_week_temps_f"], json!([97, 92, 87, 82, 77, 72]));
+
+        // Typed parse equals the canonical defaults.
+        assert_eq!(fetch(&base).await, Settings::default());
+    }
+
+    #[tokio::test]
+    async fn put_partial_update_changes_only_specified_keys() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let before = fetch(&base).await;
+
+        let resp = client
+            .put(format!("{base}/api/system-settings"))
+            .json(&json!({ "incubation_days": 21, "alert_temp_min_f": 70.0 }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let returned: Settings = resp.json().await.unwrap();
+
+        // Changed keys reflect the new values.
+        assert_eq!(returned.incubation_days, 21);
+        assert!((returned.alert_temp_min_f - 70.0).abs() < f64::EPSILON);
+        // Everything else is untouched.
+        assert_eq!(
+            returned.ready_to_transition_age_days,
+            before.ready_to_transition_age_days
+        );
+        assert!((returned.alert_temp_max_f - before.alert_temp_max_f).abs() < f64::EPSILON);
+        assert_eq!(returned.sensor_stale_seconds, before.sensor_stale_seconds);
+        assert_eq!(returned.brooder_week_temps_f, before.brooder_week_temps_f);
+
+        // Persisted — a fresh GET shows the same.
+        let after = fetch(&base).await;
+        assert_eq!(after.incubation_days, 21);
+        assert!((after.alert_temp_min_f - 70.0).abs() < f64::EPSILON);
+        assert_eq!(
+            after.ready_to_transition_age_days,
+            before.ready_to_transition_age_days
+        );
+    }
+
+    #[tokio::test]
+    async fn put_week_temps_round_trips_as_json_array() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .put(format!("{base}/api/system-settings"))
+            .json(&json!({ "brooder_week_temps_f": [10, 20, 30, 40] }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let v = fetch_raw(&base).await;
+        assert!(v["brooder_week_temps_f"].is_array());
+        assert_eq!(v["brooder_week_temps_f"], json!([10, 20, 30, 40]));
+        assert_eq!(
+            fetch(&base).await.brooder_week_temps_f,
+            vec![10, 20, 30, 40]
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_rows_fall_back_to_defaults() {
+        use quailsync_server::routes::system_settings::load_system_settings;
+
+        // No system_settings table at all -> graceful fallback to defaults.
+        let conn = Connection::open_in_memory().unwrap();
+        assert_eq!(load_system_settings(&conn), Settings::default());
+
+        // Table present but empty -> still all defaults.
+        let conn2 = Connection::open_in_memory().unwrap();
+        conn2
+            .execute_batch(
+                "CREATE TABLE system_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );",
+            )
+            .unwrap();
+        assert_eq!(load_system_settings(&conn2), Settings::default());
+
+        // A single overridden row -> only that key differs; the rest default.
+        conn2
+            .execute(
+                "INSERT INTO system_settings (key, value) VALUES ('sensor_stale_seconds', '99')",
+                [],
+            )
+            .unwrap();
+        let s = load_system_settings(&conn2);
+        assert_eq!(s.sensor_stale_seconds, 99);
+        assert_eq!(s.incubation_days, Settings::default().incubation_days);
+        assert_eq!(
+            s.brooder_week_temps_f,
+            Settings::default().brooder_week_temps_f
+        );
     }
 }

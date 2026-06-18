@@ -50,7 +50,7 @@ async fn spawn_app(photos: PhotoConfig) -> String {
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         agent_connected: Arc::new(AtomicBool::new(false)),
-        alert_config: quailsync_common::AlertConfig::default(),
+        settings: Arc::new(std::sync::RwLock::new(quailsync_common::Settings::default())),
         live_tx,
         last_seen: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         metrics_handle,

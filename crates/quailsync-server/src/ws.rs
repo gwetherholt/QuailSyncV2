@@ -29,7 +29,14 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                     let conn = acquire_db(&state);
                     store_payload(&conn, &payload);
                     if let TelemetryPayload::Brooder(ref reading) = payload {
-                        check_brooder_alerts(&conn, reading, &state.alert_config);
+                        // Alert thresholds come from the server-owned settings
+                        // (system_settings table), not a hardcoded config.
+                        let alert_config = state
+                            .settings
+                            .read()
+                            .map(|s| s.alert_config())
+                            .unwrap_or_default();
+                        check_brooder_alerts(&conn, reading, &alert_config);
                         if let Some(bid) = reading.brooder_id {
                             touch_brooder(&state, bid);
                             let bid_str = bid.to_string();

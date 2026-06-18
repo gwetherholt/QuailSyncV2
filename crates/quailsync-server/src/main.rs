@@ -1,6 +1,6 @@
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc, Mutex, RwLock};
 
-use quailsync_common::AlertConfig;
+use quailsync_server::routes::system_settings::load_system_settings;
 use quailsync_server::state::PhotoConfig;
 use quailsync_server::{auto_backup_if_needed, build_app, init_db, AppState};
 use rusqlite::Connection;
@@ -69,11 +69,16 @@ async fn main() {
     init_db(&conn);
     println!("[db] SQLite initialized (quailsync.db)");
 
-    let alert_config = AlertConfig::default();
+    // Load server-owned settings (alert thresholds, lifecycle constants) from the
+    // system_settings table seeded in init_db. Routes read from this in AppState.
+    let settings = load_system_settings(&conn);
     println!(
-        "[alerts] default temp range: {:.0}-{:.0}\u{00b0}F (age-based when chicks assigned, humidity alerts disabled)",
-        alert_config.brooder_temp_min,
-        alert_config.brooder_temp_max,
+        "[settings] loaded — alert temp {:.0}-{:.0}\u{00b0}F, humidity {:.0}-{:.0}%, sensor stale {}s",
+        settings.alert_temp_min_f,
+        settings.alert_temp_max_f,
+        settings.alert_humidity_min,
+        settings.alert_humidity_max,
+        settings.sensor_stale_seconds,
     );
 
     let (live_tx, _) = broadcast::channel::<String>(64);
@@ -98,7 +103,7 @@ async fn main() {
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         agent_connected: Arc::new(AtomicBool::new(false)),
-        alert_config,
+        settings: Arc::new(RwLock::new(settings)),
         live_tx,
         last_seen: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         metrics_handle: prometheus_handle,

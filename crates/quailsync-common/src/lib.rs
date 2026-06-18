@@ -77,11 +77,15 @@ pub struct AlertConfig {
 
 impl Default for AlertConfig {
     fn default() -> Self {
+        // Fallback defaults — canonical values live in the system_settings table
+        // (keys alert_temp_min_f / alert_temp_max_f / alert_humidity_min /
+        // alert_humidity_max). The server loads them into `Settings` at startup;
+        // these literals only apply to a DB that somehow lacks the seeded rows.
         Self {
-            brooder_temp_min: 68.0,
-            brooder_temp_max: 72.0,
-            humidity_min: 40.0,
-            humidity_max: 60.0,
+            brooder_temp_min: 68.0, // Fallback default — canonical value lives in system_settings table
+            brooder_temp_max: 72.0, // Fallback default — canonical value lives in system_settings table
+            humidity_min: 40.0, // Fallback default — canonical value lives in system_settings table
+            humidity_max: 60.0, // Fallback default — canonical value lives in system_settings table
         }
     }
 }
@@ -358,7 +362,9 @@ pub struct UpdateClutch {
 // Lifecycle constants
 // =========================================================================
 
+// Fallback default — canonical value lives in system_settings table (butcher_weight_grams).
 pub const COTURNIX_BUTCHER_WEIGHT_GRAMS: f64 = 250.0;
+// Fallback default — canonical value lives in system_settings table (min_breeding_weight_grams).
 pub const COTURNIX_MIN_BREEDING_WEIGHT_GRAMS: f64 = 200.0;
 pub const MIN_FEMALES_PER_MALE: usize = 3;
 pub const MAX_FEMALES_PER_MALE: usize = 5;
@@ -574,6 +580,164 @@ pub struct UpdateAppSettings {
 }
 
 // =========================================================================
+// System settings — server-owned lifecycle + alert thresholds.
+//
+// The canonical values live in the `system_settings` table (one key/value row
+// each). `Settings` is the typed view; the server loads it at startup and the
+// GET/PUT /api/system-settings routes read/write it. This is the foundation for
+// per-user settings — today it's a single system-level set of rows.
+//
+// Each field has a corresponding hardcoded constant elsewhere in this module
+// that serves only as a fallback default (see `Settings::default`).
+// =========================================================================
+
+/// Fallback default — canonical value lives in system_settings table (incubation_days).
+pub const DEFAULT_INCUBATION_DAYS: i64 = 17;
+/// Fallback default — canonical value lives in system_settings table (sensor_stale_seconds).
+pub const DEFAULT_SENSOR_STALE_SECONDS: i64 = 15;
+/// Fallback default — canonical value lives in system_settings table (brooder_week_temps_f).
+pub const DEFAULT_BROODER_WEEK_TEMPS_F: [i64; 6] = [97, 92, 87, 82, 77, 72];
+
+/// Typed, server-owned settings. Built from the `system_settings` rows via
+/// [`Settings::from_rows`], falling back to [`Settings::default`] per key.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Settings {
+    pub alert_temp_min_f: f64,
+    pub alert_temp_max_f: f64,
+    pub alert_humidity_min: f64,
+    pub alert_humidity_max: f64,
+    pub adult_temp_min_f: f64,
+    pub adult_temp_max_f: f64,
+    pub incubation_days: i64,
+    pub ready_to_transition_age_days: i64,
+    pub butcher_weight_grams: f64,
+    pub min_breeding_weight_grams: f64,
+    pub sensor_stale_seconds: i64,
+    /// Per-week brooder target temps (°F), week 1..=6, stored as a JSON array.
+    pub brooder_week_temps_f: Vec<i64>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        // Pull from the existing hardcoded constants so there's a single source
+        // of truth for the fallback values.
+        let alerts = AlertConfig::default();
+        Self {
+            alert_temp_min_f: alerts.brooder_temp_min,
+            alert_temp_max_f: alerts.brooder_temp_max,
+            alert_humidity_min: alerts.humidity_min,
+            alert_humidity_max: alerts.humidity_max,
+            adult_temp_min_f: ADULT_TEMP_MIN,
+            adult_temp_max_f: ADULT_TEMP_MAX,
+            incubation_days: DEFAULT_INCUBATION_DAYS,
+            ready_to_transition_age_days: READY_TO_TRANSITION_AGE_DAYS,
+            butcher_weight_grams: COTURNIX_BUTCHER_WEIGHT_GRAMS,
+            min_breeding_weight_grams: COTURNIX_MIN_BREEDING_WEIGHT_GRAMS,
+            sensor_stale_seconds: DEFAULT_SENSOR_STALE_SECONDS,
+            brooder_week_temps_f: DEFAULT_BROODER_WEEK_TEMPS_F.to_vec(),
+        }
+    }
+}
+
+impl Settings {
+    /// Build `Settings` from raw `(key, value)` rows out of `system_settings`,
+    /// falling back to [`Settings::default`] for any key that's missing or
+    /// unparseable. `brooder_week_temps_f` is stored as a JSON array string
+    /// (e.g. `"[97,92,87,82,77,72]"`).
+    pub fn from_rows<I, K, V>(rows: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        use std::collections::HashMap;
+        let map: HashMap<String, String> = rows
+            .into_iter()
+            .map(|(k, v)| (k.as_ref().to_string(), v.as_ref().to_string()))
+            .collect();
+        let d = Settings::default();
+
+        fn parse_f64(map: &HashMap<String, String>, key: &str, fallback: f64) -> f64 {
+            map.get(key)
+                .and_then(|v| v.trim().parse::<f64>().ok())
+                .unwrap_or(fallback)
+        }
+        fn parse_i64(map: &HashMap<String, String>, key: &str, fallback: i64) -> i64 {
+            map.get(key)
+                .and_then(|v| v.trim().parse::<i64>().ok())
+                .unwrap_or(fallback)
+        }
+
+        let brooder_week_temps_f = map
+            .get("brooder_week_temps_f")
+            .and_then(|v| serde_json::from_str::<Vec<i64>>(v).ok())
+            .unwrap_or(d.brooder_week_temps_f);
+
+        Settings {
+            alert_temp_min_f: parse_f64(&map, "alert_temp_min_f", d.alert_temp_min_f),
+            alert_temp_max_f: parse_f64(&map, "alert_temp_max_f", d.alert_temp_max_f),
+            alert_humidity_min: parse_f64(&map, "alert_humidity_min", d.alert_humidity_min),
+            alert_humidity_max: parse_f64(&map, "alert_humidity_max", d.alert_humidity_max),
+            adult_temp_min_f: parse_f64(&map, "adult_temp_min_f", d.adult_temp_min_f),
+            adult_temp_max_f: parse_f64(&map, "adult_temp_max_f", d.adult_temp_max_f),
+            incubation_days: parse_i64(&map, "incubation_days", d.incubation_days),
+            ready_to_transition_age_days: parse_i64(
+                &map,
+                "ready_to_transition_age_days",
+                d.ready_to_transition_age_days,
+            ),
+            butcher_weight_grams: parse_f64(&map, "butcher_weight_grams", d.butcher_weight_grams),
+            min_breeding_weight_grams: parse_f64(
+                &map,
+                "min_breeding_weight_grams",
+                d.min_breeding_weight_grams,
+            ),
+            sensor_stale_seconds: parse_i64(&map, "sensor_stale_seconds", d.sensor_stale_seconds),
+            brooder_week_temps_f,
+        }
+    }
+
+    /// View the alert thresholds as an [`AlertConfig`] for the alert engine.
+    pub fn alert_config(&self) -> AlertConfig {
+        AlertConfig {
+            brooder_temp_min: self.alert_temp_min_f,
+            brooder_temp_max: self.alert_temp_max_f,
+            humidity_min: self.alert_humidity_min,
+            humidity_max: self.alert_humidity_max,
+        }
+    }
+}
+
+/// Partial-update payload for `PUT /api/system-settings` — any subset of fields.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UpdateSettings {
+    #[serde(default)]
+    pub alert_temp_min_f: Option<f64>,
+    #[serde(default)]
+    pub alert_temp_max_f: Option<f64>,
+    #[serde(default)]
+    pub alert_humidity_min: Option<f64>,
+    #[serde(default)]
+    pub alert_humidity_max: Option<f64>,
+    #[serde(default)]
+    pub adult_temp_min_f: Option<f64>,
+    #[serde(default)]
+    pub adult_temp_max_f: Option<f64>,
+    #[serde(default)]
+    pub incubation_days: Option<i64>,
+    #[serde(default)]
+    pub ready_to_transition_age_days: Option<i64>,
+    #[serde(default)]
+    pub butcher_weight_grams: Option<f64>,
+    #[serde(default)]
+    pub min_breeding_weight_grams: Option<f64>,
+    #[serde(default)]
+    pub sensor_stale_seconds: Option<i64>,
+    #[serde(default)]
+    pub brooder_week_temps_f: Option<Vec<i64>>,
+}
+
+// =========================================================================
 // Camera feed infrastructure
 // =========================================================================
 
@@ -731,6 +895,7 @@ pub struct ChickGroup {
 /// Coturnix maturity threshold — fully feathered, sexable, ready to band.
 /// 35 days = start of the 6th week under the 1-indexed "we are IN week N"
 /// convention used by the UI (week = floor(age_days / 7) + 1).
+// Fallback default — canonical value lives in system_settings table (ready_to_transition_age_days).
 pub const READY_TO_TRANSITION_AGE_DAYS: i64 = 35;
 
 impl ChickGroup {
@@ -867,7 +1032,9 @@ pub fn temp_schedule_label(age_days: i64) -> String {
 }
 
 /// Default adult/unassigned brooder temperature range.
+// Fallback default — canonical value lives in system_settings table (adult_temp_min_f).
 pub const ADULT_TEMP_MIN: f64 = 65.0;
+// Fallback default — canonical value lives in system_settings table (adult_temp_max_f).
 pub const ADULT_TEMP_MAX: f64 = 75.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1088,6 +1255,88 @@ mod tests {
         let back: AlertConfig = serde_json::from_str(&json).unwrap();
         assert!((back.brooder_temp_min - 68.0).abs() < f64::EPSILON);
         assert!((back.brooder_temp_max - 72.0).abs() < f64::EPSILON);
+    }
+
+    // --- Settings (system-settings) ---
+
+    #[test]
+    fn settings_default_matches_seed_values() {
+        let s = Settings::default();
+        assert!((s.alert_temp_min_f - 68.0).abs() < f64::EPSILON);
+        assert!((s.alert_temp_max_f - 72.0).abs() < f64::EPSILON);
+        assert!((s.alert_humidity_min - 40.0).abs() < f64::EPSILON);
+        assert!((s.alert_humidity_max - 60.0).abs() < f64::EPSILON);
+        assert!((s.adult_temp_min_f - 65.0).abs() < f64::EPSILON);
+        assert!((s.adult_temp_max_f - 75.0).abs() < f64::EPSILON);
+        assert_eq!(s.incubation_days, 17);
+        assert_eq!(s.ready_to_transition_age_days, 35);
+        assert!((s.butcher_weight_grams - 250.0).abs() < f64::EPSILON);
+        assert!((s.min_breeding_weight_grams - 200.0).abs() < f64::EPSILON);
+        assert_eq!(s.sensor_stale_seconds, 15);
+        assert_eq!(s.brooder_week_temps_f, vec![97, 92, 87, 82, 77, 72]);
+    }
+
+    #[test]
+    fn settings_from_rows_parses_all_keys() {
+        let rows = vec![
+            ("alert_temp_min_f", "70.5"),
+            ("alert_temp_max_f", "74.0"),
+            ("alert_humidity_min", "30.0"),
+            ("alert_humidity_max", "55.0"),
+            ("adult_temp_min_f", "60.0"),
+            ("adult_temp_max_f", "80.0"),
+            ("incubation_days", "18"),
+            ("ready_to_transition_age_days", "42"),
+            ("butcher_weight_grams", "260.0"),
+            ("min_breeding_weight_grams", "210.0"),
+            ("sensor_stale_seconds", "30"),
+            ("brooder_week_temps_f", "[95,90,85,80,75,70]"),
+        ];
+        let s = Settings::from_rows(rows);
+        assert!((s.alert_temp_min_f - 70.5).abs() < f64::EPSILON);
+        assert_eq!(s.incubation_days, 18);
+        assert_eq!(s.ready_to_transition_age_days, 42);
+        assert_eq!(s.sensor_stale_seconds, 30);
+        assert_eq!(s.brooder_week_temps_f, vec![95, 90, 85, 80, 75, 70]);
+    }
+
+    #[test]
+    fn settings_from_rows_falls_back_for_missing_or_malformed() {
+        // Only one valid key; one malformed; the rest absent -> all default.
+        let rows = vec![
+            ("incubation_days", "21"),
+            ("alert_temp_min_f", "not-a-number"),
+            ("brooder_week_temps_f", "{bad json"),
+        ];
+        let s = Settings::from_rows(rows);
+        assert_eq!(s.incubation_days, 21); // provided
+        let d = Settings::default();
+        assert!((s.alert_temp_min_f - d.alert_temp_min_f).abs() < f64::EPSILON); // malformed -> default
+        assert_eq!(s.brooder_week_temps_f, d.brooder_week_temps_f); // malformed -> default
+        assert_eq!(s.sensor_stale_seconds, d.sensor_stale_seconds); // absent -> default
+    }
+
+    #[test]
+    fn settings_empty_rows_is_all_defaults() {
+        let empty: Vec<(String, String)> = Vec::new();
+        assert_eq!(Settings::from_rows(empty), Settings::default());
+    }
+
+    #[test]
+    fn settings_week_temps_json_round_trip() {
+        let original = Settings::default();
+        let encoded = serde_json::to_string(&original.brooder_week_temps_f).unwrap();
+        assert_eq!(encoded, "[97,92,87,82,77,72]");
+        let s = Settings::from_rows(vec![("brooder_week_temps_f", encoded.as_str())]);
+        assert_eq!(s.brooder_week_temps_f, original.brooder_week_temps_f);
+    }
+
+    #[test]
+    fn settings_alert_config_view() {
+        let s = Settings::default();
+        let cfg = s.alert_config();
+        assert!((cfg.brooder_temp_min - s.alert_temp_min_f).abs() < f64::EPSILON);
+        assert!((cfg.humidity_max - s.alert_humidity_max).abs() < f64::EPSILON);
     }
 
     #[test]

@@ -12,5 +12,6 @@ pub mod photos;
 pub mod processing;
 pub mod reconcile;
 pub mod settings;
+pub mod system_settings;
 pub mod telemetry;
 pub mod trailcam;

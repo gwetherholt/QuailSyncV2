@@ -504,6 +504,39 @@ pub fn init_db(conn: &Connection) {
     )
     .ok();
 
+    // --- System settings (server-owned lifecycle + alert thresholds) ---
+    // Key/value rows; the typed view + parsing live in quailsync_common::Settings.
+    // Seeded once with INSERT OR IGNORE so user edits survive restarts and only
+    // missing keys ever get a default. brooder_week_temps_f is a JSON array.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS system_settings (
+            key        TEXT PRIMARY KEY,
+            value      TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );",
+    )
+    .expect("failed to create system_settings table");
+    for (key, value) in [
+        ("alert_temp_min_f", "68.0"),
+        ("alert_temp_max_f", "72.0"),
+        ("alert_humidity_min", "40.0"),
+        ("alert_humidity_max", "60.0"),
+        ("adult_temp_min_f", "65.0"),
+        ("adult_temp_max_f", "75.0"),
+        ("incubation_days", "17"),
+        ("ready_to_transition_age_days", "35"),
+        ("butcher_weight_grams", "250.0"),
+        ("min_breeding_weight_grams", "200.0"),
+        ("sensor_stale_seconds", "15"),
+        ("brooder_week_temps_f", "[97,92,87,82,77,72]"),
+    ] {
+        conn.execute(
+            "INSERT OR IGNORE INTO system_settings (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )
+        .ok();
+    }
+
     // --- Headcount inference results ---
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS headcounts (

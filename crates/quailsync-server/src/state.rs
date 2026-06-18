@@ -6,7 +6,7 @@ use std::time::Instant;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use metrics_exporter_prometheus::PrometheusHandle;
-use quailsync_common::AlertConfig;
+use quailsync_common::Settings;
 use rusqlite::Connection;
 use tokio::sync::broadcast;
 
@@ -112,7 +112,10 @@ impl TrailcamConfig {
 pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
     pub agent_connected: Arc<AtomicBool>,
-    pub alert_config: AlertConfig,
+    /// Server-owned lifecycle + alert settings, loaded from `system_settings`
+    /// at startup. Behind a lock so `PUT /api/system-settings` can refresh the
+    /// live copy the alert engine reads. See `routes/system_settings.rs`.
+    pub settings: Arc<RwLock<Settings>>,
     pub live_tx: broadcast::Sender<String>,
     /// Tracks the last time telemetry was received for each brooder_id.
     pub last_seen: Arc<RwLock<HashMap<i64, Instant>>>,

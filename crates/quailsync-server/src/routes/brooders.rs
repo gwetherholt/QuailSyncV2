@@ -371,6 +371,14 @@ pub(crate) async fn brooder_status(
         params![id], |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?)),
     );
 
+    // Adult/unassigned range comes from server-owned settings (system_settings),
+    // falling back to the ADULT_TEMP_* constants only if the lock is poisoned.
+    let (adult_min, adult_max) = state
+        .settings
+        .read()
+        .map(|s| (s.adult_temp_min_f, s.adult_temp_max_f))
+        .unwrap_or((ADULT_TEMP_MIN, ADULT_TEMP_MAX));
+
     let (latest_temp, latest_humidity, has_alert, alert_message) = match latest {
         Ok((temp, hum)) => {
             // Use age-based temperature range if a chick group is assigned
@@ -379,7 +387,7 @@ pub(crate) async fn brooder_status(
                     let (target, tolerance) = target_temp_for_age(age);
                     (target - tolerance, target + tolerance)
                 } else {
-                    (ADULT_TEMP_MIN, ADULT_TEMP_MAX)
+                    (adult_min, adult_max)
                 };
             let mut alert = false;
             let mut msg = None;
@@ -417,6 +425,12 @@ pub(crate) async fn brooder_target_temp(
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
+    // Adult/unassigned range from server-owned settings (system_settings).
+    let (adult_min, adult_max) = state
+        .settings
+        .read()
+        .map(|s| (s.adult_temp_min_f, s.adult_temp_max_f))
+        .unwrap_or((ADULT_TEMP_MIN, ADULT_TEMP_MAX));
     if let Some((group_id, age)) = youngest_chick_age_in_brooder(&conn, id) {
         let (target, tolerance) = target_temp_for_age(age);
         let week = (age / 7) + 1;
@@ -441,9 +455,9 @@ pub(crate) async fn brooder_target_temp(
     } else {
         Json(TargetTempResponse {
             brooder_id: id,
-            target_temp_f: (ADULT_TEMP_MIN + ADULT_TEMP_MAX) / 2.0,
-            min_temp_f: ADULT_TEMP_MIN,
-            max_temp_f: ADULT_TEMP_MAX,
+            target_temp_f: (adult_min + adult_max) / 2.0,
+            min_temp_f: adult_min,
+            max_temp_f: adult_max,
             week: 0,
             age_days: None,
             chick_group_id: None,

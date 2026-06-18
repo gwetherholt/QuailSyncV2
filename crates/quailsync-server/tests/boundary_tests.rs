@@ -31,7 +31,7 @@ async fn spawn_test_server() -> String {
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         agent_connected: Arc::new(AtomicBool::new(false)),
-        alert_config: AlertConfig::default(),
+        settings: Arc::new(std::sync::RwLock::new(Settings::default())),
         live_tx,
         last_seen: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         metrics_handle,
