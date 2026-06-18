@@ -9,7 +9,5 @@ govee_api_key: "YOUR_API_KEY_HERE"
 quailsync_api_url: "http://localhost:3000"
 poll_interval_seconds: 300  # 5 minutes
 
-# Optional. Unit the Govee API reports temperature in for your sensors; readings
-# are forwarded to QuailSync as Fahrenheit. Use "C" if your devices report
-# Celsius. Defaults to "F".
-# temperature_unit: "F"
+# Note: the Govee OpenAPI v2 reports sensor temperature already in Fahrenheit,
+# so no unit conversion is configured or needed.
