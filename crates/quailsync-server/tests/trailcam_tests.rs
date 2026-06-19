@@ -1,9 +1,8 @@
-//! Integration tests for the trail-cam read endpoints
-//! (`GET /api/trailcam/latest/{camera_id}` and
-//! `GET /api/trailcam/image/{camera_id}/{filename}`), which read the pipeline's
-//! `processed/observations.jsonl` and serve processed JPEGs.
+//! Integration tests for the SQLite-backed trail-cam observation endpoints:
+//! `POST /api/trailcam/observation`, `GET /api/trailcam/latest/{camera_id}`,
+//! `GET /api/trailcam/cameras`, `GET /api/trailcam/history/{camera_id}`, and
+//! image serving from `processed/{camera_id}/`.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -57,18 +56,19 @@ async fn spawn_app(processed_dir: &Path) -> String {
     format!("http://{addr}")
 }
 
-/// Append one observation line to `observations.jsonl`, mirroring the bridge's
-/// payload shape.
-fn write_observation(
-    processed_dir: &Path,
+/// POST one observation (mirroring the bridge payload). Asserts 201.
+#[allow(clippy::too_many_arguments)]
+async fn post_observation(
+    base: &str,
+    client: &reqwest::Client,
     camera_id: &str,
     timestamp: &str,
     bird_count: i64,
     avg_conf: f64,
-    filename: &str,
+    image_filename: &str,
+    annotated_image_filename: Option<&str>,
 ) {
-    let line = json!({
-        "source": "trailcam",
+    let mut body = json!({
         "camera_id": camera_id,
         "timestamp": timestamp,
         "bird_count": bird_count,
@@ -76,15 +76,22 @@ fn write_observation(
         "min_confidence": avg_conf,
         "detections": [{"class_name": "quail", "confidence": avg_conf, "bbox": [10.0, 10.0, 20.0, 20.0]}],
         "inference_time_ms": 5.0,
-        "image_path": format!("/host/trailcam/processed/{camera_id}/{filename}"),
-    })
-    .to_string();
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(processed_dir.join("observations.jsonl"))
+        "image_filename": image_filename,
+    });
+    if let Some(a) = annotated_image_filename {
+        body["annotated_image_filename"] = json!(a);
+    }
+    let resp = client
+        .post(format!("{base}/api/trailcam/observation"))
+        .json(&body)
+        .send()
+        .await
         .unwrap();
-    writeln!(f, "{line}").unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::CREATED,
+        "observation POST failed"
+    );
 }
 
 fn write_image(processed_dir: &Path, camera_id: &str, filename: &str, bytes: &[u8]) {
@@ -100,41 +107,52 @@ fn write_image(processed_dir: &Path, camera_id: &str, filename: &str, bytes: &[u
 #[tokio::test]
 async fn latest_returns_most_recent_for_camera() {
     let processed = unique_processed_dir();
+    let base = spawn_app(&processed).await;
+    let c = client();
     // camA has two observations (out of order), camB one — latest must pick the
-    // greatest-timestamp camA entry, not just the last line.
-    write_observation(
-        &processed,
+    // greatest-timestamp camA entry, not just the last inserted.
+    post_observation(
+        &base,
+        &c,
         "camA",
         "2026-06-15T07:30:00",
         5,
         0.7,
         "20260615-073000_c.jpg",
-    );
-    write_observation(
-        &processed,
+        None,
+    )
+    .await;
+    post_observation(
+        &base,
+        &c,
         "camB",
         "2026-06-15T08:00:00",
         1,
         0.9,
         "20260615-080000_b.jpg",
-    );
-    write_observation(
-        &processed,
+        None,
+    )
+    .await;
+    post_observation(
+        &base,
+        &c,
         "camA",
         "2026-06-15T05:00:00",
         3,
         0.8,
         "20260615-050000_a.jpg",
-    );
+        None,
+    )
+    .await;
 
-    let base = spawn_app(&processed).await;
-    let resp = client()
+    let body: Value = c
         .get(format!("{base}/api/trailcam/latest/camA"))
         .send()
         .await
+        .unwrap()
+        .json()
+        .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body: Value = resp.json().await.unwrap();
 
     assert_eq!(body["camera_id"], "camA");
     assert_eq!(body["bird_count"].as_i64(), Some(5));
@@ -150,17 +168,22 @@ async fn latest_returns_most_recent_for_camera() {
 #[tokio::test]
 async fn latest_annotated_url_null_when_no_annotated_file() {
     let processed = unique_processed_dir();
-    write_observation(
-        &processed,
+    let base = spawn_app(&processed).await;
+    let c = client();
+    // Annotated filename is stored, but the file isn't on disk -> url is null.
+    post_observation(
+        &base,
+        &c,
         "camA",
         "2026-06-15T07:30:00",
         2,
         0.8,
         "20260615-073000_c.jpg",
-    );
-    // No `_annotated.jpg` on disk -> annotated_image_url is null, raw url stands.
-    let base = spawn_app(&processed).await;
-    let body: Value = client()
+        Some("20260615-073000_c_annotated.jpg"),
+    )
+    .await;
+
+    let body: Value = c
         .get(format!("{base}/api/trailcam/latest/camA"))
         .send()
         .await
@@ -179,14 +202,6 @@ async fn latest_annotated_url_null_when_no_annotated_file() {
 #[tokio::test]
 async fn latest_returns_annotated_url_when_file_present() {
     let processed = unique_processed_dir();
-    write_observation(
-        &processed,
-        "camA",
-        "2026-06-15T07:30:00",
-        2,
-        0.8,
-        "20260615-073000_c.jpg",
-    );
     // The detector's annotated copy exists on disk -> it's advertised.
     write_image(
         &processed,
@@ -194,9 +209,21 @@ async fn latest_returns_annotated_url_when_file_present() {
         "20260615-073000_c_annotated.jpg",
         &[0xFF, 0xD8, 0xFF],
     );
-
     let base = spawn_app(&processed).await;
-    let body: Value = client()
+    let c = client();
+    post_observation(
+        &base,
+        &c,
+        "camA",
+        "2026-06-15T07:30:00",
+        2,
+        0.8,
+        "20260615-073000_c.jpg",
+        Some("20260615-073000_c_annotated.jpg"),
+    )
+    .await;
+
+    let body: Value = c
         .get(format!("{base}/api/trailcam/latest/camA"))
         .send()
         .await
@@ -218,10 +245,21 @@ async fn latest_returns_annotated_url_when_file_present() {
 #[tokio::test]
 async fn latest_404_for_unknown_camera() {
     let processed = unique_processed_dir();
-    write_observation(&processed, "camA", "2026-06-15T05:00:00", 3, 0.8, "x.jpg");
     let base = spawn_app(&processed).await;
+    let c = client();
+    post_observation(
+        &base,
+        &c,
+        "camA",
+        "2026-06-15T05:00:00",
+        3,
+        0.8,
+        "x.jpg",
+        None,
+    )
+    .await;
 
-    let resp = client()
+    let resp = c
         .get(format!("{base}/api/trailcam/latest/ghost"))
         .send()
         .await
@@ -230,9 +268,9 @@ async fn latest_404_for_unknown_camera() {
 }
 
 #[tokio::test]
-async fn latest_404_when_no_observations_file() {
-    let processed = unique_processed_dir(); // empty dir, no observations.jsonl
-    let base = spawn_app(&processed).await;
+async fn latest_404_when_no_observations() {
+    let processed = unique_processed_dir();
+    let base = spawn_app(&processed).await; // empty DB
 
     let resp = client()
         .get(format!("{base}/api/trailcam/latest/camA"))
@@ -249,14 +287,45 @@ async fn latest_404_when_no_observations_file() {
 #[tokio::test]
 async fn cameras_lists_distinct_in_first_appearance_order() {
     let processed = unique_processed_dir();
-    // camB appears first, then camA, then camB again (dup). Order of FIRST
-    // appearance is camB, camA; labels number accordingly.
-    write_observation(&processed, "camB", "2026-06-15T05:00:00", 1, 0.9, "b1.jpg");
-    write_observation(&processed, "camA", "2026-06-15T05:30:00", 2, 0.8, "a1.jpg");
-    write_observation(&processed, "camB", "2026-06-15T06:00:00", 3, 0.7, "b2.jpg");
-
     let base = spawn_app(&processed).await;
-    let cams: Value = client()
+    let c = client();
+    // camB appears first, then camA, then camB again (dup). First-appearance
+    // order is camB, camA; labels number accordingly.
+    post_observation(
+        &base,
+        &c,
+        "camB",
+        "2026-06-15T05:00:00",
+        1,
+        0.9,
+        "b1.jpg",
+        None,
+    )
+    .await;
+    post_observation(
+        &base,
+        &c,
+        "camA",
+        "2026-06-15T05:30:00",
+        2,
+        0.8,
+        "a1.jpg",
+        None,
+    )
+    .await;
+    post_observation(
+        &base,
+        &c,
+        "camB",
+        "2026-06-15T06:00:00",
+        3,
+        0.7,
+        "b2.jpg",
+        None,
+    )
+    .await;
+
+    let cams: Value = c
         .get(format!("{base}/api/trailcam/cameras"))
         .send()
         .await
@@ -274,8 +343,8 @@ async fn cameras_lists_distinct_in_first_appearance_order() {
 }
 
 #[tokio::test]
-async fn cameras_empty_when_no_observations_file() {
-    let processed = unique_processed_dir(); // no observations.jsonl
+async fn cameras_empty_when_no_observations() {
+    let processed = unique_processed_dir();
     let base = spawn_app(&processed).await;
 
     let resp = client()
@@ -286,6 +355,106 @@ async fn cameras_empty_when_no_observations_file() {
     assert_eq!(resp.status(), StatusCode::OK);
     let cams: Value = resp.json().await.unwrap();
     assert!(cams.as_array().unwrap().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// history
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn history_returns_camera_observations_oldest_first() {
+    let processed = unique_processed_dir();
+    let base = spawn_app(&processed).await;
+    let c = client();
+    post_observation(
+        &base,
+        &c,
+        "camA",
+        "2026-06-15T05:00:00",
+        2,
+        0.8,
+        "a1.jpg",
+        None,
+    )
+    .await;
+    post_observation(
+        &base,
+        &c,
+        "camA",
+        "2026-06-15T06:00:00",
+        4,
+        0.9,
+        "a2.jpg",
+        None,
+    )
+    .await;
+    post_observation(
+        &base,
+        &c,
+        "camB",
+        "2026-06-15T06:00:00",
+        1,
+        0.7,
+        "b1.jpg",
+        None,
+    )
+    .await;
+
+    let hist: Value = c
+        .get(format!("{base}/api/trailcam/history/camA?hours=24"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let arr = hist.as_array().unwrap();
+    assert_eq!(arr.len(), 2, "only camA's two observations");
+    // Oldest first (insertion order).
+    assert_eq!(arr[0]["bird_count"].as_i64(), Some(2));
+    assert_eq!(arr[1]["bird_count"].as_i64(), Some(4));
+    assert_eq!(arr[0]["camera_id"], "camA");
+    assert!(arr[0]["created_at"].is_string());
+    assert_eq!(arr[1]["image_url"], "/api/trailcam/image/camA/a2.jpg");
+}
+
+#[tokio::test]
+async fn history_defaults_to_24h_and_empty_for_unknown_camera() {
+    let processed = unique_processed_dir();
+    let base = spawn_app(&processed).await;
+    let c = client();
+    post_observation(
+        &base,
+        &c,
+        "camA",
+        "2026-06-15T05:00:00",
+        2,
+        0.8,
+        "a1.jpg",
+        None,
+    )
+    .await;
+
+    // No `hours` -> default window still returns the just-posted row.
+    let hist: Value = c
+        .get(format!("{base}/api/trailcam/history/camA"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(hist.as_array().unwrap().len(), 1);
+
+    // Unknown camera -> empty array, not 404.
+    let resp = c
+        .get(format!("{base}/api/trailcam/history/ghost"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let ghost: Value = resp.json().await.unwrap();
+    assert!(ghost.as_array().unwrap().is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -348,25 +517,18 @@ async fn image_404_for_missing_and_non_jpg() {
 }
 
 // ---------------------------------------------------------------------------
-// auto-registration: a camera seen in observations.jsonl becomes a registered
-// trail_cameras row when the server reads the observation-derived camera list.
+// auto-registration: posting an observation from an unknown camera creates a
+// trail_cameras row (the same way Govee readings auto-register sensors).
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn observed_camera_auto_registers_as_trail_camera() {
     let processed = unique_processed_dir();
-    write_observation(
-        &processed,
-        "auto-cam-1",
-        "2026-06-15T07:30:00",
-        2,
-        0.8,
-        "p.jpg",
-    );
     let base = spawn_app(&processed).await;
+    let c = client();
 
-    // Registry starts empty (nothing seeded, no list read yet).
-    let before: Value = client()
+    // Registry starts empty.
+    let before: Value = c
         .get(format!("{base}/api/trail-cameras"))
         .send()
         .await
@@ -376,19 +538,21 @@ async fn observed_camera_auto_registers_as_trail_camera() {
         .unwrap();
     assert!(before.as_array().unwrap().is_empty());
 
-    // Reading the observation-derived camera list auto-registers each camera.
-    let cams: Value = client()
-        .get(format!("{base}/api/trailcam/cameras"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(cams.as_array().unwrap().len(), 1);
+    // Posting an observation auto-registers the camera.
+    post_observation(
+        &base,
+        &c,
+        "auto-cam-1",
+        "2026-06-15T07:30:00",
+        2,
+        0.8,
+        "p.jpg",
+        None,
+    )
+    .await;
 
-    // It's now a registered (unassigned) trail camera.
-    let after: Value = client()
+    // It's now a registered (unassigned) trail camera, and shows in the list.
+    let after: Value = c
         .get(format!("{base}/api/trail-cameras"))
         .send()
         .await
@@ -400,4 +564,14 @@ async fn observed_camera_auto_registers_as_trail_camera() {
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["spypoint_camera_id"], "auto-cam-1");
     assert!(arr[0]["assignment"].is_null());
+
+    let cams: Value = c
+        .get(format!("{base}/api/trailcam/cameras"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(cams.as_array().unwrap().len(), 1);
 }

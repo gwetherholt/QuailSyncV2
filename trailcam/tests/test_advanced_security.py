@@ -595,13 +595,20 @@ def test_bridge_payload_sanitizes_camera_and_class(tmp_path):
 
 
 def test_bridge_post_writes_sanitized_values(tmp_path):
-    """Sanitization survives the JSONL round-trip written by ``post()``.
+    """Sanitization survives the JSONL round-trip written by ``post()``'s
+    write-ahead-log fallback.
 
-    Asserts the raw payload markers (``';``, ``<b>``) aren't in the written line
-    and the record still parses with non-empty fields.
+    With the API down, ``post()`` writes the observation to the WAL; the raw
+    payload markers (``';``, ``<b>``) must not be in the written line and the
+    record still parses with non-empty fields.
     """
+
+    class _Down:
+        def post(self, *_a, **_k):
+            raise OSError("api down")
+
     out = tmp_path / "obs.jsonl"
-    bridge = QuailSyncBridge(output_path=out)
+    bridge = QuailSyncBridge(output_path=out, session=_Down())
     assert bridge.post(_det_result(camera_id="x';--", class_name="<b>y</b>")) is True
     line = out.read_text(encoding="utf-8").strip()
     assert "';" not in line and "<b>" not in line

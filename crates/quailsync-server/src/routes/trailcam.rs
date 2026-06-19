@@ -1,177 +1,311 @@
-//! Trail-cam read endpoints.
+//! Trail-cam observation endpoints (SQLite-backed).
 //!
-//! The trail-cam pipeline (separate process, see `trailcam/`) appends one JSON
-//! object per line to `processed/observations.jsonl` and stores the JPEGs in
-//! `processed/{camera_id}/`. Until a proper `POST /api/trailcam/observation`
-//! endpoint + table exist, these handlers read that file directly to surface
-//! the latest observation per camera and to serve the images.
+//! The trail-cam pipeline (separate process, see `trailcam/`) POSTs one
+//! observation per processed photo to `POST /api/trailcam/observation`; the
+//! bridge keeps a `processed/observations.jsonl` write-ahead log only as a
+//! fallback for when this API is unreachable. Observations live in the
+//! `trail_cam_observations` table; the JPEGs are served from
+//! `processed/{camera_id}/`.
+//!
+//! Posting an observation also auto-registers the camera in `trail_cameras`
+//! (the same way the Govee ingest auto-registers sensors).
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use rusqlite::params;
 use serde_json::{json, Value};
 
-use crate::state::{acquire_db, AppState};
+use crate::state::{acquire_db, db_error, AppState};
 
 /// JSON error body shared by these handlers.
 fn err(status: StatusCode, code: &str, message: &str) -> Response {
     (status, Json(json!({ "error": code, "message": message }))).into_response()
 }
 
-/// `GET /api/trailcam/cameras` — distinct cameras seen in `observations.jsonl`.
-///
-/// Returns `[{ "camera_id", "label" }]` with labels "Outdoor Cam 1", "Outdoor
-/// Cam 2", … numbered by order of first appearance. A missing/empty log yields
-/// `[]` (clients then show no outdoor cameras).
-///
-/// This is also the trail-camera auto-registration point: the poller writes
-/// observations to disk (there's no photo-ingest HTTP endpoint), so the first
-/// time the server sees a camera_id here it upserts a `trail_cameras` row (and
-/// bumps `last_seen`), the same way the Govee ingest auto-registers sensors.
-pub(crate) async fn trailcam_cameras(State(state): State<AppState>) -> Response {
-    let content = match std::fs::read_to_string(state.trailcam.observations_path()) {
-        Ok(c) => c,
-        Err(_) => return Json(json!([])).into_response(),
-    };
+/// Strip any directory part from a client-supplied filename so we only ever
+/// store/serve a basename (the image-serve handler also rejects separators).
+fn basename(name: &str) -> String {
+    name.rsplit(['/', '\\']).next().unwrap_or(name).to_string()
+}
 
-    let conn = acquire_db(&state);
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut cameras: Vec<Value> = Vec::new();
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let obs: Value = match serde_json::from_str(line) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let camera_id = match obs.get("camera_id").and_then(Value::as_str) {
-            Some(c) if !c.is_empty() => c,
-            _ => continue,
-        };
-        if seen.insert(camera_id.to_string()) {
-            // Auto-register (or bump last_seen on) this trail camera.
-            super::trail_cameras::ensure_trail_camera(&conn, camera_id);
-            let n = cameras.len() + 1;
-            cameras.push(json!({ "camera_id": camera_id, "label": format!("Outdoor Cam {n}") }));
-        }
+/// `/api/trailcam/image/{camera_id}/{filename}` URL for a stored filename, or
+/// `Null` when absent/empty.
+fn image_url_for(camera_id: &str, filename: Option<&str>) -> Value {
+    filename
+        .filter(|f| !f.is_empty())
+        .map(|f| json!(format!("/api/trailcam/image/{camera_id}/{f}")))
+        .unwrap_or(Value::Null)
+}
+
+/// Like [`image_url_for`] but only when the annotated file is actually on disk —
+/// so the client can fall back to the raw image when there's no overlay copy.
+fn annotated_url_for(
+    processed_dir: &std::path::Path,
+    camera_id: &str,
+    filename: Option<&str>,
+) -> Value {
+    filename
+        .filter(|f| !f.is_empty())
+        .filter(|f| processed_dir.join(camera_id).join(f).is_file())
+        .map(|f| json!(format!("/api/trailcam/image/{camera_id}/{f}")))
+        .unwrap_or(Value::Null)
+}
+
+/// Parse the stored detections JSON text back into a value (defaulting to `[]`).
+fn parse_detections(s: Option<&str>) -> Value {
+    s.and_then(|s| serde_json::from_str::<Value>(s).ok())
+        .unwrap_or_else(|| json!([]))
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/trailcam/observation — ingest one observation from the pipeline.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+pub(crate) struct ObservationRequest {
+    camera_id: String,
+    #[serde(default)]
+    timestamp: Option<String>,
+    #[serde(default)]
+    bird_count: i64,
+    #[serde(default)]
+    average_confidence: Option<f64>,
+    #[serde(default)]
+    min_confidence: Option<f64>,
+    #[serde(default)]
+    detections: Value,
+    #[serde(default)]
+    inference_time_ms: f64,
+    #[serde(default)]
+    image_filename: Option<String>,
+    #[serde(default)]
+    annotated_image_filename: Option<String>,
+}
+
+/// Insert one observation. Auto-registers the camera, then stores the row.
+/// Returns 201 with the new id.
+pub(crate) async fn trailcam_observation(
+    State(state): State<AppState>,
+    Json(body): Json<ObservationRequest>,
+) -> Response {
+    if body.camera_id.trim().is_empty() {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "camera_id is required",
+        );
     }
+    let conn = acquire_db(&state);
 
+    // Auto-register (or bump last_seen on) the camera — mirrors Govee ingest.
+    super::trail_cameras::ensure_trail_camera(&conn, &body.camera_id);
+
+    let detections_json =
+        serde_json::to_string(&body.detections).unwrap_or_else(|_| "[]".to_string());
+    // Defensive: never store a host path, only a basename.
+    let image_filename = body.image_filename.as_deref().map(basename);
+    let annotated_image_filename = body.annotated_image_filename.as_deref().map(basename);
+
+    match conn.execute(
+        "INSERT INTO trail_cam_observations
+            (camera_id, timestamp, bird_count, average_confidence, min_confidence,
+             detections, inference_time_ms, image_filename, annotated_image_filename)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            body.camera_id,
+            body.timestamp,
+            body.bird_count,
+            body.average_confidence,
+            body.min_confidence,
+            detections_json,
+            body.inference_time_ms,
+            image_filename,
+            annotated_image_filename,
+        ],
+    ) {
+        Ok(_) => (
+            StatusCode::CREATED,
+            Json(json!({ "stored": 1, "id": conn.last_insert_rowid() })),
+        )
+            .into_response(),
+        Err(e) => db_error(e),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/trailcam/cameras — distinct cameras with observations.
+// ---------------------------------------------------------------------------
+
+/// Returns `[{ "camera_id", "label" }]` with labels "Outdoor Cam 1", … numbered
+/// by order of first appearance (lowest row id). Empty when no observations.
+pub(crate) async fn trailcam_cameras(State(state): State<AppState>) -> Response {
+    let conn = acquire_db(&state);
+    let ids: Vec<String> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT camera_id FROM trail_cam_observations
+                 GROUP BY camera_id ORDER BY MIN(id)",
+            )
+            .expect("prepare failed");
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
+    };
+    let cameras: Vec<Value> = ids
+        .iter()
+        .enumerate()
+        .map(|(i, cid)| json!({ "camera_id": cid, "label": format!("Outdoor Cam {}", i + 1) }))
+        .collect();
     Json(cameras).into_response()
 }
 
-/// `GET /api/trailcam/latest/{camera_id}` — most recent observation for a camera.
-///
-/// Scans `observations.jsonl` for the matching camera_id with the greatest
-/// `timestamp` (ISO strings sort chronologically; ties resolve to the later
-/// line) and returns `{ camera_id, bird_count, timestamp, confidence_avg,
-/// detections, image_url }`. 404 if the log is missing or has no such camera.
+// ---------------------------------------------------------------------------
+// GET /api/trailcam/latest/{camera_id} — most recent observation for a camera.
+// ---------------------------------------------------------------------------
+
 pub(crate) async fn trailcam_latest(
     State(state): State<AppState>,
     Path(camera_id): Path<String>,
 ) -> Response {
-    let obs_path = state.trailcam.observations_path();
-    let content = match std::fs::read_to_string(&obs_path) {
-        Ok(c) => c,
-        Err(_) => {
-            return err(
-                StatusCode::NOT_FOUND,
-                "no_observations",
-                "No trail-cam observations recorded yet.",
-            )
-        }
-    };
+    let conn = acquire_db(&state);
+    let row = conn.query_row(
+        "SELECT timestamp, bird_count, average_confidence, detections,
+                image_filename, annotated_image_filename
+         FROM trail_cam_observations
+         WHERE camera_id = ?1
+         ORDER BY timestamp DESC, id DESC
+         LIMIT 1",
+        params![camera_id],
+        |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, Option<f64>>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, Option<String>>(4)?,
+                r.get::<_, Option<String>>(5)?,
+            ))
+        },
+    );
 
-    // Pick the matching observation with the largest timestamp; on a tie or a
-    // missing/empty timestamp, the later line wins.
-    let mut latest: Option<Value> = None;
-    let mut latest_ts = String::new();
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let obs: Value = match serde_json::from_str(line) {
-            Ok(v) => v,
-            Err(_) => continue, // skip a corrupt line rather than failing
+    let (timestamp, bird_count, avg_conf, detections_str, image_filename, annotated_filename) =
+        match row {
+            Ok(r) => r,
+            Err(_) => {
+                return err(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "No observation for that camera.",
+                )
+            }
         };
-        if obs.get("camera_id").and_then(Value::as_str) != Some(camera_id.as_str()) {
-            continue;
-        }
-        let ts = obs
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        if latest.is_none() || ts >= latest_ts {
-            latest_ts = ts;
-            latest = Some(obs);
-        }
-    }
-
-    let Some(obs) = latest else {
-        return err(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "No observation for that camera.",
-        );
-    };
-
-    // Build the image URL from the stored image_path's filename (basename only,
-    // so the server never echoes a host path).
-    let filename = obs
-        .get("image_path")
-        .and_then(Value::as_str)
-        .and_then(|p| p.rsplit(['/', '\\']).next())
-        .filter(|f| !f.is_empty());
-
-    let image_url = filename
-        .map(|f| json!(format!("/api/trailcam/image/{camera_id}/{f}")))
-        .unwrap_or(Value::Null);
-
-    // The detector writes a `{stem}_annotated.jpg` copy with bounding boxes
-    // drawn on. Only advertise it when it's actually on disk, so the client can
-    // fall back to the raw image when there's no annotated version.
-    let annotated_image_url = filename
-        .and_then(annotated_filename)
-        .filter(|annotated| {
-            state
-                .trailcam
-                .processed_dir
-                .join(&camera_id)
-                .join(annotated)
-                .is_file()
-        })
-        .map(|annotated| json!(format!("/api/trailcam/image/{camera_id}/{annotated}")))
-        .unwrap_or(Value::Null);
 
     let body = json!({
         "camera_id": camera_id,
-        "bird_count": obs.get("bird_count").cloned().unwrap_or(Value::Null),
-        "timestamp": obs.get("timestamp").cloned().unwrap_or(Value::Null),
-        "confidence_avg": obs.get("average_confidence").cloned().unwrap_or(Value::Null),
-        "detections": obs.get("detections").cloned().unwrap_or_else(|| json!([])),
-        "image_url": image_url,
-        "annotated_image_url": annotated_image_url,
+        "bird_count": bird_count,
+        "timestamp": timestamp,
+        "confidence_avg": avg_conf,
+        "detections": parse_detections(detections_str.as_deref()),
+        "image_url": image_url_for(&camera_id, image_filename.as_deref()),
+        "annotated_image_url": annotated_url_for(
+            &state.trailcam.processed_dir,
+            &camera_id,
+            annotated_filename.as_deref(),
+        ),
     });
     (StatusCode::OK, Json(body)).into_response()
 }
 
-/// `foo.jpg` -> `foo_annotated.jpg` (case-insensitive `.jpg`); `None` for any
-/// name that isn't a `.jpg`.
-fn annotated_filename(filename: &str) -> Option<String> {
-    let len = filename.len();
-    if len >= 4 && filename[len - 4..].eq_ignore_ascii_case(".jpg") {
-        Some(format!("{}_annotated.jpg", &filename[..len - 4]))
-    } else {
-        None
-    }
+// ---------------------------------------------------------------------------
+// GET /api/trailcam/history/{camera_id}?hours=24 — observations in a window.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+pub(crate) struct HistoryQuery {
+    hours: Option<i64>,
 }
 
-/// `GET /api/trailcam/image/{camera_id}/{filename}` — serve a processed JPEG.
-///
+/// All observations for a camera within the last `hours` (default 24), oldest
+/// first — for trend graphs. Window is by `created_at` (server insertion time,
+/// reliable UTC) so it doesn't depend on the camera's own clock format.
+pub(crate) async fn trailcam_history(
+    State(state): State<AppState>,
+    Path(camera_id): Path<String>,
+    Query(q): Query<HistoryQuery>,
+) -> Response {
+    let hours = q.hours.unwrap_or(24).clamp(1, 24 * 365);
+    let cutoff = format!("-{hours} hours");
+    let conn = acquire_db(&state);
+
+    type Row = (
+        Option<String>, // timestamp
+        i64,            // bird_count
+        Option<f64>,    // average_confidence
+        Option<f64>,    // min_confidence
+        Option<String>, // detections
+        Option<f64>,    // inference_time_ms
+        Option<String>, // image_filename
+        Option<String>, // annotated_image_filename
+        String,         // created_at
+    );
+    let rows: Vec<Row> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT timestamp, bird_count, average_confidence, min_confidence,
+                        detections, inference_time_ms, image_filename,
+                        annotated_image_filename, created_at
+                 FROM trail_cam_observations
+                 WHERE camera_id = ?1 AND created_at >= datetime('now', ?2)
+                 ORDER BY created_at ASC, id ASC",
+            )
+            .expect("prepare failed");
+        stmt.query_map(params![camera_id, cutoff], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+                r.get(7)?,
+                r.get(8)?,
+            ))
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    };
+
+    let out: Vec<Value> = rows
+        .into_iter()
+        .map(|(ts, bird_count, avg, min, det, inf, img, ann, created)| {
+            json!({
+                "camera_id": camera_id,
+                "timestamp": ts,
+                "bird_count": bird_count,
+                "confidence_avg": avg,
+                "min_confidence": min,
+                "detections": parse_detections(det.as_deref()),
+                "inference_time_ms": inf,
+                "image_url": image_url_for(&camera_id, img.as_deref()),
+                "annotated_image_url": annotated_url_for(
+                    &state.trailcam.processed_dir, &camera_id, ann.as_deref(),
+                ),
+                "created_at": created,
+            })
+        })
+        .collect();
+    Json(out).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/trailcam/image/{camera_id}/{filename} — serve a processed JPEG.
+// ---------------------------------------------------------------------------
+
 /// Both path segments are validated (no separators, no `..`, `.jpg` only), so
 /// the join can't escape the processed directory.
 pub(crate) async fn trailcam_image(

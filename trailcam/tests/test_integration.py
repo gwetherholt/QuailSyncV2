@@ -10,6 +10,22 @@ from quailsync_bridge import QuailSyncBridge
 from yolo_detector import process_staging
 
 
+class _RecordingSession:
+    """A `requests`-like stub: records POSTs and returns a 2xx response."""
+
+    def __init__(self):
+        self.posts = []
+
+    def post(self, url, json=None, timeout=None):
+        self.posts.append((url, json))
+        return _Resp()
+
+
+class _Resp:
+    def raise_for_status(self):
+        pass
+
+
 def _stage_image(camera_dir, stem, camera_id="test_camera", color=(80, 120, 160)):
     camera_dir.mkdir(parents=True, exist_ok=True)
     image_path = camera_dir / f"{stem}.jpg"
@@ -37,9 +53,10 @@ def test_full_chain(tmp_path, mock_yolo):
     results = process_staging(staging_dir=staging, processed_dir=processed, model_path="stub.pt")
     assert len(results) == 3
 
-    # 2. Post observations.
+    # 2. Post observations to the (mocked) QuailSync API.
     observations = processed / "observations.jsonl"
-    bridge = QuailSyncBridge(output_path=observations)
+    session = _RecordingSession()
+    bridge = QuailSyncBridge(output_path=observations, session=session)
     success, failure = bridge.post_batch(results)
     assert (success, failure) == (3, 0)
 
@@ -60,12 +77,14 @@ def test_full_chain(tmp_path, mock_yolo):
     ]
     assert len(moved_sidecars) == 3
 
-    # Observations logged — one JSONL line per image, correctly shaped.
-    lines = observations.read_text(encoding="utf-8").strip().splitlines()
-    assert len(lines) == 3
-    record = json.loads(lines[0])
-    assert record["source"] == "trailcam"
-    assert record["camera_id"] == "test_camera"
-    assert record["bird_count"] == 1
-    assert record["detections"][0]["class_name"] == "quail"
-    assert record["detections"][0]["confidence"] == 0.85
+    # Observations delivered — one POST per image, correctly shaped. The WAL
+    # stays empty because every POST succeeded.
+    assert not observations.exists()
+    assert len(session.posts) == 3
+    url, payload = session.posts[0]
+    assert url.endswith("/api/trailcam/observation")
+    assert payload["camera_id"] == "test_camera"
+    assert payload["bird_count"] == 1
+    assert payload["detections"][0]["class_name"] == "quail"
+    assert payload["detections"][0]["confidence"] == 0.85
+    assert payload["image_filename"].endswith(".jpg")

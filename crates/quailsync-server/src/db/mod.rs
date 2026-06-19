@@ -628,6 +628,32 @@ pub fn init_db(conn: &Connection) {
     )
     .expect("failed to create trail camera tables");
 
+    // --- Trail-cam observations ---
+    // One row per processed photo, moved off the legacy
+    // processed/observations.jsonl into SQLite. The bridge POSTs to
+    // /api/trailcam/observation (with a JSONL write-ahead log fallback if the
+    // API is down). The (camera_id, timestamp) index makes latest-per-camera
+    // and history-window queries fast.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS trail_cam_observations (
+            id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+            camera_id                TEXT    NOT NULL,
+            timestamp                TEXT,
+            bird_count               INTEGER NOT NULL DEFAULT 0,
+            average_confidence       REAL,
+            min_confidence           REAL,
+            detections               TEXT,
+            inference_time_ms        REAL,
+            image_filename           TEXT,
+            annotated_image_filename TEXT,
+            created_at               TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_trail_cam_obs_camera_ts
+            ON trail_cam_observations(camera_id, timestamp);",
+    )
+    .expect("failed to create trail_cam_observations table");
+
     // --- Performance indexes ---
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_readings_brooder_received ON brooder_readings(brooder_id, received_at);

@@ -1,12 +1,11 @@
 """Bridge from trail-cam detections to QuailSync.
 
 Turns ``DetectionResult`` objects (from ``yolo_detector``) into observation
-payloads and "posts" them. The real QuailSync endpoint
-(``POST /api/trailcam/observation``) doesn't exist yet, so for now each
-observation is appended to a local ``observations.jsonl`` file in the processed
-directory. When the endpoint ships, swap the fallback for the HTTP call (see
-the TODO in :meth:`QuailSyncBridge.post`) — the payload is already in final
-shape.
+payloads and POSTs them to QuailSync's ``POST /api/trailcam/observation``
+endpoint (which stores them in SQLite). If the API is unreachable or rejects
+the request, each observation is appended to a local ``observations.jsonl``
+write-ahead log in the processed directory so nothing is lost and it can be
+replayed later.
 
 Run standalone to process staging and emit observations end-to-end:
 
@@ -34,7 +33,8 @@ logger = logging.getLogger("trailcam.quailsync_bridge")
 class QuailSyncBridge:
     """Builds observation payloads and delivers them to QuailSync.
 
-    Today "deliver" means appending to a JSONL file; see :meth:`post`.
+    "Deliver" POSTs to ``/api/trailcam/observation``; on failure it falls back
+    to a JSONL write-ahead log (``output_path``). See :meth:`post`.
     """
 
     def __init__(
@@ -44,9 +44,12 @@ class QuailSyncBridge:
         session=None,
     ):
         self.api_url = api_url.rstrip("/")
-        # One observation per line; lives alongside the processed photos.
+        # Write-ahead log: one observation per line, alongside the processed
+        # photos. Only written when the POST fails, so it can be replayed later.
         self.output_path = Path(output_path) if output_path else config.PROCESSED_DIR / "observations.jsonl"
-        self.session = session  # reserved for the real HTTP path (see post())
+        # Optional injected HTTP client (a `requests`-like object with `.post`);
+        # defaults to the `requests` module, imported lazily in `_post_http`.
+        self.session = session
 
     # -- payload ------------------------------------------------------------
 
@@ -63,8 +66,8 @@ class QuailSyncBridge:
         )
         min_confidence = round(min(confidences), 4) if confidences else None
 
+        image = Path(result.image_path)
         return {
-            "source": "trailcam",
             "camera_id": self._sanitize_string(result.camera_id),
             "timestamp": result.timestamp,
             # NOTE: bird_count == total detections. Fine while the model only
@@ -82,7 +85,11 @@ class QuailSyncBridge:
                 for d in result.detections
             ],
             "inference_time_ms": result.inference_time_ms,
-            "image_path": result.image_path,
+            # Basenames only — the server serves images from processed/{cam}/.
+            "image_filename": image.name,
+            # The detector writes a sibling "{stem}_annotated.jpg"; the server
+            # only advertises it when that file is actually present on disk.
+            "annotated_image_filename": f"{image.stem}_annotated.jpg",
         }
 
     @staticmethod
@@ -104,32 +111,51 @@ class QuailSyncBridge:
     # -- delivery -----------------------------------------------------------
 
     def post(self, result: DetectionResult) -> bool:
-        """Deliver a single observation. Returns True on success.
+        """Deliver one observation to QuailSync.
 
-        TODO: once the server implements ``POST /api/trailcam/observation``,
-        replace the local-file fallback with:
+        POSTs to ``/api/trailcam/observation``; if the API is unreachable or
+        rejects the request, the observation is appended to the local JSONL
+        write-ahead log so nothing is lost and it can be replayed later.
 
-            resp = (self.session or requests).post(
-                f"{self.api_url}/api/trailcam/observation",
-                json=payload, timeout=30,
-            )
-            resp.raise_for_status()
-
-        Until then we append the payload to a local JSONL file so nothing is
-        lost and the data can be backfilled when the endpoint exists.
+        Returns True when the observation was delivered OR durably written to
+        the WAL; False only if both failed (data lost).
         """
         payload = self.build_payload(result)
-        try:
-            self._append_jsonl(payload)
+        if self._post_http(payload):
             logger.info(
-                "Observation recorded: camera=%s birds=%d -> %s",
+                "Observation posted: camera=%s birds=%d",
                 payload["camera_id"],
                 payload["bird_count"],
-                self.output_path.name,
             )
             return True
-        except Exception as exc:  # noqa: BLE001 — one bad write shouldn't abort the batch
-            logger.error("Failed to record observation for %s: %s", result.image_path, exc)
+        # Server unreachable / rejected — preserve the observation in the WAL.
+        try:
+            self._append_jsonl(payload)
+            logger.warning(
+                "QuailSync unreachable — wrote observation to write-ahead log %s (camera=%s)",
+                self.output_path.name,
+                payload["camera_id"],
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001 — nothing more we can do; data lost
+            logger.error("Failed to write WAL for %s: %s", result.image_path, exc)
+            return False
+
+    def _post_http(self, payload: dict) -> bool:
+        """POST one observation. Returns True on a 2xx response, False on any
+        transport/HTTP error (the caller then falls back to the WAL)."""
+        url = f"{self.api_url}/api/trailcam/observation"
+        try:
+            session = self.session
+            if session is None:
+                import requests  # lazy: keeps the module importable without requests
+
+                session = requests
+            resp = session.post(url, json=payload, timeout=30)
+            resp.raise_for_status()
+            return True
+        except Exception as exc:  # noqa: BLE001 — network/HTTP errors fall back to WAL
+            logger.error("POST %s failed: %s", url, exc)
             return False
 
     def post_batch(self, results: list[DetectionResult]) -> tuple[int, int]:

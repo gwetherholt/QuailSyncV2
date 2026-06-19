@@ -124,13 +124,21 @@ pub fn build_app(state: AppState) -> Router {
             "/api/birds/{id}/photos/{filename}",
             get(photos::serve_bird_photo_file),
         )
-        // Trail-cam read endpoints: distinct cameras, latest observation per
-        // camera, and image serving. Reads the pipeline's
-        // processed/observations.jsonl. See routes/trailcam.rs.
+        // Trail-cam observation endpoints (SQLite-backed): the pipeline POSTs
+        // observations; reads surface the latest per camera, the camera list,
+        // and a history window for trend graphs. See routes/trailcam.rs.
+        .route(
+            "/api/trailcam/observation",
+            axum::routing::post(trailcam::trailcam_observation),
+        )
         .route("/api/trailcam/cameras", get(trailcam::trailcam_cameras))
         .route(
             "/api/trailcam/latest/{camera_id}",
             get(trailcam::trailcam_latest),
+        )
+        .route(
+            "/api/trailcam/history/{camera_id}",
+            get(trailcam::trailcam_history),
         )
         .route(
             "/api/trailcam/image/{camera_id}/{filename}",
