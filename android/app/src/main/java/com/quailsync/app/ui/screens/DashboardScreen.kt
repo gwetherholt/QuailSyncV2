@@ -76,6 +76,7 @@ import com.quailsync.app.data.ChickGroupDto
 import com.quailsync.app.data.Clutch
 import com.quailsync.app.data.GoveeLatestReadingDto
 import com.quailsync.app.data.GoveeSensorDto
+import com.quailsync.app.data.TrailCameraDto
 import com.quailsync.app.data.LiveReading
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.ServerConfig
@@ -138,6 +139,10 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     private val _sensors = MutableStateFlow<List<GoveeSensorDto>>(emptyList())
     val sensors: StateFlow<List<GoveeSensorDto>> = _sensors.asStateFlow()
 
+    // Trail cameras — shown as a chip on the assigned unit's tile.
+    private val _cameras = MutableStateFlow<List<TrailCameraDto>>(emptyList())
+    val cameras: StateFlow<List<TrailCameraDto>> = _cameras.asStateFlow()
+
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
@@ -189,14 +194,19 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    /** Lightweight sensor-only refresh for the 60s tile poll (DB read, no Govee
-     *  API hit). Keeps the existing list on failure rather than blanking tiles. */
-    fun refreshSensors() {
+    /** Lightweight device refresh for the 60s tile poll (DB reads, no external
+     *  API hit). Keeps the existing lists on failure rather than blanking tiles. */
+    fun refreshDevices() {
         viewModelScope.launch {
             try {
                 _sensors.value = api.getGoveeSensors()
             } catch (e: Exception) {
                 Log.e("QuailSync", "Dashboard: sensor refresh failed", e)
+            }
+            try {
+                _cameras.value = api.getTrailCameras()
+            } catch (e: Exception) {
+                Log.e("QuailSync", "Dashboard: camera refresh failed", e)
             }
         }
     }
@@ -219,6 +229,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
             _chickGroups.value = try { api.getChickGroups() } catch (_: Exception) { emptyList() }
             _lineages.value = try { api.getLineages() } catch (_: Exception) { emptyList() }
             _sensors.value = try { api.getGoveeSensors() } catch (_: Exception) { emptyList() }
+            _cameras.value = try { api.getTrailCameras() } catch (_: Exception) { emptyList() }
 
             Log.d("QuailSync", "Dashboard loaded: ${states.size} brooders, ${_birds.value.size} birds, ${_clutches.value.size} clutches, ${_chickGroups.value.size} chick groups")
         } catch (e: Exception) {
@@ -251,6 +262,7 @@ fun DashboardScreen(
     val liveReadings by viewModel.webSocketService.readings.collectAsState()
     val wsConnected by viewModel.webSocketService.isConnected.collectAsState()
     val sensors by viewModel.sensors.collectAsState()
+    val cameras by viewModel.cameras.collectAsState()
 
     // Latest reading per housing unit from its assigned Govee sensor(s). Govee
     // replaces the DIY ESP32 sensors, so this drives the tile temp/humidity —
@@ -263,12 +275,17 @@ fun DashboardScreen(
             .mapValues { (_, list) -> list.maxByOrNull { it.latestReading!!.recordedAt ?: "" }!!.latestReading!! }
     }
 
-    // Govee readings come from our DB (the poller writes them), not the live
-    // WebSocket — poll them every 60s so assigned-sensor tiles stay current.
+    // Trail cameras assigned to each housing unit, for the tile chip.
+    val camerasByBrooder = remember(cameras) {
+        cameras.filter { it.assignment != null }.groupBy { it.assignment!!.brooderId }
+    }
+
+    // Device data comes from our DB (the pollers write it), not the live
+    // WebSocket — poll it every 60s so assigned-device tiles stay current.
     LaunchedEffect(Unit) {
         while (true) {
             kotlinx.coroutines.delay(60_000L)
-            viewModel.refreshSensors()
+            viewModel.refreshDevices()
         }
     }
 
@@ -440,6 +457,7 @@ fun DashboardScreen(
                             state = state,
                             liveReading = liveReadings[state.brooder.id],
                             goveeReading = goveeReadingByBrooder[state.brooder.id],
+                            assignedCameras = camerasByBrooder[state.brooder.id] ?: emptyList(),
                             chickGroup = activeGroup,
                             residentCount = residentCount,
                             isOccupied = isOccupied,
@@ -732,6 +750,7 @@ private fun CompactBrooderCard(
     state: BrooderState,
     liveReading: LiveReading?,
     goveeReading: GoveeLatestReadingDto?,
+    assignedCameras: List<TrailCameraDto> = emptyList(),
     chickGroup: ChickGroupDto?,
     residentCount: Int,
     isOccupied: Boolean,
@@ -789,8 +808,8 @@ private fun CompactBrooderCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(1.dp),
     ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
         Row(
-            Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // Status dot
@@ -872,6 +891,22 @@ private fun CompactBrooderCard(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                }
+            }
+        }
+
+            // Assigned trail cameras — a small chip below the main row. Cameras
+            // have no continuous reading, so this is just a name label.
+            if (assignedCameras.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                assignedCameras.forEach { c ->
+                    Text(
+                        "📷 " + (c.name ?: c.spypointCameraId),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
         }

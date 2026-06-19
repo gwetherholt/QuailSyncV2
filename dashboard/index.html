@@ -705,8 +705,8 @@
     <a class="sidebar-item" data-route="#/cameras" onclick="Router.navigate('#/cameras')">
       <span class="icon">&#x1F3A5;</span><span class="label">Cameras</span>
     </a>
-    <a class="sidebar-item" data-route="#/sensors" onclick="Router.navigate('#/sensors')">
-      <span class="icon">&#x1F321;&#xFE0F;</span><span class="label">Sensors</span>
+    <a class="sidebar-item" data-route="#/devices" onclick="Router.navigate('#/devices')">
+      <span class="icon">&#x1F321;&#xFE0F;</span><span class="label">Devices</span>
     </a>
     <a class="sidebar-item" data-route="#/nfc/scan" onclick="Router.navigate('#/nfc/scan')">
       <span class="icon">&#x1F4F1;</span><span class="label">Scan NFC</span>
@@ -1025,9 +1025,9 @@
         } else if(hash === '#/cameras'){
           hdr.textContent = 'Cameras';
           Router.current = Page.Cameras;
-        } else if(hash === '#/sensors'){
-          hdr.textContent = 'Sensors';
-          Router.current = Page.Sensors;
+        } else if(hash === '#/devices'){
+          hdr.textContent = 'Devices';
+          Router.current = Page.Devices;
         } else if(hash === '#/nfc/scan'){
           hdr.textContent = 'Scan NFC';
           Router.current = Page.NfcScan;
@@ -1079,6 +1079,9 @@
       // Govee: backfill assigned-sensor readings onto each housing card.
       setTimeout(function(){ self._pollBrooderSensors(); }, 3000);
       addInterval(function(){ self._pollBrooderSensors(); }, 60000);
+      // Trail cameras: backfill assigned-camera chips onto each housing card.
+      setTimeout(function(){ self._pollBrooderCameras(); }, 3000);
+      addInterval(function(){ self._pollBrooderCameras(); }, 60000);
       addInterval(this._pollStats, 60000);
       addInterval(this._pollFlock, 60000);
     },
@@ -1295,6 +1298,8 @@
         // Assigned Govee sensor readings — backfilled by _pollBrooderSensors
         // after render (hidden until/unless this unit has sensors assigned).
         card+='<div data-brooder-sensors="'+b.id+'" style="display:none;margin-top:.3rem;font-size:.74rem"></div>';
+        // Assigned trail cameras — backfilled by _pollBrooderCameras.
+        card+='<div data-brooder-cameras="'+b.id+'" style="display:none;margin-top:.15rem;font-size:.74rem"></div>';
         if (alertOfflineMarkup) {
           card+='<div data-field="alert" style="font-size:.7rem;color:var(--danger);margin-top:.3rem">'+alertOfflineMarkup+'</div>';
         } else if (alertMessage) {
@@ -1488,6 +1493,37 @@
             + '<span>🌡️</span>'
             + '<span style="color:#888">' + name + ':</span>'
             + '<span style="font-weight:600;color:#7d8b6a">' + reading + '</span>' + warn
+            + '</div>';
+        }).join('');
+      }
+    },
+
+    // Backfill assigned trail cameras onto each housing card. One
+    // GET /api/trail-cameras grouped by assignment; cards with no assigned
+    // camera stay hidden. Each card carries a `data-brooder-cameras="<id>"`.
+    _pollBrooderCameras: async function(){
+      var els = document.querySelectorAll('[data-brooder-cameras]');
+      if (!els.length) return;
+      var cameras = await API.get('/api/trail-cameras');
+      if (!cameras) return;
+      var byBrooder = {};
+      cameras.forEach(function(c){
+        if (c.assignment && c.assignment.brooder_id != null) {
+          (byBrooder[c.assignment.brooder_id] = byBrooder[c.assignment.brooder_id] || []).push(c);
+        }
+      });
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        var bid = parseInt(el.getAttribute('data-brooder-cameras'), 10);
+        var list = byBrooder[bid] || [];
+        if (!list.length) { el.style.display = 'none'; el.innerHTML = ''; continue; }
+        el.style.display = '';
+        el.innerHTML = list.map(function(c){
+          var name = escapeHtml(c.name || c.spypoint_camera_id || ('Camera #' + c.id));
+          return '<div style="display:flex;align-items:center;gap:.3rem;padding:2px 0">'
+            + '<span>📷</span>'
+            + '<span style="color:#888">' + name + '</span>'
+            + '<span style="color:#aaa"> · seen ' + relativeTime(c.last_seen) + '</span>'
             + '</div>';
         }).join('');
       }
@@ -4013,28 +4049,52 @@
   /* ---------------------------------------------------------
      SENSORS (Govee temp/humidity sensor assignment)
      --------------------------------------------------------- */
-  Page.Sensors = {
+  Page.Devices = {
+    _tab: 'sensors',
     _sensors: [],
+    _cameras: [],
     _brooders: [],
     render: function(app){
-      app.innerHTML = '<div class="page-top-bar"><h2>Sensors</h2></div>' +
+      app.innerHTML = '<div class="page-top-bar"><h2>Devices</h2></div>' +
+        '<div class="tabs">' +
+          '<div class="tab active" id="tab-devices-sensors" onclick="Page.Devices.switchTab(\'sensors\')">&#x1F321;&#xFE0F; Sensors</div>' +
+          '<div class="tab" id="tab-devices-cameras" onclick="Page.Devices.switchTab(\'cameras\')">&#x1F4F7; Cameras</div>' +
+        '</div>' +
         '<div class="panel">' +
-          '<div class="panel-header"><span class="panel-header-left">&#x1F321;&#xFE0F; Govee Sensors</span>' +
-          '<a class="view-all-link" onclick="Page.Sensors._load()">Refresh</a></div>' +
-          '<div class="panel-body" id="sensors-body">'+loadingHTML()+'</div>' +
+          '<div class="panel-header"><span class="panel-header-left" id="devices-panel-title">&#x1F321;&#xFE0F; Govee Sensors</span>' +
+          '<a class="view-all-link" onclick="Page.Devices._load()">Refresh</a></div>' +
+          '<div class="panel-body" id="devices-body">'+loadingHTML()+'</div>' +
         '</div>';
     },
-    // Lightweight DB-only GET; auto-refresh every 60s (addInterval fires once now).
-    start: function(){ var self = this; addInterval(function(){ self._load(); }, 60000); },
+    // Lightweight DB-only GETs; auto-refresh every 60s (addInterval fires once now).
+    start: function(){ this._tab = 'sensors'; var self = this; addInterval(function(){ self._load(); }, 60000); },
     stop: function(){},
+
+    switchTab: function(tab){
+      this._tab = tab;
+      document.getElementById('tab-devices-sensors').classList.toggle('active', tab==='sensors');
+      document.getElementById('tab-devices-cameras').classList.toggle('active', tab==='cameras');
+      var title = document.getElementById('devices-panel-title');
+      if(title) title.innerHTML = tab==='cameras' ? '&#x1F4F7; Trail Cameras' : '&#x1F321;&#xFE0F; Govee Sensors';
+      this._render();
+    },
 
     _load: async function(){
       var results = await Promise.all([
         API.get('/api/govee/sensors'),
+        API.get('/api/trail-cameras'),
         API.get('/api/brooders'),
       ]);
       this._sensors = results[0] || [];
-      this._brooders = results[1] || [];
+      this._cameras = results[1] || [];
+      this._brooders = results[2] || [];
+      // Best-effort last-photo timestamp per camera from the observations log.
+      await Promise.all(this._cameras.map(async function(c){
+        try {
+          var latest = await API.get('/api/trailcam/latest/' + encodeURIComponent(c.spypoint_camera_id));
+          c._lastPhoto = (latest && latest.timestamp) ? latest.timestamp : null;
+        } catch(e){ c._lastPhoto = null; }
+      }));
       this._render();
     },
 
@@ -4045,8 +4105,13 @@
     },
 
     _render: function(){
-      var el = document.getElementById('sensors-body');
+      var el = document.getElementById('devices-body');
       if(!el) return;
+      if(this._tab === 'cameras') this._renderCameras(el);
+      else this._renderSensors(el);
+    },
+
+    _renderSensors: function(el){
       if(!this._sensors.length){
         el.innerHTML = '<div class="no-data">No Govee sensors registered yet. They appear here automatically once the poller reports one.</div>';
         return;
@@ -4073,11 +4138,11 @@
         if(s.assignment){
           assignCell = '<div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">'
             + '<span style="font-weight:600;color:var(--sage-dark)">'+escapeHtml(s.assignment.brooder_name)+'</span>'
-            + '<button class="status-btn" onclick="Page.Sensors.unassign('+s.id+')">Unassign</button></div>';
+            + '<button class="status-btn" onclick="Page.Devices.unassign('+s.id+')">Unassign</button></div>';
         } else if(hasBrooders){
           assignCell = '<div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">'
             + '<select id="sensor-assign-'+s.id+'" style="padding:.35rem;border-radius:6px;border:1px solid #ccc">'+opts+'</select>'
-            + '<button class="btn-primary" style="padding:.35rem .7rem" onclick="Page.Sensors.assign('+s.id+')">Assign</button></div>';
+            + '<button class="btn-primary" style="padding:.35rem .7rem" onclick="Page.Devices.assign('+s.id+')">Assign</button></div>';
         } else {
           assignCell = '<span style="color:#999">No brooders to assign</span>';
         }
@@ -4098,35 +4163,91 @@
         + '</tr></thead><tbody>'+rows+'</tbody></table>';
     },
 
-    assign: async function(sensorId){
+    _renderCameras: function(el){
+      if(!this._cameras.length){
+        el.innerHTML = '<div class="no-data">No trail cameras registered yet. They appear here automatically once the poller reports one.</div>';
+        return;
+      }
+      var opts = this._brooderOptions();
+      var hasBrooders = this._brooders.length > 0;
+
+      var rows = this._cameras.map(function(c){
+        var name = escapeHtml(c.name || c.spypoint_camera_id || ('Camera #'+c.id));
+        var model = escapeHtml(c.model || '—');
+
+        var assignCell;
+        if(c.assignment){
+          assignCell = '<div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">'
+            + '<span style="font-weight:600;color:var(--sage-dark)">'+escapeHtml(c.assignment.brooder_name)+'</span>'
+            + '<button class="status-btn" onclick="Page.Devices.unassignCamera('+c.id+')">Unassign</button></div>';
+        } else if(hasBrooders){
+          assignCell = '<div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap">'
+            + '<select id="camera-assign-'+c.id+'" style="padding:.35rem;border-radius:6px;border:1px solid #ccc">'+opts+'</select>'
+            + '<button class="btn-primary" style="padding:.35rem .7rem" onclick="Page.Devices.assignCamera('+c.id+')">Assign</button></div>';
+        } else {
+          assignCell = '<span style="color:#999">No brooders to assign</span>';
+        }
+
+        var lastPhoto = c._lastPhoto ? relativeTime(c._lastPhoto) : '—';
+        return '<tr style="cursor:default">'
+          + '<td>'+name+'</td>'
+          + '<td>'+model+'</td>'
+          + '<td>'+assignCell+'</td>'
+          + '<td style="color:#888;font-size:.8rem">'+relativeTime(c.last_seen)+'</td>'
+          + '<td style="color:#888;font-size:.8rem">'+lastPhoto+'</td>'
+          + '</tr>';
+      }).join('');
+
+      el.innerHTML = '<table class="data-table"><thead><tr>'
+        + '<th>Camera</th><th>Model</th><th>Assignment</th><th>Last seen</th><th>Last photo</th>'
+        + '</tr></thead><tbody>'+rows+'</tbody></table>';
+    },
+
+    // --- assign / unassign (shared transport, per-device URLs) ---
+    assign: function(sensorId){
       var sel = document.getElementById('sensor-assign-'+sensorId);
       if(!sel || !sel.value){ toast('Select a brooder first','error'); return; }
-      var brooderId = parseInt(sel.value, 10);
-      // Direct fetch (not API.put, which swallows the body on non-2xx) so we can
-      // surface the server's error message.
+      this._put('/api/govee/sensors/'+sensorId+'/assign', parseInt(sel.value, 10), 'Sensor assigned');
+    },
+    assignCamera: function(cameraId){
+      var sel = document.getElementById('camera-assign-'+cameraId);
+      if(!sel || !sel.value){ toast('Select a brooder first','error'); return; }
+      this._put('/api/trail-cameras/'+cameraId+'/assign', parseInt(sel.value, 10), 'Camera assigned');
+    },
+    unassign: function(sensorId){
+      var s = this._sensors.find(function(x){ return x.id === sensorId; });
+      var where = (s && s.assignment) ? s.assignment.brooder_name : 'this brooder';
+      if(!confirm('Unassign this sensor from '+where+'?')) return;
+      this._del('/api/govee/sensors/'+sensorId+'/assign', 'Sensor unassigned');
+    },
+    unassignCamera: function(cameraId){
+      var c = this._cameras.find(function(x){ return x.id === cameraId; });
+      var where = (c && c.assignment) ? c.assignment.brooder_name : 'this brooder';
+      if(!confirm('Unassign this camera from '+where+'?')) return;
+      this._del('/api/trail-cameras/'+cameraId+'/assign', 'Camera unassigned');
+    },
+
+    // Direct fetch (not API.put/delete, which swallow the body on non-2xx) so we
+    // can surface the server's error message.
+    _put: async function(url, brooderId, okMsg){
       try {
-        var resp = await fetch('/api/govee/sensors/'+sensorId+'/assign', {
+        var resp = await fetch(url, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ brooder_id: brooderId }),
         });
         if(!resp.ok){ var msg = await resp.text(); toast(msg || 'Assign failed','error'); return; }
-        toast('Sensor assigned');
+        toast(okMsg);
         this._load();
-      } catch(e){
-        toast('Assign failed: '+(e && e.message ? e.message : 'network error'),'error');
-      }
+      } catch(e){ toast('Assign failed: '+(e && e.message ? e.message : 'network error'),'error'); }
     },
-
-    unassign: async function(sensorId){
+    _del: async function(url, okMsg){
       try {
-        var resp = await fetch('/api/govee/sensors/'+sensorId+'/assign', { method: 'DELETE' });
+        var resp = await fetch(url, { method: 'DELETE' });
         if(!resp.ok){ var msg = await resp.text(); toast(msg || 'Unassign failed','error'); return; }
-        toast('Sensor unassigned');
+        toast(okMsg);
         this._load();
-      } catch(e){
-        toast('Unassign failed: '+(e && e.message ? e.message : 'network error'),'error');
-      }
+      } catch(e){ toast('Unassign failed: '+(e && e.message ? e.message : 'network error'),'error'); }
     }
   };
 

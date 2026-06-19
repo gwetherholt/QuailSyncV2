@@ -60,9 +60,11 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.quailsync.app.data.AssignCameraRequest
 import com.quailsync.app.data.AssignSensorRequest
 import com.quailsync.app.data.Brooder
 import com.quailsync.app.data.GoveeSensorDto
+import com.quailsync.app.data.TrailCameraDto
 import com.quailsync.app.data.LiveReading
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.ServerConfig
@@ -94,6 +96,10 @@ class TelemetryViewModel(application: Application) : AndroidViewModel(applicatio
     // Govee temp/humidity sensors (auto-registered by the poller).
     private val _sensors = MutableStateFlow<List<GoveeSensorDto>>(emptyList())
     val sensors: StateFlow<List<GoveeSensorDto>> = _sensors.asStateFlow()
+
+    // SPYPOINT trail cameras (auto-registered by the poller).
+    private val _cameras = MutableStateFlow<List<TrailCameraDto>>(emptyList())
+    val cameras: StateFlow<List<TrailCameraDto>> = _cameras.asStateFlow()
 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -138,6 +144,7 @@ class TelemetryViewModel(application: Application) : AndroidViewModel(applicatio
             _brooders.value = states
             _chickGroups.value = try { api.getChickGroups() } catch (_: Exception) { emptyList() }
             _sensors.value = try { api.getGoveeSensors() } catch (_: Exception) { emptyList() }
+            _cameras.value = try { api.getTrailCameras() } catch (_: Exception) { emptyList() }
         } catch (e: Exception) {
             Log.e("QuailSync", "Telemetry: failed to load brooders", e)
         } finally {
@@ -145,14 +152,19 @@ class TelemetryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    /** Lightweight DB-only sensor refresh (no Govee API hit) for the 60s loop.
-     *  Keeps the existing list on failure rather than blanking the UI. */
-    fun refreshSensors() {
+    /** Lightweight DB-only device refresh (no external API hit) for the 60s loop.
+     *  Keeps the existing lists on failure rather than blanking the UI. */
+    fun refreshDevices() {
         viewModelScope.launch {
             try {
                 _sensors.value = api.getGoveeSensors()
             } catch (e: Exception) {
                 Log.e("QuailSync", "Telemetry: failed to refresh sensors", e)
+            }
+            try {
+                _cameras.value = api.getTrailCameras()
+            } catch (e: Exception) {
+                Log.e("QuailSync", "Telemetry: failed to refresh cameras", e)
             }
         }
     }
@@ -186,6 +198,40 @@ class TelemetryViewModel(application: Application) : AndroidViewModel(applicatio
                 toast(body?.takeIf { it.isNotBlank() } ?: "Unassign failed: ${e.message}")
             } catch (e: Exception) {
                 Log.e("QuailSync", "Unassign sensor $sensorId failed", e)
+                toast("Unassign failed: ${e.message}")
+            }
+        }
+    }
+
+    fun assignCamera(cameraId: Int, brooderId: Int) {
+        viewModelScope.launch {
+            try {
+                api.assignTrailCamera(cameraId, AssignCameraRequest(brooderId))
+                loadDataSuspend()
+                toast("Camera assigned")
+            } catch (e: retrofit2.HttpException) {
+                val body = e.response()?.errorBody()?.string()
+                Log.e("QuailSync", "Assign camera $cameraId failed: $body", e)
+                toast(body?.takeIf { it.isNotBlank() } ?: "Assign failed: ${e.message}")
+            } catch (e: Exception) {
+                Log.e("QuailSync", "Assign camera $cameraId failed", e)
+                toast("Assign failed: ${e.message}")
+            }
+        }
+    }
+
+    fun unassignCamera(cameraId: Int) {
+        viewModelScope.launch {
+            try {
+                api.unassignTrailCamera(cameraId)
+                loadDataSuspend()
+                toast("Camera unassigned")
+            } catch (e: retrofit2.HttpException) {
+                val body = e.response()?.errorBody()?.string()
+                Log.e("QuailSync", "Unassign camera $cameraId failed: $body", e)
+                toast(body?.takeIf { it.isNotBlank() } ?: "Unassign failed: ${e.message}")
+            } catch (e: Exception) {
+                Log.e("QuailSync", "Unassign camera $cameraId failed", e)
                 toast("Unassign failed: ${e.message}")
             }
         }
@@ -232,13 +278,15 @@ fun TelemetryScreen(
     val liveReadings by viewModel.webSocketService.readings.collectAsState()
     val chickGroups by viewModel.chickGroups.collectAsState()
     val sensors by viewModel.sensors.collectAsState()
+    val cameras by viewModel.cameras.collectAsState()
 
-    // Govee readings come from our DB (the poller writes them), not the live
-    // WebSocket — so poll them every 60s while this screen is on top.
+    // Device data (sensor readings, camera registry) comes from our DB — the
+    // pollers write it, not the live WebSocket — so poll it every 60s while this
+    // screen is on top.
     LaunchedEffect(Unit) {
         while (true) {
             delay(60_000)
-            viewModel.refreshSensors()
+            viewModel.refreshDevices()
         }
     }
 
@@ -289,6 +337,7 @@ fun TelemetryScreen(
                         state = state,
                         liveReading = live,
                         assignedSensors = sensors.filter { it.assignment?.brooderId == state.brooder.id },
+                        assignedCameras = cameras.filter { it.assignment?.brooderId == state.brooder.id },
                         onClick = { onBrooderClick(state.brooder.id) },
                         onDelete = if (canDelete) ({
                             Log.d("QuailSync", "Delete icon tapped for brooder ${state.brooder.id}")
@@ -322,6 +371,35 @@ fun TelemetryScreen(
                             brooders = brooders.map { it.brooder },
                             onAssign = { brooderId -> viewModel.assignSensor(sensor.id, brooderId) },
                             onUnassign = { viewModel.unassignSensor(sensor.id) },
+                        )
+                    }
+                }
+
+                // --- Trail cameras overview + assignment ---
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "📷 Trail Cameras",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                    )
+                }
+                if (cameras.isEmpty()) {
+                    item {
+                        Text(
+                            "No trail cameras registered yet. They appear here automatically once the poller reports one.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 4.dp),
+                        )
+                    }
+                } else {
+                    items(cameras, key = { "camera-${it.id}" }) { camera ->
+                        CameraCard(
+                            camera = camera,
+                            brooders = brooders.map { it.brooder },
+                            onAssign = { brooderId -> viewModel.assignCamera(camera.id, brooderId) },
+                            onUnassign = { viewModel.unassignCamera(camera.id) },
                         )
                     }
                 }
@@ -363,6 +441,7 @@ fun DetailedBrooderCard(
     state: BrooderState,
     liveReading: LiveReading?,
     assignedSensors: List<GoveeSensorDto> = emptyList(),
+    assignedCameras: List<TrailCameraDto> = emptyList(),
     onClick: () -> Unit = {},
     onDelete: (() -> Unit)? = null,
 ) {
@@ -568,6 +647,29 @@ fun DetailedBrooderCard(
                     }
                 }
             }
+
+            // Assigned trail cameras — name + last seen.
+            if (assignedCameras.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                assignedCameras.forEach { c ->
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("📷 ", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            c.name ?: c.spypointCameraId,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            " · seen ${sensorRelativeTime(c.lastSeen)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -684,6 +786,94 @@ fun SensorCard(
             Spacer(Modifier.height(8.dp))
             Text(
                 "Last seen ${sensorRelativeTime(sensor.lastSeen)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+// =====================================================================
+// Trail Camera Card (overview + assignment)
+// =====================================================================
+
+@Composable
+fun CameraCard(
+    camera: TrailCameraDto,
+    brooders: List<Brooder>,
+    onAssign: (brooderId: Int) -> Unit,
+    onUnassign: () -> Unit,
+) {
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(2.dp),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        camera.name ?: camera.spypointCameraId,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        camera.model ?: "—",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text("📷", style = MaterialTheme.typography.titleMedium)
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            // Assignment row: brooder name + Unassign, or a brooder picker + Assign.
+            val assignment = camera.assignment
+            if (assignment != null) {
+                Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                    Text(
+                        "Assigned to ${assignment.brooderName}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = SageGreen,
+                    )
+                    OutlinedButton(onClick = onUnassign) { Text("Unassign") }
+                }
+            } else if (brooders.isNotEmpty()) {
+                val expanded = remember { mutableStateOf(false) }
+                val selected = remember(camera.id, brooders) { mutableStateOf(brooders.first()) }
+                Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                    Box {
+                        OutlinedButton(onClick = { expanded.value = true }) {
+                            Text(selected.value.name)
+                            Icon(Icons.Default.ArrowDropDown, "Pick brooder")
+                        }
+                        DropdownMenu(expanded.value, onDismissRequest = { expanded.value = false }) {
+                            brooders.forEach { b ->
+                                DropdownMenuItem(
+                                    text = { Text(b.name) },
+                                    onClick = { selected.value = b; expanded.value = false },
+                                )
+                            }
+                        }
+                    }
+                    Button(
+                        onClick = { onAssign(selected.value.id) },
+                        colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
+                    ) { Text("Assign") }
+                }
+            } else {
+                Text(
+                    "No brooders to assign",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Last seen ${sensorRelativeTime(camera.lastSeen)}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

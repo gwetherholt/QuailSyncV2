@@ -351,6 +351,29 @@ data class AssignSensorRequest(
     @SerializedName("brooder_id") val brooderId: Int,
 )
 
+/** A registered SPYPOINT trail camera with its current assignment
+ *  (GET /api/trail-cameras). `assignment` is null when unassigned. */
+data class TrailCameraDto(
+    @SerializedName("id") val id: Int,
+    @SerializedName("spypoint_camera_id") val spypointCameraId: String,
+    @SerializedName("name") val name: String? = null,
+    @SerializedName("model") val model: String? = null,
+    @SerializedName("first_seen") val firstSeen: String? = null,
+    @SerializedName("last_seen") val lastSeen: String? = null,
+    @SerializedName("assignment") val assignment: CameraAssignmentDto? = null,
+)
+
+data class CameraAssignmentDto(
+    @SerializedName("brooder_id") val brooderId: Int,
+    @SerializedName("brooder_name") val brooderName: String,
+    @SerializedName("assigned_at") val assignedAt: String? = null,
+)
+
+/** Body of PUT /api/trail-cameras/{id}/assign. */
+data class AssignCameraRequest(
+    @SerializedName("brooder_id") val brooderId: Int,
+)
+
 data class TargetTempResponse(
     @SerializedName("brooder_id") val brooderId: Int,
     @SerializedName("target_temp_f") val targetTempF: Double,
@@ -705,6 +728,19 @@ interface QuailSyncApi {
 
     @retrofit2.http.HTTP(method = "DELETE", path = "api/govee/sensors/{id}/assign", hasBody = false)
     suspend fun unassignGoveeSensor(@Path("id") id: Int): retrofit2.Response<Unit>
+
+    // SPYPOINT trail cameras: list all (with assignment), assign, unassign.
+    @GET("api/trail-cameras")
+    suspend fun getTrailCameras(): List<TrailCameraDto>
+
+    @PUT("api/trail-cameras/{id}/assign")
+    suspend fun assignTrailCamera(
+        @Path("id") id: Int,
+        @Body body: AssignCameraRequest,
+    ): TrailCameraDto
+
+    @retrofit2.http.HTTP(method = "DELETE", path = "api/trail-cameras/{id}/assign", hasBody = false)
+    suspend fun unassignTrailCamera(@Path("id") id: Int): retrofit2.Response<Unit>
 
     @GET("api/lineages")
     suspend fun getLineages(): List<Lineage>
