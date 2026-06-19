@@ -111,6 +111,8 @@ import com.quailsync.app.data.TrailcamCamera
 import com.quailsync.app.data.TrailcamLatest
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
@@ -735,14 +737,20 @@ private fun OutdoorCamCardContent(latest: TrailcamLatest, baseUrl: String, label
     }
 }
 
-/** Format an ISO-8601 capture timestamp (with or without an offset) into a
- *  friendly "MMM d, h:mm a"; falls back to the raw string. */
+/** Format an ISO-8601 capture timestamp into a friendly "MMM d, h:mm a" in the
+ *  device's local timezone. The API returns UTC, so a naive timestamp (no
+ *  offset) is treated as UTC before converting. Falls back to the raw string. */
 private fun formatCaptureTime(iso: String?): String {
     if (iso.isNullOrBlank()) return "Unknown time"
     val fmt = DateTimeFormatter.ofPattern("MMM d, h:mm a")
-    return runCatching { OffsetDateTime.parse(iso).format(fmt) }
-        .recoverCatching { LocalDateTime.parse(iso).format(fmt) }
-        .getOrDefault(iso)
+    val zone = ZoneId.systemDefault()
+    return runCatching {
+        // Has an explicit offset / "Z" -> convert that instant to local time.
+        OffsetDateTime.parse(iso).atZoneSameInstant(zone).format(fmt)
+    }.recoverCatching {
+        // Naive timestamp from the API is UTC -> treat as UTC, then convert.
+        LocalDateTime.parse(iso).atZone(ZoneOffset.UTC).withZoneSameInstant(zone).format(fmt)
+    }.getOrDefault(iso)
 }
 
 private fun formatConfidence(value: Double?): String =
