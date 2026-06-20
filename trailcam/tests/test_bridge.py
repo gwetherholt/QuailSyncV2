@@ -39,7 +39,7 @@ class FailingSession:
         raise OSError("connection refused")
 
 
-def make_result(camera="camA", confidences=(0.85,), total=None):
+def make_result(camera="camA", confidences=(0.85,), total=None, temperature_f=None):
     detections = [Detection("quail", c, [100.0, 100.0, 200.0, 200.0]) for c in confidences]
     return DetectionResult(
         image_path="/staging/camA/img.jpg",
@@ -49,6 +49,7 @@ def make_result(camera="camA", confidences=(0.85,), total=None):
         detections=detections,
         inference_time_ms=12.3,
         model_version="stub.pt",
+        ambient_temperature_f=temperature_f,
     )
 
 
@@ -62,6 +63,8 @@ def test_build_payload_structure(tmp_path):
     assert payload["average_confidence"] == pytest.approx(0.85)
     assert payload["min_confidence"] == 0.8
     assert payload["inference_time_ms"] == 12.3
+    # Temperature passes through; absent on the result -> null in the payload.
+    assert payload["ambient_temperature_f"] is None
     # Basenames only — no host paths leave the bridge.
     assert payload["image_filename"] == "img.jpg"
     assert payload["annotated_image_filename"] == "img_annotated.jpg"
@@ -80,6 +83,12 @@ def test_bird_count_tracks_total_count(tmp_path):
     # total_count is authoritative even if it differs from len(detections).
     payload = bridge.build_payload(make_result(confidences=(0.85,), total=5))
     assert payload["bird_count"] == 5
+
+
+def test_ambient_temperature_passes_through(tmp_path):
+    bridge = QuailSyncBridge(output_path=tmp_path / "observations.jsonl")
+    payload = bridge.build_payload(make_result(temperature_f=68.4))
+    assert payload["ambient_temperature_f"] == pytest.approx(68.4)
 
 
 def test_empty_detections_confidence_is_none(tmp_path):

@@ -646,6 +646,7 @@ pub fn init_db(conn: &Connection) {
             inference_time_ms        REAL,
             image_filename           TEXT,
             annotated_image_filename TEXT,
+            ambient_temperature_f    REAL,
             created_at               TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -653,6 +654,16 @@ pub fn init_db(conn: &Connection) {
             ON trail_cam_observations(camera_id, timestamp);",
     )
     .expect("failed to create trail_cam_observations table");
+    // Idempotent: add the ambient temperature column to DBs created before it
+    // existed (the SPYPOINT poller backfills it when the camera reports a temp).
+    if !column_exists(conn, "trail_cam_observations", "ambient_temperature_f") {
+        conn.execute(
+            "ALTER TABLE trail_cam_observations ADD COLUMN ambient_temperature_f REAL",
+            [],
+        )
+        .expect("ALTER TABLE trail_cam_observations ADD COLUMN ambient_temperature_f failed");
+        println!("[migration] added trail_cam_observations.ambient_temperature_f");
+    }
 
     // --- Performance indexes ---
     conn.execute_batch(

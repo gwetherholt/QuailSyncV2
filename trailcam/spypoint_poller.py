@@ -348,6 +348,9 @@ class SpypointPoller:
             "download_time": download_time.isoformat(),
             "source_url": url,
             "image_file": image_path.name,
+            # Ambient temperature the camera reported (°F), if the API exposes
+            # it. EXIF is stripped from the image, so this is the only path.
+            "ambient_temperature_f": self._photo_temperature(photo),
         }
         sidecar_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
@@ -535,6 +538,37 @@ class SpypointPoller:
                 continue
         # No usable timestamp on the photo — fall back to "now".
         return datetime.now(timezone.utc)
+
+    @staticmethod
+    def _photo_temperature(photo) -> float | None:
+        """Best-effort ambient temperature (°F) from the SpyPoint photo metadata.
+
+        EXIF is stripped from the saved image, so the API photo object is the
+        only source. Field names vary across pyspypoint versions / camera
+        models, so probe several common ones. SpyPoint accounts configured for
+        Fahrenheit report °F directly; we pass the value through as °F and
+        return ``None`` when nothing usable is present."""
+        for attr in (
+            "temperature_f", "temperatureF", "temp_f", "tempF",
+            "temperature", "temp",
+        ):
+            value = getattr(photo, attr, None)
+            if value is None:
+                continue
+            # The field may itself be a dict/object wrapping the number.
+            if isinstance(value, dict):
+                value = (
+                    value.get("fahrenheit")
+                    or value.get("value")
+                    or value.get("f")
+                )
+            else:
+                value = getattr(value, "value", value)
+            try:
+                return round(float(value), 1)
+            except (TypeError, ValueError):
+                continue
+        return None
 
 
 def main() -> int:

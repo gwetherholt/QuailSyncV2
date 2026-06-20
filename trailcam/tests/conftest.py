@@ -91,6 +91,7 @@ def make_image_with_sidecar():
         camera_id="test_camera",
         color=(120, 160, 90),
         timestamp="2026-01-01T12:00:00+00:00",
+        ambient_temperature_f=None,
     ):
         camera_dir.mkdir(parents=True, exist_ok=True)
         image_path = camera_dir / f"{stem}.jpg"
@@ -100,6 +101,7 @@ def make_image_with_sidecar():
             "camera_id": camera_id,
             "timestamp": timestamp,
             "download_time": timestamp,
+            "ambient_temperature_f": ambient_temperature_f,
         }
         (camera_dir / f"{stem}.json").write_text(json.dumps(sidecar), encoding="utf-8")
         return image_path

@@ -85,6 +85,8 @@ class QuailSyncBridge:
                 for d in result.detections
             ],
             "inference_time_ms": result.inference_time_ms,
+            # Ambient temperature (°F) from the camera, if the poller captured it.
+            "ambient_temperature_f": result.ambient_temperature_f,
             # Basenames only — the server serves images from processed/{cam}/.
             "image_filename": image.name,
             # The detector writes a sibling "{stem}_annotated.jpg"; the server

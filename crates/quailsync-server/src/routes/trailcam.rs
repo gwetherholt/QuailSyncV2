@@ -82,6 +82,9 @@ pub(crate) struct ObservationRequest {
     image_filename: Option<String>,
     #[serde(default)]
     annotated_image_filename: Option<String>,
+    /// Ambient temperature (°F) the camera reported, if available.
+    #[serde(default)]
+    ambient_temperature_f: Option<f64>,
 }
 
 /// Insert one observation. Auto-registers the camera, then stores the row.
@@ -111,8 +114,9 @@ pub(crate) async fn trailcam_observation(
     match conn.execute(
         "INSERT INTO trail_cam_observations
             (camera_id, timestamp, bird_count, average_confidence, min_confidence,
-             detections, inference_time_ms, image_filename, annotated_image_filename)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             detections, inference_time_ms, image_filename, annotated_image_filename,
+             ambient_temperature_f)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             body.camera_id,
             body.timestamp,
@@ -123,6 +127,7 @@ pub(crate) async fn trailcam_observation(
             body.inference_time_ms,
             image_filename,
             annotated_image_filename,
+            body.ambient_temperature_f,
         ],
     ) {
         Ok(_) => (
@@ -173,7 +178,7 @@ pub(crate) async fn trailcam_latest(
     let conn = acquire_db(&state);
     let row = conn.query_row(
         "SELECT timestamp, bird_count, average_confidence, detections,
-                image_filename, annotated_image_filename
+                image_filename, annotated_image_filename, ambient_temperature_f
          FROM trail_cam_observations
          WHERE camera_id = ?1
          ORDER BY timestamp DESC, id DESC
@@ -187,27 +192,36 @@ pub(crate) async fn trailcam_latest(
                 r.get::<_, Option<String>>(3)?,
                 r.get::<_, Option<String>>(4)?,
                 r.get::<_, Option<String>>(5)?,
+                r.get::<_, Option<f64>>(6)?,
             ))
         },
     );
 
-    let (timestamp, bird_count, avg_conf, detections_str, image_filename, annotated_filename) =
-        match row {
-            Ok(r) => r,
-            Err(_) => {
-                return err(
-                    StatusCode::NOT_FOUND,
-                    "not_found",
-                    "No observation for that camera.",
-                )
-            }
-        };
+    let (
+        timestamp,
+        bird_count,
+        avg_conf,
+        detections_str,
+        image_filename,
+        annotated_filename,
+        ambient_temp,
+    ) = match row {
+        Ok(r) => r,
+        Err(_) => {
+            return err(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "No observation for that camera.",
+            )
+        }
+    };
 
     let body = json!({
         "camera_id": camera_id,
         "bird_count": bird_count,
         "timestamp": timestamp,
         "confidence_avg": avg_conf,
+        "ambient_temperature_f": ambient_temp,
         "detections": parse_detections(detections_str.as_deref()),
         "image_url": image_url_for(&camera_id, image_filename.as_deref()),
         "annotated_image_url": annotated_url_for(
@@ -249,6 +263,7 @@ pub(crate) async fn trailcam_history(
         Option<f64>,    // inference_time_ms
         Option<String>, // image_filename
         Option<String>, // annotated_image_filename
+        Option<f64>,    // ambient_temperature_f
         String,         // created_at
     );
     let rows: Vec<Row> = {
@@ -256,7 +271,7 @@ pub(crate) async fn trailcam_history(
             .prepare(
                 "SELECT timestamp, bird_count, average_confidence, min_confidence,
                         detections, inference_time_ms, image_filename,
-                        annotated_image_filename, created_at
+                        annotated_image_filename, ambient_temperature_f, created_at
                  FROM trail_cam_observations
                  WHERE camera_id = ?1 AND created_at >= datetime('now', ?2)
                  ORDER BY created_at ASC, id ASC",
@@ -273,6 +288,7 @@ pub(crate) async fn trailcam_history(
                 r.get(6)?,
                 r.get(7)?,
                 r.get(8)?,
+                r.get(9)?,
             ))
         })
         .unwrap()
@@ -282,22 +298,25 @@ pub(crate) async fn trailcam_history(
 
     let out: Vec<Value> = rows
         .into_iter()
-        .map(|(ts, bird_count, avg, min, det, inf, img, ann, created)| {
-            json!({
-                "camera_id": camera_id,
-                "timestamp": ts,
-                "bird_count": bird_count,
-                "confidence_avg": avg,
-                "min_confidence": min,
-                "detections": parse_detections(det.as_deref()),
-                "inference_time_ms": inf,
-                "image_url": image_url_for(&camera_id, img.as_deref()),
-                "annotated_image_url": annotated_url_for(
-                    &state.trailcam.processed_dir, &camera_id, ann.as_deref(),
-                ),
-                "created_at": created,
-            })
-        })
+        .map(
+            |(ts, bird_count, avg, min, det, inf, img, ann, ambient_temp, created)| {
+                json!({
+                    "camera_id": camera_id,
+                    "timestamp": ts,
+                    "bird_count": bird_count,
+                    "confidence_avg": avg,
+                    "min_confidence": min,
+                    "ambient_temperature_f": ambient_temp,
+                    "detections": parse_detections(det.as_deref()),
+                    "inference_time_ms": inf,
+                    "image_url": image_url_for(&camera_id, img.as_deref()),
+                    "annotated_image_url": annotated_url_for(
+                        &state.trailcam.processed_dir, &camera_id, ann.as_deref(),
+                    ),
+                    "created_at": created,
+                })
+            },
+        )
         .collect();
     Json(out).into_response()
 }

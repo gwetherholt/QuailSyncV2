@@ -216,6 +216,23 @@
   .reading-label{color:#777;font-size:.78rem}
   .reading-value{font-weight:600;font-size:1.05rem}
 
+  /* ---------- Trail Cam Analytics ---------- */
+  .trailcam-analytics{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:1rem}
+  .tca-card{background:var(--beige);border-radius:12px;padding:1rem}
+  .tca-head{display:flex;align-items:baseline;justify-content:space-between;gap:.5rem;margin-bottom:.6rem}
+  .tca-title{font-weight:700;font-size:.95rem}
+  .tca-last{font-size:.7rem;color:#999;white-space:nowrap}
+  .tca-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(54px,1fr));gap:.4rem;margin-bottom:.7rem}
+  .tca-stat{text-align:center;background:var(--cream,#FEFCF9);border-radius:8px;padding:.4rem .2rem}
+  .tca-stat-num{display:block;font-size:1.05rem;font-weight:700;line-height:1.2}
+  .tca-stat-label{display:block;font-size:.6rem;color:#999;text-transform:uppercase;letter-spacing:.03em;margin-top:.1rem}
+  .tca-section-label{font-size:.7rem;color:#888;text-transform:uppercase;letter-spacing:.04em;margin:.5rem 0 .3rem}
+  .tca-chart{width:100%;height:40px;display:block}
+  .tca-heatmap{display:grid;grid-template-columns:repeat(24,1fr);gap:1px;margin-bottom:14px}
+  .tca-hm-cell{position:relative;height:20px;border-radius:2px}
+  .tca-hm-tick{position:absolute;bottom:-14px;left:0;font-size:.55rem;color:#aaa}
+  .tca-empty{font-size:.8rem;color:#999;padding:.5rem 0}
+
   /* ---------- Alerts ---------- */
   .alert-item{
     padding:.5rem .75rem;border-radius:8px;margin-bottom:.4rem;
@@ -844,6 +861,18 @@
     return Math.round(h / 24)+'d ago';
   }
 
+  // Zero-padded 2-digit hour, e.g. 9 -> "09". Used by the trail-cam heatmap.
+  function tcaPad2(n){ return (n < 10 ? '0' : '') + n; }
+  // Interpolate light (#eef3e6) → dark green (#3f6b2e) by fraction 0..1.
+  function tcaLerpGreen(frac){
+    var f = Math.max(0, Math.min(1, frac));
+    var a = [238, 243, 230], b = [63, 107, 46];
+    var r = Math.round(a[0] + (b[0]-a[0])*f);
+    var g = Math.round(a[1] + (b[1]-a[1])*f);
+    var bl = Math.round(a[2] + (b[2]-a[2])*f);
+    return 'rgb(' + r + ',' + g + ',' + bl + ')';
+  }
+
   function bandDot(color, size){
     if(!color) return '';
     var s = size || 14;
@@ -1059,6 +1088,7 @@
     render: function(app){
       app.innerHTML = '<div class="dash-grid">' +
         '<div class="panel" style="grid-column:1/-1"><div class="panel-body" id="d-brooder">'+loadingHTML()+'</div></div>' +
+        '<div class="panel" style="grid-column:1/-1"><div class="panel-header"><span class="panel-header-left">&#x1F4F8; Trail Cam Analytics</span><span style="font-size:.7rem;color:#999">last 7 days</span></div><div class="panel-body" id="d-trailcam">'+loadingHTML()+'</div></div>' +
         '<div class="dash-row-2">' +
           '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F6A8; Alerts</span><a class="view-all-link" id="d-alerts-viewall" style="display:none">View all</a></div><div class="panel-body"><div class="alerts-scroll" id="d-alerts">'+loadingHTML()+'</div></div></div>' +
           '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F4CA; Quick Stats</span></div><div class="panel-body" id="d-stats">'+loadingHTML()+'</div></div>' +
@@ -1082,6 +1112,9 @@
       // Trail cameras: backfill assigned-camera chips onto each housing card.
       setTimeout(function(){ self._pollBrooderCameras(); }, 3000);
       addInterval(function(){ self._pollBrooderCameras(); }, 60000);
+      // Trail Cam Analytics: 7-day sparkline + activity heatmap per camera.
+      this._pollTrailcamAnalytics();
+      addInterval(function(){ self._pollTrailcamAnalytics(); }, 300000);
       addInterval(this._pollStats, 60000);
       addInterval(this._pollFlock, 60000);
     },
@@ -1527,6 +1560,146 @@
             + '</div>';
         }).join('');
       }
+    },
+
+    /* ---------- Trail Cam Analytics (7-day bird-count trends) ---------- */
+
+    // Fetch each camera with observations, pull its last 7 days of history,
+    // and render a per-camera card: summary stats, a bird-count line chart
+    // (with an optional temperature overlay) and an hour-of-day heatmap.
+    _pollTrailcamAnalytics: async function(){
+      var el = document.getElementById('d-trailcam');
+      if(!el) return;
+      var cameras = await API.get('/api/trailcam/cameras');
+      if(!cameras){ el.innerHTML = emptyState('&#x1F4F8;','Could not load trail cam data','',''); return; }
+      if(cameras.length === 0){
+        el.innerHTML = emptyState('&#x1F4F8;','No trail cam observations yet','','');
+        return;
+      }
+      var self = this;
+      var cards = await Promise.all(cameras.map(async function(cam){
+        var history = await API.get('/api/trailcam/history/' + encodeURIComponent(cam.camera_id) + '?hours=168');
+        return self._renderCameraAnalytics(cam, history || []);
+      }));
+      el.innerHTML = '<div class="trailcam-analytics">' + cards.join('') + '</div>';
+    },
+
+    // Build one camera's analytics card from its 7-day observation history
+    // (oldest-first array of {bird_count, ambient_temperature_f, created_at}).
+    _renderCameraAnalytics: function(cam, history){
+      var label = escapeHtml(cam.label || cam.camera_id);
+      if(!history.length){
+        return '<div class="tca-card"><div class="tca-title">' + label + '</div>'
+          + '<div class="tca-empty">No observations in the last 7 days.</div></div>';
+      }
+
+      // --- summary stats -------------------------------------------------
+      var counts = history.map(function(o){ return o.bird_count || 0; });
+      var total = counts.length;
+      var sum = counts.reduce(function(a,b){ return a+b; }, 0);
+      var avg = sum / total;
+      var max = Math.max.apply(null, counts);
+
+      // hour-of-day buckets (local time): running sum + n per hour.
+      var hourSum = new Array(24).fill(0), hourN = new Array(24).fill(0);
+      history.forEach(function(o){
+        var d = parseServerTime(o.created_at || o.timestamp);
+        if(!d) return;
+        var h = d.getHours();
+        hourSum[h] += (o.bird_count || 0);
+        hourN[h] += 1;
+      });
+      var hourAvg = hourSum.map(function(s, i){ return hourN[i] ? s / hourN[i] : 0; });
+      var peakHour = 0, peakVal = -1;
+      for(var i=0;i<24;i++){ if(hourN[i] && hourAvg[i] > peakVal){ peakVal = hourAvg[i]; peakHour = i; } }
+      var mostActive = peakVal < 0 ? '&mdash;' : tcaPad2(peakHour) + ':00';
+      var last = history[history.length - 1];
+      var lastSeen = relativeTime(last.created_at || last.timestamp);
+
+      // temperatures present? collect (count, temp) aligned for overlay.
+      var temps = history.map(function(o){
+        var t = o.ambient_temperature_f;
+        return (t === null || t === undefined) ? null : Number(t);
+      });
+      var hasTemp = temps.some(function(t){ return t !== null && !isNaN(t); });
+      var lastTemp = null;
+      for(var j=temps.length-1;j>=0;j--){ if(temps[j] !== null && !isNaN(temps[j])){ lastTemp = temps[j]; break; } }
+
+      var statsHtml = '<div class="tca-stats">'
+        + '<div class="tca-stat"><span class="tca-stat-num">' + total + '</span><span class="tca-stat-label">observations</span></div>'
+        + '<div class="tca-stat"><span class="tca-stat-num">' + avg.toFixed(1) + '</span><span class="tca-stat-label">avg birds</span></div>'
+        + '<div class="tca-stat"><span class="tca-stat-num">' + max + '</span><span class="tca-stat-label">max birds</span></div>'
+        + '<div class="tca-stat"><span class="tca-stat-num">' + mostActive + '</span><span class="tca-stat-label">most active</span></div>'
+        + (hasTemp && lastTemp !== null ? '<div class="tca-stat"><span class="tca-stat-num">' + lastTemp.toFixed(0) + '°F</span><span class="tca-stat-label">last temp</span></div>' : '')
+        + '</div>';
+
+      var chartHtml = this._tcaLineChart(counts, hasTemp ? temps : null);
+      var heatHtml = this._tcaHeatmap(hourAvg, hourN);
+
+      return '<div class="tca-card">'
+        + '<div class="tca-head"><span class="tca-title">' + label + '</span>'
+        + '<span class="tca-last">last seen ' + lastSeen + '</span></div>'
+        + statsHtml
+        + '<div class="tca-section-label">Bird count'
+        + (hasTemp ? ' <span style="color:var(--dusty-rose,#D4A0A0)">&middot; temp</span>' : '')
+        + ' &mdash; last 7 days</div>'
+        + chartHtml
+        + '<div class="tca-section-label">Activity by hour of day</div>'
+        + heatHtml
+        + '</div>';
+    },
+
+    // SVG line chart of bird counts (sage) with an optional temperature overlay
+    // (dusty-rose, scaled to its own range). `counts`/`temps` share the x-axis;
+    // null temp points break the temperature line into segments.
+    _tcaLineChart: function(counts, temps){
+      var W = 100, H = 36, pad = 2; // viewBox units; SVG scales to container width.
+      var n = counts.length;
+      function xAt(i){ return n <= 1 ? W/2 : pad + (i/(n-1)) * (W - 2*pad); }
+      function pathFor(vals, vMin, vMax){
+        var range = (vMax - vMin) || 1;
+        var d = '', started = false;
+        for(var i=0;i<vals.length;i++){
+          var v = vals[i];
+          if(v === null || v === undefined || isNaN(v)){ started = false; continue; }
+          var y = (H - pad) - ((v - vMin) / range) * (H - 2*pad);
+          d += (started ? ' L' : ' M') + xAt(i).toFixed(2) + ' ' + y.toFixed(2);
+          started = true;
+        }
+        return d.trim();
+      }
+      var cMax = Math.max.apply(null, counts), cMin = 0;
+      var birdPath = pathFor(counts, cMin, cMax);
+      var svg = '<svg class="tca-chart" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" role="img">';
+      if(temps){
+        var tv = temps.filter(function(t){ return t !== null && !isNaN(t); });
+        if(tv.length){
+          var tMin = Math.min.apply(null, tv), tMax = Math.max.apply(null, tv);
+          var tempPath = pathFor(temps, tMin, tMax);
+          if(tempPath) svg += '<path d="' + tempPath + '" fill="none" stroke="var(--dusty-rose,#D4A0A0)" stroke-width="0.8" stroke-linejoin="round" stroke-linecap="round" opacity="0.85"/>';
+        }
+      }
+      if(birdPath) svg += '<path d="' + birdPath + '" fill="none" stroke="var(--sage-dark,#9ab085)" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>';
+      svg += '</svg>';
+      return svg;
+    },
+
+    // 24-column hour-of-day heatmap of average bird count, light→dark green.
+    // Hours with no observations render as a flat "no data" cell.
+    _tcaHeatmap: function(hourAvg, hourN){
+      var max = Math.max.apply(null, hourAvg);
+      if(max <= 0) max = 1;
+      var cells = '';
+      for(var h=0; h<24; h++){
+        var hasData = hourN[h] > 0;
+        var frac = hasData ? hourAvg[h] / max : 0;
+        // light (#eef3e6) → dark green (#3f6b2e) by interpolation.
+        var bg = hasData ? tcaLerpGreen(frac) : '#f0f0f0';
+        var title = tcaPad2(h) + ':00 — ' + (hasData ? hourAvg[h].toFixed(1) + ' avg birds (' + hourN[h] + ' obs)' : 'no data');
+        var lbl = (h % 6 === 0) ? '<span class="tca-hm-tick">' + h + '</span>' : '';
+        cells += '<div class="tca-hm-cell" style="background:' + bg + '" title="' + title + '">' + lbl + '</div>';
+      }
+      return '<div class="tca-heatmap">' + cells + '</div>';
     },
 
     /* ---------- Issue #13: hutch residents (assign / unassign) ---------- */

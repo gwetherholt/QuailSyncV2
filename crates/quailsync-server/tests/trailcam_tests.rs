@@ -458,6 +458,74 @@ async fn history_defaults_to_24h_and_empty_for_unknown_camera() {
 }
 
 // ---------------------------------------------------------------------------
+// ambient temperature round-trip
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn ambient_temperature_round_trips_through_latest_and_history() {
+    let processed = unique_processed_dir();
+    let base = spawn_app(&processed).await;
+    let c = client();
+
+    // One observation WITH a temperature, one WITHOUT (column stays null).
+    let with_temp = json!({
+        "camera_id": "camA",
+        "timestamp": "2026-06-15T05:00:00",
+        "bird_count": 3,
+        "average_confidence": 0.8,
+        "min_confidence": 0.7,
+        "detections": [],
+        "inference_time_ms": 5.0,
+        "image_filename": "a1.jpg",
+        "ambient_temperature_f": 72.5,
+    });
+    let resp = c
+        .post(format!("{base}/api/trailcam/observation"))
+        .json(&with_temp)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    post_observation(
+        &base,
+        &c,
+        "camA",
+        "2026-06-15T06:00:00",
+        4,
+        0.9,
+        "a2.jpg",
+        None,
+    )
+    .await;
+
+    // history: first row carries the temp, second is null.
+    let hist: Value = c
+        .get(format!("{base}/api/trailcam/history/camA?hours=24"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let arr = hist.as_array().unwrap();
+    assert_eq!(arr.len(), 2);
+    assert_eq!(arr[0]["ambient_temperature_f"].as_f64(), Some(72.5));
+    assert!(arr[1]["ambient_temperature_f"].is_null());
+
+    // latest reflects the most recent observation (no temp).
+    let latest: Value = c
+        .get(format!("{base}/api/trailcam/latest/camA"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(latest["ambient_temperature_f"].is_null());
+}
+
+// ---------------------------------------------------------------------------
 // image serving
 // ---------------------------------------------------------------------------
 

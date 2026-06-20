@@ -64,6 +64,9 @@ class DetectionResult:
     detections: list[Detection]
     inference_time_ms: float
     model_version: str
+    # Ambient temperature (°F) reported by the camera, if the poller captured
+    # it; ``None`` when unavailable.
+    ambient_temperature_f: float | None = None
 
     def to_dict(self) -> dict:
         """JSON-serializable dict (nested ``Detection``s become dicts too)."""
@@ -173,7 +176,7 @@ def detect(
     unless ``model_path`` is passed explicitly — then that model is used as-is.
     """
     image_path = Path(image_path)
-    sidecar_camera_id, timestamp = _read_sidecar(image_path)
+    sidecar_camera_id, timestamp, ambient_temperature_f = _read_sidecar(image_path)
     camera_id = camera_id if camera_id is not None else sidecar_camera_id
 
     resolved_model = (
@@ -210,23 +213,31 @@ def detect(
         detections=detections,
         inference_time_ms=inference_time_ms,
         model_version=resolved_model.name,
+        ambient_temperature_f=ambient_temperature_f,
     )
 
 
-def _read_sidecar(image_path: Path) -> tuple[str, str | None]:
-    """Return ``(camera_id, timestamp)`` from the image's ``{stem}.json``
-    sidecar, falling back to the parent dir name / ``None`` if unavailable."""
+def _read_sidecar(image_path: Path) -> tuple[str, str | None, float | None]:
+    """Return ``(camera_id, timestamp, ambient_temperature_f)`` from the image's
+    ``{stem}.json`` sidecar, falling back to the parent dir name / ``None`` if
+    unavailable."""
     sidecar = image_path.with_suffix(".json")
     if sidecar.exists():
         try:
             data = json.loads(sidecar.read_text(encoding="utf-8"))
+            temp = data.get("ambient_temperature_f")
+            try:
+                temp = float(temp) if temp is not None else None
+            except (TypeError, ValueError):
+                temp = None
             return (
                 str(data.get("camera_id") or image_path.parent.name),
                 data.get("timestamp"),
+                temp,
             )
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Could not read sidecar %s (%s)", sidecar, exc)
-    return image_path.parent.name, None
+    return image_path.parent.name, None, None
 
 
 def annotate_image(image_path: Path | str, result: DetectionResult, dest_path: Path | str) -> bool:
@@ -316,7 +327,7 @@ def process_staging(
 
     results: list[DetectionResult] = []
     for image_path in images:
-        camera_id, _ = _read_sidecar(image_path)
+        camera_id, _, _ = _read_sidecar(image_path)
         try:
             result = detect(
                 image_path,

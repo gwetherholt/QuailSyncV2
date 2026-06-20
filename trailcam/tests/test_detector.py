@@ -45,6 +45,32 @@ def test_detect_falls_back_to_dirname_without_sidecar(tmp_path, mock_yolo):
 
     assert result.camera_id == "cam_from_dir"  # parent dir name
     assert result.timestamp is None
+    assert result.ambient_temperature_f is None
+
+
+def test_detect_reads_ambient_temperature_from_sidecar(
+    tmp_path, mock_yolo, make_image_with_sidecar
+):
+    camera_dir = tmp_path / "staging" / "test_camera"
+    image = make_image_with_sidecar(
+        camera_dir, stem="20260101-120000_t", ambient_temperature_f=64.0
+    )
+
+    result = detect(image, model_path="stub.pt")
+
+    assert result.ambient_temperature_f == 64.0
+
+
+def test_detect_ambient_temperature_none_when_absent(
+    tmp_path, mock_yolo, make_image_with_sidecar
+):
+    # Sidecar without the field (older poller) -> temperature stays None.
+    camera_dir = tmp_path / "staging" / "test_camera"
+    image = make_image_with_sidecar(camera_dir, stem="20260101-120000_n")
+
+    result = detect(image, model_path="stub.pt")
+
+    assert result.ambient_temperature_f is None
 
 
 def test_process_staging_moves_files_and_writes_detections(tmp_path, mock_yolo, make_image_with_sidecar):
