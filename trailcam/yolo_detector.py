@@ -26,6 +26,7 @@ import json
 import logging
 import shutil
 import stat
+import tempfile
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -155,6 +156,89 @@ def _load_model(model_path: Path | str):
 
 
 # ===========================================================================
+# IR / night-vision preprocessing
+# ===========================================================================
+#
+# SpyPoint cameras switch to infrared illumination at night, emitting nearly
+# monochrome frames where quail blend into a dark, low-contrast background. For
+# those frames we run inference on a CLAHE-enhanced copy (local contrast pulled
+# up so shapes stand out) while leaving the original untouched for display and
+# Roboflow upload.
+
+# Mean absolute per-channel difference (0-255) below which a frame is treated as
+# grayscale / IR. Daytime color frames have strong channel separation and sit
+# well above this; true IR frames are ~0.
+_IR_CHANNEL_DIFF_THRESHOLD = 12.0
+# CLAHE parameters applied to the LAB L (lightness) channel.
+_CLAHE_CLIP_LIMIT = 3.0
+_CLAHE_TILE_GRID = (8, 8)
+
+
+def _is_ir_image(cv2, bgr) -> bool:
+    """True when ``bgr`` is (near-)grayscale — an IR / night-vision frame.
+
+    Measures the mean absolute difference between the B/G/R channels: identical
+    channels (monochrome IR) give ~0, while daytime color sits far above
+    :data:`_IR_CHANNEL_DIFF_THRESHOLD`."""
+    b, g, r = cv2.split(bgr)
+    diff = (
+        float(cv2.absdiff(b, g).mean())
+        + float(cv2.absdiff(g, r).mean())
+        + float(cv2.absdiff(r, b).mean())
+    ) / 3.0
+    return diff < _IR_CHANNEL_DIFF_THRESHOLD
+
+
+def _apply_clahe(cv2, bgr):
+    """Return ``bgr`` with CLAHE applied to its lightness channel.
+
+    Converts to LAB, equalizes the L channel with Contrast Limited Adaptive
+    Histogram Equalization (``clipLimit=3.0``, ``tileGridSize=(8, 8)``), merges
+    back and returns BGR — enhancing local contrast without touching color."""
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+    l_chan, a_chan, b_chan = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=_CLAHE_CLIP_LIMIT, tileGridSize=_CLAHE_TILE_GRID)
+    merged = cv2.merge((clahe.apply(l_chan), a_chan, b_chan))
+    return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+
+
+def _inference_image(image_path: Path) -> tuple[Path, Path | None]:
+    """Choose the image YOLO should run on, enhancing IR frames in place of a copy.
+
+    Returns ``(source_path, temp_path)``. For an IR/night frame the contrast is
+    boosted with CLAHE and written to a temp JPEG; ``temp_path`` is that file and
+    the caller must delete it after inference. For normal color frames — or if
+    OpenCV is unavailable or anything fails — returns ``(image_path, None)`` and
+    the original is used unchanged.
+
+    The on-disk original is never modified: it remains the source of truth for
+    display and Roboflow upload; only inference sees the enhanced copy."""
+    try:
+        import cv2  # lazy: only frames reaching detection pay the import cost
+    except ImportError:
+        return image_path, None
+
+    try:
+        bgr = cv2.imread(str(image_path))
+        if bgr is None or not _is_ir_image(cv2, bgr):
+            return image_path, None
+
+        enhanced = _apply_clahe(cv2, bgr)
+        tmp = tempfile.NamedTemporaryFile(prefix="clahe_", suffix=".jpg", delete=False)
+        tmp.close()
+        tmp_path = Path(tmp.name)
+        if not cv2.imwrite(str(tmp_path), enhanced):
+            tmp_path.unlink(missing_ok=True)
+            return image_path, None
+
+        logger.debug("IR frame detected — running inference on CLAHE-enhanced copy of %s", image_path)
+        return tmp_path, tmp_path
+    except Exception as exc:  # noqa: BLE001 — preprocessing must never break detection
+        logger.warning("CLAHE preprocessing failed for %s (%s); using original", image_path, exc)
+        return image_path, None
+
+
+# ===========================================================================
 # Detection
 # ===========================================================================
 
@@ -184,9 +268,17 @@ def detect(
     )
     model = _load_model(resolved_model)
 
+    # Preprocess before inference: IR/night frames run on a CLAHE-enhanced copy;
+    # color frames run on the original. The original is kept for display/upload.
+    inference_source, tmp_enhanced = _inference_image(image_path)
+
     start = time.perf_counter()
-    results = model.predict(source=str(image_path), conf=confidence, verbose=False)
-    inference_time_ms = round((time.perf_counter() - start) * 1000, 1)
+    try:
+        results = model.predict(source=str(inference_source), conf=confidence, verbose=False)
+        inference_time_ms = round((time.perf_counter() - start) * 1000, 1)
+    finally:
+        if tmp_enhanced is not None:
+            tmp_enhanced.unlink(missing_ok=True)
 
     detections: list[Detection] = []
     # Ultralytics returns one Results object per source image; we passed one.
