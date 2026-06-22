@@ -246,17 +246,32 @@ class SpypointPoller:
             self.login()
 
         # The API/library can return anything: invalid JSON, a payload bomb,
-        # deeply nested structures, etc. Any failure fetching or iterating the
-        # photo list is logged and turned into "no photos this poll" rather than
-        # crashing the service.
+        # deeply nested structures, etc. Any failure fetching the camera list is
+        # logged and turned into "no photos this poll" rather than crashing.
         try:
             cameras = self.client.cameras()
-            logger.info("Found %d camera(s)", len(cameras))
-            photos = self.client.photos(cameras, limit=self.limit)
-            photo_iter = list(photos)  # force any lazy parsing to happen here
         except Exception as exc:  # noqa: BLE001 — bad JSON, payload bomb, deep nesting…
-            logger.error("Failed to fetch photo list from SpyPoint: %s", exc)
+            logger.error("Failed to fetch camera list from SpyPoint: %s", exc)
             return []
+
+        logger.info("Found %d camera(s)", len(cameras))
+
+        # Fetch photos one camera at a time rather than all at once. The shared
+        # `limit` applies *per request*, so a single high-volume camera can no
+        # longer consume the whole budget and starve the others — each camera
+        # gets its own up-to-`limit` slice. A failure on one camera is logged
+        # and skipped so the rest of the poll still runs.
+        photo_iter: list = []
+        for camera in cameras:
+            label = self._camera_label(camera)
+            try:
+                photos = self.client.photos([camera], limit=self.limit)
+                camera_photos = list(photos)  # force any lazy parsing here
+            except Exception as exc:  # noqa: BLE001 — bad JSON, payload bomb, deep nesting…
+                logger.error("Failed to fetch photos for camera %s: %s", label, exc)
+                continue
+            logger.info("Camera %s: %d photo(s) returned", label, len(camera_photos))
+            photo_iter.extend(camera_photos)
 
         downloaded: list[Path] = []
         for photo in photo_iter:
@@ -512,6 +527,27 @@ class SpypointPoller:
     # The pyspypoint Photo object's exact field names for camera and timestamp
     # aren't guaranteed across versions, so we probe a few common names and
     # fall back sensibly. Adjust the candidate lists if your library differs.
+
+    @staticmethod
+    def _camera_label(camera) -> str:
+        """Best-effort identifier for a camera object from ``client.cameras()``,
+        used only for per-camera log lines. Probes common id/name fields on
+        either a dict or an object and falls back to ``str(camera)``. Never
+        raises — a bad label must not break the poll loop."""
+        try:
+            if isinstance(camera, dict):
+                for key in ("id", "camera_id", "cameraId", "name"):
+                    value = camera.get(key)
+                    if value:
+                        return str(value)
+            else:
+                for attr in ("id", "camera_id", "cameraId", "name"):
+                    value = getattr(camera, attr, None)
+                    if value:
+                        return str(value)
+            return str(camera)
+        except Exception:  # noqa: BLE001 — a label must never break the poll
+            return "camera"
 
     @staticmethod
     def _camera_id(photo) -> str:
