@@ -59,6 +59,12 @@ def yolo_annotation_lines(
     coordinates normalized to the image size. ``class_map`` is a running
     name->index registry (mutated in place) so class indices stay stable across
     a batch — for the single-class quail detector every box is class 0.
+
+    The YOLO ``.txt`` format only carries numeric indices, never names; the
+    index->name mapping is shipped separately as a labelmap (see
+    :func:`labelmap_from_class_map`) so Roboflow can resolve each index back to
+    the detector's class name ("Quail", "Tag", …) and match the project's
+    existing classes.
     """
     if image_width <= 0 or image_height <= 0:
         return []
@@ -75,6 +81,18 @@ def yolo_annotation_lines(
         class_idx = class_map.setdefault(det.class_name, len(class_map))
         lines.append(f"{class_idx} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
     return lines
+
+
+def labelmap_from_class_map(class_map: dict[str, int]) -> dict[int, str]:
+    """Invert a name->index registry into the index->name labelmap Roboflow wants.
+
+    Roboflow's ``single_upload(annotation_labelmap=…)`` takes a mapping from the
+    numeric class id used in the YOLO ``.txt`` to its class name, so an upload of
+    ``"0 …"`` lands under the project's ``Quail`` class rather than a literal
+    class named ``"0"``. This is the bridge between YOLO's index-only label file
+    and the project's named classes.
+    """
+    return {idx: name for name, idx in class_map.items()}
 
 
 def _resolve_image_path(image_path_str: str) -> Path | None:
@@ -174,6 +192,8 @@ class RoboflowUploader:
         width, height = size
 
         lines = yolo_annotation_lines(result, width, height, self._class_map)
+        # index->name so Roboflow maps each YOLO index back to a named class.
+        labelmap = labelmap_from_class_map(self._class_map)
 
         project = self._connect()
 
@@ -190,9 +210,14 @@ class RoboflowUploader:
                 tmp.write("\n")
             tmp.close()
 
+            # YOLO .txt holds only numeric indices; annotation_labelmap tells
+            # Roboflow which class name each index means so the predictions are
+            # filed under the project's existing classes ("Quail", "Tag", …)
+            # instead of classes literally named "0"/"1".
             project.single_upload(
                 image_path=str(image_path),
                 annotation_path=str(annotation_path),
+                annotation_labelmap=labelmap,
                 is_prediction=True,
                 batch_name=self.batch_name,
             )

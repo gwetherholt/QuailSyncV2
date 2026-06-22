@@ -9,6 +9,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,6 +33,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.VideocamOff
@@ -604,6 +606,7 @@ fun OutdoorCamCard(cameraId: String, label: String, refreshKey: Int) {
     val api = remember { QuailSyncApi.create(ServerConfig.getServerUrl(context)) }
 
     var state by remember(cameraId) { mutableStateOf<OutdoorState>(OutdoorState.Loading) }
+    var showHistory by remember(cameraId) { mutableStateOf(false) }
 
     LaunchedEffect(cameraId, refreshKey) {
         state = OutdoorState.Loading
@@ -654,7 +657,22 @@ fun OutdoorCamCard(cameraId: String, label: String, refreshKey: Int) {
                 }
                 is OutdoorState.Data -> OutdoorCamCardContent(s.latest, baseUrl, label)
             }
+
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = { showHistory = true },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = SageGreen),
+            ) {
+                Icon(Icons.Default.List, null, Modifier.size(18.dp))
+                Spacer(Modifier.size(6.dp))
+                Text("View History")
+            }
         }
+    }
+
+    if (showHistory) {
+        OutdoorCamHistoryDialog(cameraId = cameraId, label = label) { showHistory = false }
     }
 }
 
@@ -718,6 +736,19 @@ private fun OutdoorCamCardContent(latest: TrailcamLatest, baseUrl: String, label
 
         Spacer(Modifier.height(10.dp))
 
+        // Freshness: how long ago the latest capture was, colored to warn when
+        // the pipeline is falling behind (orange >1h, red >4h).
+        val freshness = freshnessFor(latest.timestamp)
+        if (freshness != null) {
+            Text(
+                freshness.text,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = freshness.color ?: MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(4.dp))
+        }
+
         Row(
             Modifier.fillMaxWidth(),
             Arrangement.SpaceBetween,
@@ -733,6 +764,263 @@ private fun OutdoorCamCardContent(latest: TrailcamLatest, baseUrl: String, label
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+// =====================================================================
+// Freshness indicator — "how long ago" with a staleness warning color
+// =====================================================================
+
+/** Orange once an observation is older than this (pipeline lagging). */
+private val FRESHNESS_WARN = java.time.Duration.ofHours(1)
+/** Red once older than this (pipeline likely stalled). */
+private val FRESHNESS_STALE = java.time.Duration.ofHours(4)
+private val FreshnessOrange = Color(0xFFE08A2E)
+private val FreshnessRed = Color(0xFFCC4444)
+
+/** A relative "x ago" label plus an optional warning color (null = use the
+ *  default muted color). */
+private data class Freshness(val text: String, val color: Color?)
+
+/** Build a [Freshness] from an ISO-8601 capture timestamp: a relative age
+ *  ("2 min ago", "3 hours ago", "2 days ago") plus a color that turns orange
+ *  past 1 hour and red past 4 hours. Returns null for an unparseable/blank
+ *  timestamp. Timestamps without an offset are treated as UTC (as the API
+ *  emits), matching [formatCaptureTime]. */
+private fun freshnessFor(iso: String?): Freshness? {
+    if (iso.isNullOrBlank()) return null
+    val instant = runCatching { OffsetDateTime.parse(iso).toInstant() }
+        .recoverCatching { LocalDateTime.parse(iso).toInstant(ZoneOffset.UTC) }
+        .getOrNull() ?: return null
+
+    val age = java.time.Duration.between(instant, java.time.Instant.now())
+    // Future timestamps (clock skew) read as "just now" rather than negatives.
+    val minutes = age.toMinutes().coerceAtLeast(0)
+    val text = when {
+        minutes < 1 -> "just now"
+        minutes < 60 -> "$minutes min ago"
+        minutes < 24 * 60 -> {
+            val h = minutes / 60
+            "$h hour${if (h == 1L) "" else "s"} ago"
+        }
+        else -> {
+            val d = minutes / (24 * 60)
+            "$d day${if (d == 1L) "" else "s"} ago"
+        }
+    }
+    val color = when {
+        age >= FRESHNESS_STALE -> FreshnessRed
+        age >= FRESHNESS_WARN -> FreshnessOrange
+        else -> null
+    }
+    return Freshness(text, color)
+}
+
+// =====================================================================
+// Photo history browser — last 7 days of observations for one camera
+// =====================================================================
+
+private sealed interface HistoryState {
+    data object Loading : HistoryState
+    data object Empty : HistoryState
+    data class Error(val message: String) : HistoryState
+    data class Data(val items: List<TrailcamLatest>) : HistoryState
+}
+
+/** Full-screen modal listing every observation for [cameraId] over the last
+ *  7 days, newest first. Each row lazy-loads its thumbnail with Coil; tapping a
+ *  photo opens it full-screen. */
+@Composable
+fun OutdoorCamHistoryDialog(cameraId: String, label: String, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val baseUrl = remember { ServerConfig.getServerUrl(context).trimEnd('/') }
+    val api = remember { QuailSyncApi.create(ServerConfig.getServerUrl(context)) }
+
+    var state by remember(cameraId) { mutableStateOf<HistoryState>(HistoryState.Loading) }
+    // The image currently shown full-screen (null = none).
+    var fullScreenUrl by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(cameraId) {
+        state = try {
+            // History comes back oldest-first; reverse for newest-first display.
+            val items = withContext(Dispatchers.IO) { api.getTrailcamHistory(cameraId, 168) }
+            if (items.isEmpty()) HistoryState.Empty else HistoryState.Data(items.reversed())
+        } catch (e: Exception) {
+            Log.e("QuailSync", "Failed to load history for $cameraId", e)
+            HistoryState.Error(e.message ?: "Couldn't reach the server")
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+                    Arrangement.SpaceBetween,
+                    Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                        Text(label, style = MaterialTheme.typography.titleLarge)
+                        Text(
+                            "Last 7 days",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "Close") }
+                }
+                HorizontalDivider()
+
+                when (val s = state) {
+                    is HistoryState.Loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                        CircularProgressIndicator(color = SageGreen)
+                    }
+                    is HistoryState.Empty -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.PhotoCamera, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                "No observations in the last 7 days.",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                    }
+                    is HistoryState.Error -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.VideocamOff, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                s.message,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                    }
+                    is HistoryState.Data -> LazyColumn(
+                        Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        items(s.items) { obs ->
+                            HistoryRow(obs, baseUrl) { url -> fullScreenUrl = url }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fullScreenUrl?.let { url ->
+        FullScreenImageDialog(url) { fullScreenUrl = null }
+    }
+}
+
+/** One observation row: lazy-loaded thumbnail (annotated if available, else
+ *  raw), a bird-count badge, timestamp, and average confidence. Tapping the
+ *  thumbnail invokes [onOpenPhoto] with the chosen image URL. */
+@Composable
+private fun HistoryRow(obs: TrailcamLatest, baseUrl: String, onOpenPhoto: (String) -> Unit) {
+    fun absolute(url: String?): String? = url?.let { if (it.startsWith("http")) it else "$baseUrl$it" }
+    val imageUrl = absolute(obs.annotatedImageUrl) ?: absolute(obs.imageUrl)
+    val count = obs.birdCount ?: 0
+    val placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant)
+
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(2.dp),
+    ) {
+        Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(96.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color.Black)
+                    .then(if (imageUrl != null) Modifier.clickable { onOpenPhoto(imageUrl) } else Modifier),
+            ) {
+                if (imageUrl != null) {
+                    AsyncImage(
+                        model = imageUrl,
+                        contentDescription = "Observation thumbnail",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                        placeholder = placeholder,
+                        error = placeholder,
+                    )
+                } else {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Default.PhotoCamera, null, Modifier.size(28.dp), tint = Color.White.copy(alpha = 0.6f))
+                    }
+                }
+                // Bird-count badge, top-left.
+                Box(
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp)
+                        .background(SageGreen.copy(alpha = 0.92f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 6.dp, vertical = 3.dp),
+                ) {
+                    Text(
+                        "$count",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+
+            Spacer(Modifier.size(12.dp))
+
+            Column(Modifier.weight(1f)) {
+                Text(
+                    formatCaptureTime(obs.timestamp),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "$count bird${if (count == 1) "" else "s"} detected",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Avg confidence: ${formatConfidence(obs.confidenceAvg)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** Tap-to-dismiss full-screen view of a single observation photo. */
+@Composable
+private fun FullScreenImageDialog(imageUrl: String, onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .clickable(onClick = onDismiss),
+            contentAlignment = Alignment.Center,
+        ) {
+            AsyncImage(
+                model = imageUrl,
+                contentDescription = "Observation photo",
+                modifier = Modifier.fillMaxWidth(),
+                contentScale = ContentScale.Fit,
+            )
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+            ) {
+                Icon(Icons.Default.Close, "Close", tint = Color.White)
+            }
         }
     }
 }

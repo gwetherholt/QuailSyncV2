@@ -716,6 +716,14 @@ interface QuailSyncApi {
     @GET("api/trailcam/latest/{camera_id}")
     suspend fun getTrailcamLatest(@Path("camera_id") cameraId: String): TrailcamLatest
 
+    /** Every observation for a camera within the last [hours] (default 168 =
+     *  7 days), returned oldest-first. Items share [TrailcamLatest]'s shape. */
+    @GET("api/trailcam/history/{camera_id}")
+    suspend fun getTrailcamHistory(
+        @Path("camera_id") cameraId: String,
+        @retrofit2.http.Query("hours") hours: Int = 168,
+    ): List<TrailcamLatest>
+
     // Govee sensors: list all (with assignment + latest reading), assign, unassign.
     @GET("api/govee/sensors")
     suspend fun getGoveeSensors(): List<GoveeSensorDto>
