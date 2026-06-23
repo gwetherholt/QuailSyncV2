@@ -41,6 +41,9 @@ async fn spawn_test_server() -> String {
         trailcam: quailsync_server::state::TrailcamConfig::for_dir(
             std::env::temp_dir().join("quailsync-test-trailcam"),
         ),
+        indoorcam: quailsync_server::state::IndoorcamConfig::for_dir(
+            std::env::temp_dir().join("quailsync-test-indoorcam"),
+        ),
     };
 
     let app = build_app(state);

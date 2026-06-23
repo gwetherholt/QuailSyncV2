@@ -1,0 +1,73 @@
+# QuailSync indoor-camera pipeline — systemd service
+# Continuously processes the RTSP stream at ~1fps: capture (OpenCV) -> YOLO chick
+# model -> rolling-median smoothing -> smart-batched POST -> Roboflow active
+# learning. Replaces the headcount role of the legacy camera_stream.py /
+# quailsync-camera service; those are decommissioned separately — installing this
+# unit does not touch them.
+#
+# Install:
+#   sudo cp indoor-cam-pipeline.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now indoor-cam-pipeline
+#
+# Logs:
+#   journalctl -u indoor-cam-pipeline -f
+
+[Unit]
+Description=QuailSync indoor-camera pipeline (RTSP stream -> YOLO -> QuailSync)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gwetherholt
+WorkingDirectory=/home/gwetherholt/indoor-cam
+
+# --- Secrets ---------------------------------------------------------------
+# RTSP credentials AND the Roboflow API key live OUTSIDE the repo in a
+# root-owned, chmod 600 file so they're never committed or readable by other
+# users. Create it from indoor-cam/.indoor-cam-secrets.example, e.g.:
+#   install -m 600 /dev/null /home/gwetherholt/.indoor-cam-secrets
+#   editor /home/gwetherholt/.indoor-cam-secrets   # set RTSP_URL and ROBOFLOW_API_KEY
+EnvironmentFile=/home/gwetherholt/.indoor-cam-secrets
+
+# --- Non-secret configuration ----------------------------------------------
+Environment=INDOORCAM_BASE_DIR=/home/gwetherholt/indoor-cam
+# Inference is reused from the trail-cam checkout; point at where it lives.
+Environment=TRAILCAM_DIR=/home/gwetherholt/trailcam
+# CHICK model (YOLOv8n, ~6.2MB best.pt from the chick-detector training run) —
+# NOT the adult-quail trail-cam model. Copy training/chick-detector/weights/best.pt
+# here, or point this at that path directly.
+Environment=YOLO_MODEL_PATH=/home/gwetherholt/indoor-cam/models/chick-best.pt
+Environment=YOLO_CONFIDENCE=0.5
+Environment=INDOOR_CAMERA_ID=indoor-1
+Environment=QUAILSYNC_API_URL=https://quailsync.tail01d133.ts.net
+
+# Continuous capture + smart batching.
+Environment=FRAME_INTERVAL=1.0
+Environment=POST_INTERVAL=60
+Environment=COUNT_CHANGE_THRESHOLD=2
+
+# Image storage strategy (most observations carry no image).
+Environment=LOW_CONFIDENCE_THRESHOLD=0.4
+Environment=HEARTBEAT_IMAGE_INTERVAL=3600
+Environment=IMAGE_RETENTION_DAYS=7
+
+# Roboflow active learning — same API key as trail cam (in the secrets file),
+# different project.
+Environment=ROBOFLOW_UPLOAD_ENABLED=true
+Environment=ROBOFLOW_PROJECT=find-chicks-5
+
+Environment=PYTHONUNBUFFERED=1
+
+# Use the project's virtualenv interpreter (ultralytics/torch + opencv are heavy
+# — they belong in a venv: `python3 -m venv /home/gwetherholt/indoor-cam/venv`
+# then `venv/bin/pip install -r requirements.txt`). The venv must also be able to
+# import the trail-cam detector/uploader at $TRAILCAM_DIR.
+ExecStart=/home/gwetherholt/indoor-cam/venv/bin/python /home/gwetherholt/indoor-cam/pipeline.py --log-level INFO
+
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

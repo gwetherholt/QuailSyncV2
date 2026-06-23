@@ -8,6 +8,8 @@ pub mod chick_groups;
 pub mod clutches;
 pub mod dev;
 pub mod govee;
+pub mod indoor_cameras;
+pub mod indoorcam;
 pub mod photos;
 pub mod processing;
 pub mod reconcile;

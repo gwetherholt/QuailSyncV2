@@ -109,6 +109,7 @@ async fn main() {
         metrics_handle: prometheus_handle,
         photos,
         trailcam: quailsync_server::state::TrailcamConfig::from_env(),
+        indoorcam: quailsync_server::state::IndoorcamConfig::from_env(),
     };
 
     let app = build_app(state);

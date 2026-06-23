@@ -665,6 +665,70 @@ pub fn init_db(conn: &Connection) {
         println!("[migration] added trail_cam_observations.ambient_temperature_f");
     }
 
+    // --- Indoor cameras (RTSP, e.g. Tapo C100) ---
+    // Same decoupled pattern as the SPYPOINT trail cameras above, but scoped to
+    // brooders/incubators only (the assign handler rejects 'hutch' targets).
+    // Cameras auto-register on their first observation (camera_id is the natural
+    // key) or via `POST /api/indoor-cameras`, carry an rtsp_url for the
+    // management UI, and are movable between brooders/incubators via
+    // indoor_camera_assignments. The partial unique index enforces "at most one
+    // active (unassigned_at IS NULL) assignment per camera". indoor_cameras is
+    // created first so the FK below resolves.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS indoor_cameras (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            camera_id   TEXT    UNIQUE NOT NULL,
+            name        TEXT,
+            rtsp_url    TEXT,
+            model       TEXT,
+            first_seen  TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_seen   TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_at  TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS indoor_camera_assignments (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            indoor_camera_id INTEGER NOT NULL REFERENCES indoor_cameras(id),
+            brooder_id       INTEGER NOT NULL REFERENCES brooders(id),
+            assigned_at      TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            unassigned_at    TEXT
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_indoor_camera_active_assignment
+            ON indoor_camera_assignments(indoor_camera_id)
+            WHERE unassigned_at IS NULL;
+
+        CREATE INDEX IF NOT EXISTS idx_indoor_camera_assignments_brooder
+            ON indoor_camera_assignments(brooder_id, unassigned_at);",
+    )
+    .expect("failed to create indoor camera tables");
+
+    // --- Indoor-camera observations ---
+    // One row per processed RTSP frame. The poller POSTs to
+    // /api/indoorcam/observation (with a JSONL write-ahead log fallback when the
+    // API is down); JPEGs are served from the poller's processed/{camera_id}/.
+    // Mirrors trail_cam_observations but uses `detection_count` (indoor models
+    // count chicks, not "birds") and has no ambient-temperature column.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS indoor_camera_observations (
+            id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+            camera_id                TEXT    NOT NULL,
+            timestamp                TEXT,
+            detection_count          INTEGER NOT NULL DEFAULT 0,
+            average_confidence       REAL,
+            min_confidence           REAL,
+            detections               TEXT,
+            inference_time_ms        REAL,
+            image_filename           TEXT,
+            annotated_image_filename TEXT,
+            created_at               TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_indoor_cam_obs_camera_ts
+            ON indoor_camera_observations(camera_id, timestamp);",
+    )
+    .expect("failed to create indoor_camera_observations table");
+
     // --- Performance indexes ---
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_readings_brooder_received ON brooder_readings(brooder_id, received_at);

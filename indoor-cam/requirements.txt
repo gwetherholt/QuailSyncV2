@@ -1,0 +1,10 @@
+requests
+# Inference is reused from trailcam/yolo_detector.py, which needs ultralytics
+# (and pulls in opencv + Pillow). opencv-python also drives the continuous RTSP
+# capture (cv2.VideoCapture) — the secure backend that keeps the URL in-process.
+ultralytics
+opencv-python
+
+# Roboflow active-learning upload (ROBOFLOW_UPLOAD_ENABLED=true). Reuses the
+# trail-cam RoboflowUploader; only needed when uploads are enabled + keyed.
+roboflow

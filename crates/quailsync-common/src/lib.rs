@@ -1201,6 +1201,78 @@ pub struct AssignCameraRequest {
     pub brooder_id: i64,
 }
 
+// ---------------------------------------------------------------------------
+// Indoor cameras (RTSP, e.g. Tapo C100). The same decoupled pattern as trail
+// cameras — a Python poller (see `indoor-cam/`) grabs RTSP frames, runs YOLO,
+// and POSTs observations — but scoped to brooders/incubators only (never
+// hutches). Cameras auto-register on first observation (keyed by `camera_id`)
+// or are created/managed via `/api/indoor-cameras` CRUD, carry an `rtsp_url`
+// for the management UI, and are assignable to a brooder/incubator with one
+// active assignment at a time (mirrors `TrailCamera`/`CameraAssignment`).
+// ---------------------------------------------------------------------------
+
+/// An indoor camera's current (open) assignment to a brooder or incubator.
+/// Distinct from [`CameraAssignment`] in that it also carries the unit's
+/// `housing_type` ("brooder" | "incubator") so the UI can label it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndoorCameraAssignment {
+    pub brooder_id: i64,
+    pub brooder_name: String,
+    pub housing_type: String,
+    pub assigned_at: String,
+}
+
+/// A registered indoor camera with its current assignment (if any). Returned by
+/// `GET /api/indoor-cameras`, `GET /api/brooders/{id}/indoor-cameras`, and the
+/// create/update/assign endpoints.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndoorCamera {
+    pub id: i64,
+    /// Stable slug the poller posts observations with (e.g. "indoor-1").
+    pub camera_id: String,
+    pub name: Option<String>,
+    /// RTSP stream address for the management UI. Store without embedded
+    /// credentials where possible — the poller reads its own credentialed URL
+    /// from its out-of-repo secrets file, not from here.
+    pub rtsp_url: Option<String>,
+    pub model: Option<String>,
+    pub first_seen: String,
+    pub last_seen: String,
+    pub created_at: String,
+    pub assignment: Option<IndoorCameraAssignment>,
+}
+
+/// Body of `POST /api/indoor-cameras`. Idempotent upsert keyed on `camera_id`;
+/// `name`/`rtsp_url`/`model` update the row when provided.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterIndoorCameraRequest {
+    pub camera_id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub rtsp_url: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// Body of `PUT /api/indoor-cameras/{id}`. Each present field overwrites the
+/// stored value; omitted fields are left unchanged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateIndoorCameraRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub rtsp_url: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// Body of `PUT /api/indoor-cameras/{id}/assign`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssignIndoorCameraRequest {
+    pub brooder_id: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

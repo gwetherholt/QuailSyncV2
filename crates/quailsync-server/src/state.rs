@@ -108,6 +108,45 @@ impl TrailcamConfig {
     }
 }
 
+/// Location of the indoor-cam pipeline's output (the RTSP poller in
+/// `indoor-cam/`). Mirrors [`TrailcamConfig`]: the poller writes per-camera
+/// JPEGs to `processed_dir/{camera_id}/` and the server reads them to serve
+/// observation images.
+#[derive(Clone)]
+pub struct IndoorcamConfig {
+    pub processed_dir: Arc<PathBuf>,
+}
+
+impl IndoorcamConfig {
+    /// From the environment: `INDOORCAM_PROCESSED_DIR` wins; otherwise
+    /// `{INDOORCAM_BASE_DIR or ~/indoor-cam}/processed`.
+    pub fn from_env() -> Self {
+        let dir = if let Ok(p) = std::env::var("INDOORCAM_PROCESSED_DIR") {
+            PathBuf::from(p)
+        } else {
+            let base = std::env::var("INDOORCAM_BASE_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    let home = std::env::var("HOME")
+                        .or_else(|_| std::env::var("USERPROFILE"))
+                        .unwrap_or_else(|_| ".".to_string());
+                    PathBuf::from(home).join("indoor-cam")
+                });
+            base.join("processed")
+        };
+        Self {
+            processed_dir: Arc::new(dir),
+        }
+    }
+
+    /// Test/explicit config pointing at a specific processed dir.
+    pub fn for_dir(dir: impl Into<PathBuf>) -> Self {
+        Self {
+            processed_dir: Arc::new(dir.into()),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
@@ -125,6 +164,8 @@ pub struct AppState {
     pub photos: PhotoConfig,
     /// Trail-cam pipeline output location (observations + images).
     pub trailcam: TrailcamConfig,
+    /// Indoor-cam (RTSP) pipeline output location (observation images).
+    pub indoorcam: IndoorcamConfig,
 }
 
 /// Record that we just received telemetry for a brooder.

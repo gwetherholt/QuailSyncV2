@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use quailsync_server::state::{PhotoConfig, TrailcamConfig};
+use quailsync_server::state::{IndoorcamConfig, PhotoConfig, TrailcamConfig};
 use quailsync_server::{build_app, init_db, AppState};
 use reqwest::StatusCode;
 use rusqlite::Connection;
@@ -45,6 +45,9 @@ async fn spawn_app(processed_dir: &Path) -> String {
         metrics_handle,
         photos: PhotoConfig::for_dir(std::env::temp_dir().join("qs-trailcam-test-photos")),
         trailcam: TrailcamConfig::for_dir(processed_dir.to_path_buf()),
+        indoorcam: IndoorcamConfig::for_dir(
+            std::env::temp_dir().join("qs-trailcam-test-indoorcam"),
+        ),
     };
 
     let app = build_app(state);

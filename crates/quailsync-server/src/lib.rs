@@ -144,6 +144,33 @@ pub fn build_app(state: AppState) -> Router {
             "/api/trailcam/image/{camera_id}/{filename}",
             get(trailcam::trailcam_image),
         )
+        // Indoor-cam (RTSP) observation endpoints (SQLite-backed): the indoor
+        // poller POSTs observations; reads surface the latest per camera, the
+        // camera list, a history window, and the processed JPEGs. Distinct from
+        // the `/api/indoor-cameras` registry/CRUD below. See routes/indoorcam.rs.
+        .route(
+            "/api/indoorcam/observation",
+            axum::routing::post(indoorcam::indoorcam_observation),
+        )
+        // Clear image refs after the poller uploads a saved frame to Roboflow
+        // and deletes the local file (so reads don't serve a 404 image URL).
+        .route(
+            "/api/indoorcam/observation/{id}",
+            axum::routing::patch(indoorcam::clear_observation_image),
+        )
+        .route("/api/indoorcam/cameras", get(indoorcam::indoorcam_cameras))
+        .route(
+            "/api/indoorcam/latest/{camera_id}",
+            get(indoorcam::indoorcam_latest),
+        )
+        .route(
+            "/api/indoorcam/history/{camera_id}",
+            get(indoorcam::indoorcam_history),
+        )
+        .route(
+            "/api/indoorcam/image/{camera_id}/{filename}",
+            get(indoorcam::indoorcam_image),
+        )
         .route(
             "/api/birds/{id}/weights/{wid}",
             axum::routing::delete(birds::delete_weight),
@@ -282,6 +309,29 @@ pub fn build_app(state: AppState) -> Router {
         .route(
             "/api/trail-cameras/{id}/assign",
             axum::routing::put(trail_cameras::assign_camera).delete(trail_cameras::unassign_camera),
+        )
+        // Indoor-camera (RTSP) registry + CRUD + assignment. Scoped to
+        // brooders/incubators (the assign handler rejects hutches). Distinct
+        // from the `/api/indoorcam/*` observation read endpoints above. See
+        // routes/indoor_cameras.rs.
+        .route(
+            "/api/brooders/{id}/indoor-cameras",
+            get(indoor_cameras::brooder_indoor_cameras),
+        )
+        .route(
+            "/api/indoor-cameras",
+            get(indoor_cameras::list_cameras).post(indoor_cameras::create_camera),
+        )
+        .route(
+            "/api/indoor-cameras/{id}",
+            get(indoor_cameras::get_camera)
+                .put(indoor_cameras::update_camera)
+                .delete(indoor_cameras::delete_camera),
+        )
+        .route(
+            "/api/indoor-cameras/{id}/assign",
+            axum::routing::put(indoor_cameras::assign_camera)
+                .delete(indoor_cameras::unassign_camera),
         )
         .route("/api/birds/{id}/move", axum::routing::put(birds::move_bird))
         .route(
