@@ -106,6 +106,7 @@ def run_stream(
     annotate_fn=None,
     bridge: IndoorBridge | None = None,
     uploader=None,
+    settings_client=None,
     batcher: CountBatcher | None = None,
     clock=time.monotonic,
     wall_clock=time.time,
@@ -145,6 +146,10 @@ def run_stream(
         from active_learning import ActiveLearningUploader
 
         uploader = ActiveLearningUploader()
+    if settings_client is None:
+        from settings_client import SettingsClient
+
+        settings_client = SettingsClient()
 
     # Storage helpers (pure + disk ops) — imported here so tests can monkeypatch.
     from storage import delete_files, notable_reasons, persist_frame, prune_old_images
@@ -251,7 +256,7 @@ def run_stream(
                 min_conf = min(confidences) if confidences else None
                 secs_since_img = None if last_image_time is None else (now - last_image_time)
 
-                # Decide whether this frame is notable enough to keep on disk.
+                # Is this frame notable enough to keep/upload at all?
                 save_reasons = notable_reasons(
                     post_reason=reason,
                     min_confidence=min_conf,
@@ -260,10 +265,25 @@ def run_stream(
                     low_confidence_threshold=config.LOW_CONFIDENCE_THRESHOLD,
                     heartbeat_interval=config.HEARTBEAT_IMAGE_INTERVAL,
                 )
-                save = bool(save_reasons)
+                notable = bool(save_reasons)
+
+                # Runtime toggles (cached ~60s; default ON on any fetch failure).
+                # When a toggle is off we skip that action but STILL post the JSON.
+                image_save_enabled = settings_client.image_save_enabled()
+                roboflow_enabled = settings_client.roboflow_upload_enabled()
+
+                do_save = notable and image_save_enabled
+                do_upload = (
+                    notable
+                    and roboflow_enabled
+                    and uploader is not None
+                    and getattr(uploader, "enabled", False)
+                )
+                # A frame must be on disk either to keep it or to upload it.
+                need_file = do_save or do_upload
 
                 persisted = annotated = None
-                if save:
+                if need_file:
                     # Seq suffix guarantees a unique name even for two saves in
                     # the same second (second-granular timestamps would collide).
                     saved_seq += 1
@@ -275,40 +295,43 @@ def run_stream(
                     except Exception as exc:  # noqa: BLE001 — annotation is best-effort
                         logger.warning("Annotation failed: %s", exc)
                     result.image_path = str(persisted)
-                    last_image_time = now
+                    if do_save:
+                        last_image_time = now
 
-                # 3. Always POST the JSON observation (image fields only set when saved).
+                # 3. Always POST the JSON observation. Image fields are populated
+                #    only when the frame is actually saved to disk (image-save
+                #    toggle on + notable).
                 ts = datetime.now(timezone.utc).isoformat()
                 observation_id = bridge.post(
-                    result, timestamp=ts, detection_count=smoothed, include_image=save
+                    result, timestamp=ts, detection_count=smoothed, include_image=do_save
                 )
                 batcher.record_post(smoothed, now)
                 logger.info(
-                    "POST count=%d reason=%s delivered=%s image=%s",
+                    "POST count=%d reason=%s delivered=%s save=%s upload=%s notable=%s",
                     smoothed,
                     reason,
                     observation_id is not None,
-                    ",".join(save_reasons) if save else "none",
+                    do_save,
+                    do_upload,
+                    ",".join(save_reasons) if notable else "none",
                 )
 
-                # 4. Roboflow active learning on saved frames; on a successful
-                #    upload, delete the local file AND clear the observation's
-                #    image fields (so reads don't serve a now-404 URL). On
-                #    failure, keep the file for a later retry / the daily prune.
-                if save and uploader is not None:
-                    if uploader.upload(result):
-                        delete_files(persisted, annotated)
-                        if observation_id is not None:
-                            bridge.clear_image(observation_id)
-                        logger.debug(
-                            "Uploaded to Roboflow; removed local frame %s and cleared image refs",
-                            persisted.name,
-                        )
-                    else:
-                        logger.info(
-                            "Kept %s (Roboflow upload disabled/failed) for retry",
-                            persisted.name if persisted else "?",
-                        )
+                # 4. Roboflow active learning (when the toggle + config allow it).
+                #    On success reclaim the local file and clear the observation's
+                #    image refs (if we'd saved them, so reads don't 404). Keep a
+                #    *saved* file on failure for retry; drop an upload-only temp
+                #    file that didn't make it.
+                uploaded = uploader.upload(result) if do_upload else False
+                if uploaded:
+                    delete_files(persisted, annotated)
+                    if do_save and observation_id is not None:
+                        bridge.clear_image(observation_id)
+                    logger.debug("Uploaded to Roboflow; reclaimed local frame")
+                elif need_file and not do_save:
+                    # Persisted only for an upload that was skipped/failed -> drop.
+                    delete_files(persisted, annotated)
+                elif do_save and not uploaded:
+                    logger.debug("Saved %s to disk (no Roboflow upload)", persisted.name)
 
             # 5. Daily auto-prune of any leftover saved frames.
             if (clock() - last_prune) >= PRUNE_INTERVAL_SECONDS:

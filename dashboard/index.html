@@ -4119,6 +4119,7 @@
   Page.Settings = {
     _backups: [],
     _breedingConfig: null,
+    _systemSettings: null,
     render: function(app){
       app.innerHTML = '<div class="page-top-bar"><h2>Settings</h2></div>' +
         // Breeding Configuration. Drives the Flock-screen cull-mode guardrail
@@ -4126,6 +4127,12 @@
         '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F423; Breeding Configuration</span></div><div class="panel-body">' +
         '<p style="margin-top:0;color:#666;font-size:.9rem">Used to compute the minimum males the flock needs. Minimum&nbsp;=&nbsp;ceil(females&nbsp;&divide;&nbsp;max-per-male)&nbsp;&times;&nbsp;males-per-group.</p>' +
         '<div id="breeding-config">'+loadingHTML()+'</div>' +
+        '</div></div>' +
+        // Indoor-camera image handling toggles (server system-settings). The
+        // detection JSON is always recorded; these only gate the images.
+        '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F4F7; Indoor Camera</span></div><div class="panel-body">' +
+        '<p style="margin-top:0;color:#666;font-size:.9rem">Detection data is always recorded. These only affect what happens to the camera <em>images</em>.</p>' +
+        '<div id="indoor-cam-config">'+loadingHTML()+'</div>' +
         '</div></div>' +
         '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F4BE; Database Backups</span></div><div class="panel-body">' +
         '<button class="btn-primary" onclick="Page.Settings.createBackup()" style="margin-bottom:1rem">Create Backup Now</button>' +
@@ -4137,8 +4144,38 @@
     _load: async function(){
       this._breedingConfig = await API.get('/api/settings');
       this._renderBreedingConfig();
+      this._systemSettings = await API.get('/api/system-settings');
+      this._renderIndoorCamConfig();
       this._backups = await API.get('/api/backups') || [];
       this._renderList();
+    },
+    _renderIndoorCamConfig: function(){
+      var el = document.getElementById('indoor-cam-config');
+      if(!el) return;
+      var s = this._systemSettings;
+      if(!s){
+        el.innerHTML = '<div class="no-data">Couldn\'t load settings.</div>';
+        return;
+      }
+      function toggle(key, label, on){
+        return '<label style="display:flex;align-items:center;gap:.6rem;margin:.5rem 0;cursor:pointer;font-size:.9rem">' +
+          '<input type="checkbox"'+(on?' checked':'')+' onchange="Page.Settings.saveSystemFlag(\''+key+'\', this.checked)">' +
+          '<span>'+label+'</span></label>';
+      }
+      el.innerHTML =
+        toggle('indoor_cam_roboflow_upload_enabled', 'Upload indoor camera images to Roboflow', !!s.indoor_cam_roboflow_upload_enabled) +
+        toggle('indoor_cam_image_save_enabled', 'Save indoor camera images to PC', !!s.indoor_cam_image_save_enabled);
+    },
+    saveSystemFlag: async function(key, value){
+      var body = {}; body[key] = value;
+      var resp = await API.put('/api/system-settings', body);
+      if(resp){
+        this._systemSettings = resp;
+        toast('Setting saved');
+      } else {
+        toast('Save failed','error');
+        this._renderIndoorCamConfig(); // revert the checkbox to the last good state
+      }
     },
     _renderBreedingConfig: function(){
       var el = document.getElementById('breeding-config');

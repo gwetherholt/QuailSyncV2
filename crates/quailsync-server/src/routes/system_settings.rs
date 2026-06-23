@@ -96,6 +96,12 @@ pub(crate) async fn update_settings(
             let json = serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string());
             upsert(&conn, "brooder_week_temps_f", &json);
         }
+        if let Some(v) = body.indoor_cam_roboflow_upload_enabled {
+            upsert(&conn, "indoor_cam_roboflow_upload_enabled", &v.to_string());
+        }
+        if let Some(v) = body.indoor_cam_image_save_enabled {
+            upsert(&conn, "indoor_cam_image_save_enabled", &v.to_string());
+        }
         load_system_settings(&conn)
     };
 

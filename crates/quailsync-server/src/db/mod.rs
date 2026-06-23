@@ -529,6 +529,8 @@ pub fn init_db(conn: &Connection) {
         ("min_breeding_weight_grams", "200.0"),
         ("sensor_stale_seconds", "15"),
         ("brooder_week_temps_f", "[97,92,87,82,77,72]"),
+        ("indoor_cam_roboflow_upload_enabled", "true"),
+        ("indoor_cam_image_save_enabled", "true"),
     ] {
         conn.execute(
             "INSERT OR IGNORE INTO system_settings (key, value) VALUES (?1, ?2)",

@@ -98,15 +98,28 @@ class FakeBridge:
 
 
 class FakeUploader:
-    enabled = True
-
-    def __init__(self, ok=True):
+    def __init__(self, ok=True, enabled=True):
         self.ok = ok
+        self.enabled = enabled
         self.uploads = []
 
     def upload(self, result):
         self.uploads.append(result.image_path)
         return self.ok
+
+
+class FakeSettings:
+    """Stand-in for SettingsClient — fixed toggle values, no network."""
+
+    def __init__(self, roboflow=True, image_save=True):
+        self._roboflow = roboflow
+        self._image_save = image_save
+
+    def roboflow_upload_enabled(self):
+        return self._roboflow
+
+    def image_save_enabled(self):
+        return self._image_save
 
 
 def _detect_from(results):
@@ -134,7 +147,7 @@ def _reload_config(monkeypatch, tmp_path, **over):
     return config
 
 
-def _run(cfg, *, frames_ok, results, bridge, uploader, tick=1.0, max_iterations=None):
+def _run(cfg, *, frames_ok, results, bridge, uploader, settings=None, tick=1.0, max_iterations=None):
     clock_holder = {"t": 1000.0}
     stream = FakeStream(frames_ok, clock_holder, tick=tick)
     run_stream(
@@ -143,6 +156,7 @@ def _run(cfg, *, frames_ok, results, bridge, uploader, tick=1.0, max_iterations=
         annotate_fn=lambda *a: True,  # no-op (doesn't write an annotated file)
         bridge=bridge,
         uploader=uploader,
+        settings_client=settings if settings is not None else FakeSettings(),  # both ON
         clock=lambda: clock_holder["t"],
         wall_clock=lambda: 1_700_000_000.0,
         stop_event=threading.Event(),
@@ -250,3 +264,63 @@ def test_dropped_frame_triggers_reconnect(monkeypatch, tmp_path, make_result):
     assert stream.reconnects == 1
     assert len(bridge.posts) == 1
     assert stream.released is True  # stream cleaned up on exit
+
+
+# ---------------------------------------------------------------------------
+# in-app toggles (system settings) gate save + upload, never the JSON POST
+# ---------------------------------------------------------------------------
+
+
+def test_roboflow_toggle_off_skips_upload_but_keeps_image(monkeypatch, tmp_path, make_result):
+    cfg = _reload_config(monkeypatch, tmp_path)
+    bridge = FakeBridge()
+    uploader = FakeUploader(ok=True)
+    settings = FakeSettings(roboflow=False, image_save=True)
+    results = [make_result(confidences=(0.9,), total=3)]
+
+    _run(cfg, frames_ok=[True], results=results, bridge=bridge, uploader=uploader, settings=settings)
+
+    # Observation posted WITH an image; nothing uploaded or cleared.
+    assert len(bridge.posts) == 1
+    assert bridge.posts[0]["include_image"] is True
+    assert uploader.uploads == []
+    assert bridge.cleared == []
+    # The frame is kept on disk (saved to PC).
+    cam_dir = cfg.PROCESSED_DIR / "indoor-1"
+    assert len(list(cam_dir.glob("*.jpg"))) == 1
+
+
+def test_image_save_toggle_off_skips_disk_but_still_uploads(monkeypatch, tmp_path, make_result):
+    cfg = _reload_config(monkeypatch, tmp_path)
+    bridge = FakeBridge()
+    uploader = FakeUploader(ok=True)
+    settings = FakeSettings(roboflow=True, image_save=False)
+    results = [make_result(confidences=(0.9,), total=3)]
+
+    _run(cfg, frames_ok=[True], results=results, bridge=bridge, uploader=uploader, settings=settings)
+
+    # Posted WITHOUT an image; uploaded to Roboflow; the temp frame is not kept.
+    assert len(bridge.posts) == 1
+    assert bridge.posts[0]["include_image"] is False
+    assert len(uploader.uploads) == 1
+    assert bridge.cleared == []  # nothing to clear (no image fields were set)
+    cam_dir = cfg.PROCESSED_DIR / "indoor-1"
+    assert list(cam_dir.glob("*.jpg")) == []  # not saved to PC
+
+
+def test_both_toggles_off_posts_json_only(monkeypatch, tmp_path, make_result):
+    cfg = _reload_config(monkeypatch, tmp_path)
+    bridge = FakeBridge()
+    uploader = FakeUploader(ok=True)
+    settings = FakeSettings(roboflow=False, image_save=False)
+    results = [make_result(confidences=(0.9,), total=3)]
+
+    _run(cfg, frames_ok=[True], results=results, bridge=bridge, uploader=uploader, settings=settings)
+
+    # JSON observation still posted; no image, no upload, no disk write.
+    assert len(bridge.posts) == 1
+    assert bridge.posts[0]["include_image"] is False
+    assert bridge.posts[0]["count"] == 3
+    assert uploader.uploads == []
+    cam_dir = cfg.PROCESSED_DIR / "indoor-1"
+    assert not cam_dir.exists() or list(cam_dir.glob("*.jpg")) == []

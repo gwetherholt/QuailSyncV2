@@ -512,6 +512,11 @@ fun SettingsScreen() {
 
         Spacer(Modifier.height(16.dp))
 
+        // Indoor-camera image handling (server system-settings toggles).
+        IndoorCameraSettingsCard()
+
+        Spacer(Modifier.height(16.dp))
+
         // Notifications card
         Card(
             Modifier.fillMaxWidth(),
@@ -661,6 +666,114 @@ fun BreedingConfigCard() {
                 enabled = loaded && valid && !saving,
                 colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
             ) { Text(if (saving) "Saving..." else "Save") }
+        }
+    }
+}
+
+/**
+ * Indoor-camera image toggles, backed by the server's system settings
+ * (`GET/PUT /api/system-settings`). The detection JSON is always recorded;
+ * these only gate what happens to the camera *images*. Each switch issues a
+ * partial PUT immediately on change and reverts on failure.
+ */
+@Composable
+fun IndoorCameraSettingsCard() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val api = remember { QuailSyncApi.create(ServerConfig.getServerUrl(context)) }
+
+    var roboflowEnabled by remember { mutableStateOf(true) }
+    var imageSaveEnabled by remember { mutableStateOf(true) }
+    var loaded by remember { mutableStateOf(false) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        try {
+            val s = api.getSystemSettings()
+            roboflowEnabled = s.indoorCamRoboflowUploadEnabled
+            imageSaveEnabled = s.indoorCamImageSaveEnabled
+        } catch (e: Exception) {
+            loadError = "Couldn't load settings"
+        } finally {
+            loaded = true
+        }
+    }
+
+    // Optimistically flip the switch, PUT the one key, and revert on failure.
+    fun save(key: String, value: Boolean, revert: () -> Unit) {
+        scope.launch {
+            try {
+                api.updateSystemSettings(mapOf(key to value))
+            } catch (e: Exception) {
+                revert()
+                Toast.makeText(context, "Save failed: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(2.dp),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Indoor Camera", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Detection data is always recorded. These only affect what happens to the camera images.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            loadError?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+            }
+            Spacer(Modifier.height(12.dp))
+
+            Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Upload indoor camera images to Roboflow", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Send notable frames to Roboflow for active learning.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = roboflowEnabled,
+                    enabled = loaded,
+                    onCheckedChange = {
+                        val prev = roboflowEnabled
+                        roboflowEnabled = it
+                        save("indoor_cam_roboflow_upload_enabled", it) { roboflowEnabled = prev }
+                    },
+                    colors = SwitchDefaults.colors(checkedThumbColor = SageGreen, checkedTrackColor = SageGreenLight),
+                )
+            }
+
+            HorizontalDivider(Modifier.padding(vertical = 12.dp))
+
+            Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Save indoor camera images to PC", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Keep notable frames on the machine running the pipeline.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = imageSaveEnabled,
+                    enabled = loaded,
+                    onCheckedChange = {
+                        val prev = imageSaveEnabled
+                        imageSaveEnabled = it
+                        save("indoor_cam_image_save_enabled", it) { imageSaveEnabled = prev }
+                    },
+                    colors = SwitchDefaults.colors(checkedThumbColor = SageGreen, checkedTrackColor = SageGreenLight),
+                )
+            }
         }
     }
 }

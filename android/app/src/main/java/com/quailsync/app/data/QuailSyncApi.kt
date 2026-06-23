@@ -560,6 +560,13 @@ data class UpdateAppSettings(
     @SerializedName("max_females_per_male") val maxFemalesPerMale: Int? = null,
 )
 
+/** Subset of GET /api/system-settings the app uses (the indoor-cam toggles).
+ *  Other system-settings fields are present in the response but ignored here. */
+data class SystemSettings(
+    @SerializedName("indoor_cam_roboflow_upload_enabled") val indoorCamRoboflowUploadEnabled: Boolean = true,
+    @SerializedName("indoor_cam_image_save_enabled") val indoorCamImageSaveEnabled: Boolean = true,
+)
+
 data class InbreedingCheckResult(
     @SerializedName("male_id") val maleId: Int,
     @SerializedName("female_id") val femaleId: Int,
@@ -877,6 +884,16 @@ interface QuailSyncApi {
 
     @PUT("api/settings")
     suspend fun updateSettings(@Body body: UpdateAppSettings): AppSettings
+
+    // System settings (server-owned). The app only surfaces the indoor-cam
+    // image toggles; PUT is a partial update keyed by setting name.
+    @GET("api/system-settings")
+    suspend fun getSystemSettings(): SystemSettings
+
+    @PUT("api/system-settings")
+    suspend fun updateSystemSettings(
+        @Body body: Map<String, @JvmSuppressWildcards Any?>,
+    ): SystemSettings
 
     // Inbreeding check
     @GET("api/inbreeding-check")

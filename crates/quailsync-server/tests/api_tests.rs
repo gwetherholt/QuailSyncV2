@@ -3270,6 +3270,35 @@ mod system_settings_tests {
     }
 
     #[tokio::test]
+    async fn indoor_cam_toggles_default_on_and_round_trip_via_put() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+
+        // Default ON (seeded true).
+        let before = fetch(&base).await;
+        assert!(before.indoor_cam_roboflow_upload_enabled);
+        assert!(before.indoor_cam_image_save_enabled);
+
+        // Turn the Roboflow toggle off, leave image-save alone.
+        let resp = client
+            .put(format!("{base}/api/system-settings"))
+            .json(&json!({ "indoor_cam_roboflow_upload_enabled": false }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let returned: Settings = resp.json().await.unwrap();
+        assert!(!returned.indoor_cam_roboflow_upload_enabled);
+        assert!(returned.indoor_cam_image_save_enabled); // untouched
+
+        // Persisted as a real JSON boolean (not a string), and survives a GET.
+        let v = fetch_raw(&base).await;
+        assert_eq!(v["indoor_cam_roboflow_upload_enabled"], json!(false));
+        assert_eq!(v["indoor_cam_image_save_enabled"], json!(true));
+        assert!(!fetch(&base).await.indoor_cam_roboflow_upload_enabled);
+    }
+
+    #[tokio::test]
     async fn missing_rows_fall_back_to_defaults() {
         use quailsync_server::routes::system_settings::load_system_settings;
 

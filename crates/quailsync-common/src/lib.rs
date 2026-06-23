@@ -615,6 +615,10 @@ pub struct Settings {
     pub sensor_stale_seconds: i64,
     /// Per-week brooder target temps (°F), week 1..=6, stored as a JSON array.
     pub brooder_week_temps_f: Vec<i64>,
+    /// Indoor-cam: upload notable frames to Roboflow for active learning.
+    pub indoor_cam_roboflow_upload_enabled: bool,
+    /// Indoor-cam: save notable frames to disk (the PC running the pipeline).
+    pub indoor_cam_image_save_enabled: bool,
 }
 
 impl Default for Settings {
@@ -635,6 +639,10 @@ impl Default for Settings {
             min_breeding_weight_grams: COTURNIX_MIN_BREEDING_WEIGHT_GRAMS,
             sensor_stale_seconds: DEFAULT_SENSOR_STALE_SECONDS,
             brooder_week_temps_f: DEFAULT_BROODER_WEEK_TEMPS_F.to_vec(),
+            // Both default ON so the indoor-cam pipeline keeps its current
+            // behavior until a user explicitly turns a toggle off.
+            indoor_cam_roboflow_upload_enabled: true,
+            indoor_cam_image_save_enabled: true,
         }
     }
 }
@@ -667,6 +675,15 @@ impl Settings {
                 .and_then(|v| v.trim().parse::<i64>().ok())
                 .unwrap_or(fallback)
         }
+        fn parse_bool(map: &HashMap<String, String>, key: &str, fallback: bool) -> bool {
+            match map.get(key) {
+                Some(v) => matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                ),
+                None => fallback,
+            }
+        }
 
         let brooder_week_temps_f = map
             .get("brooder_week_temps_f")
@@ -694,6 +711,16 @@ impl Settings {
             ),
             sensor_stale_seconds: parse_i64(&map, "sensor_stale_seconds", d.sensor_stale_seconds),
             brooder_week_temps_f,
+            indoor_cam_roboflow_upload_enabled: parse_bool(
+                &map,
+                "indoor_cam_roboflow_upload_enabled",
+                d.indoor_cam_roboflow_upload_enabled,
+            ),
+            indoor_cam_image_save_enabled: parse_bool(
+                &map,
+                "indoor_cam_image_save_enabled",
+                d.indoor_cam_image_save_enabled,
+            ),
         }
     }
 
@@ -735,6 +762,10 @@ pub struct UpdateSettings {
     pub sensor_stale_seconds: Option<i64>,
     #[serde(default)]
     pub brooder_week_temps_f: Option<Vec<i64>>,
+    #[serde(default)]
+    pub indoor_cam_roboflow_upload_enabled: Option<bool>,
+    #[serde(default)]
+    pub indoor_cam_image_save_enabled: Option<bool>,
 }
 
 // =========================================================================
@@ -1394,6 +1425,25 @@ mod tests {
         assert!((s.min_breeding_weight_grams - 200.0).abs() < f64::EPSILON);
         assert_eq!(s.sensor_stale_seconds, 15);
         assert_eq!(s.brooder_week_temps_f, vec![97, 92, 87, 82, 77, 72]);
+        // Indoor-cam toggles default ON.
+        assert!(s.indoor_cam_roboflow_upload_enabled);
+        assert!(s.indoor_cam_image_save_enabled);
+    }
+
+    #[test]
+    fn settings_from_rows_parses_indoor_cam_bools() {
+        // Explicit values override the ON defaults; case/format tolerant.
+        let s = Settings::from_rows(vec![
+            ("indoor_cam_roboflow_upload_enabled", "false"),
+            ("indoor_cam_image_save_enabled", "TRUE"),
+        ]);
+        assert!(!s.indoor_cam_roboflow_upload_enabled);
+        assert!(s.indoor_cam_image_save_enabled);
+
+        // Missing keys fall back to the ON defaults.
+        let d = Settings::from_rows(Vec::<(&str, &str)>::new());
+        assert!(d.indoor_cam_roboflow_upload_enabled);
+        assert!(d.indoor_cam_image_save_enabled);
     }
 
     #[test]
