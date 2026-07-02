@@ -1161,6 +1161,40 @@ pub struct InbreedingCoefficient {
     pub safe: bool,
 }
 
+/// A suggested breeding pairing scored by probability-weighted lineage overlap
+/// (Phase 4). `bird_a_id` is the male, `bird_b_id` the female. Each side's
+/// overlap is `Σ A.side[lineage] × B.side[lineage]`; the pairing's risk is the
+/// larger of the two, surfaced as a rounded percent and a `risk_level` of
+/// `"safe"` (<15%), `"caution"` (15–35%), or `"avoid"` (>35%).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PairingSuggestion {
+    pub bird_a_id: i64,
+    pub bird_b_id: i64,
+    pub paternal_overlap: f64,
+    pub maternal_overlap: f64,
+    pub risk_percent: i64,
+    pub risk_level: String,
+}
+
+/// Flock-wide genetic-diversity snapshot (Phase 4), powering the "new blood"
+/// alert. Overlap risk is `max(paternal_overlap, maternal_overlap)` across
+/// candidate male×female pairings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FlockDiversity {
+    /// Mean lineage confidence across all active birds (`0.0` for an empty flock).
+    pub flock_confidence: f64,
+    /// Lowest confidence of any active bird (`0.0` for an empty flock).
+    pub min_confidence: f64,
+    /// Lowest overlap risk achievable among active male×female pairings
+    /// (`1.0` when no such pairing exists).
+    pub best_pairing_risk: f64,
+    /// `true` when the flock needs fresh genetics: `best_pairing_risk > 0.35`
+    /// or `min_confidence < 0.50`.
+    pub needs_new_blood: bool,
+    /// Distinct lineages appearing in active birds' genetic profiles.
+    pub active_lineage_count: i64,
+}
+
 // ---------------------------------------------------------------------------
 // Govee H5179 WiFi temp/humidity sensors
 //

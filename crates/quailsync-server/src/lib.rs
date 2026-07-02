@@ -225,6 +225,7 @@ pub fn build_app(state: AppState) -> Router {
         )
         .route("/api/inbreeding-check", get(breeding::inbreeding_check))
         .route("/api/breeding/suggest", get(breeding::breeding_suggest))
+        .route("/api/breeding/diversity", get(breeding::breeding_diversity))
         .route(
             "/api/settings",
             get(settings::get_settings).put(settings::update_settings),

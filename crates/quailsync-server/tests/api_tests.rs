@@ -1,8 +1,8 @@
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use quailsync_common::{
-    Bird, BirdStatus, ChickGroup, CreateBird, CreateChickGroup, CreateLineage, GraduateBird,
-    GraduateRequest, InbreedingCoefficient, Lineage, Sex,
+    Bird, BirdStatus, ChickGroup, CreateBird, CreateChickGroup, CreateLineage, FlockDiversity,
+    GraduateBird, GraduateRequest, Lineage, PairingSuggestion, Sex,
 };
 use quailsync_server::{build_app, init_db, AppState};
 use rusqlite::Connection;
@@ -243,10 +243,13 @@ async fn breeding_suggest_same_lineage() {
         .unwrap();
     assert_eq!(resp.status(), 200);
 
-    let pairs: Vec<InbreedingCoefficient> = resp.json().await.unwrap();
+    let pairs: Vec<PairingSuggestion> = resp.json().await.unwrap();
     assert_eq!(pairs.len(), 1);
-    assert!((pairs[0].coefficient - 0.25).abs() < f64::EPSILON);
-    assert!(!pairs[0].safe); // 0.25 >= 0.0625
+    // Both gen-0 birds are 100% lineage A on both sides → full overlap → avoid.
+    assert!((pairs[0].maternal_overlap - 1.0).abs() < 1e-9);
+    assert!((pairs[0].paternal_overlap - 1.0).abs() < 1e-9);
+    assert_eq!(pairs[0].risk_percent, 100);
+    assert_eq!(pairs[0].risk_level, "avoid");
 }
 
 // ---------------------------------------------------------------------------
@@ -317,10 +320,13 @@ async fn breeding_suggest_different_lineages() {
     let resp = reqwest::get(format!("{base}/api/breeding/suggest"))
         .await
         .unwrap();
-    let pairs: Vec<InbreedingCoefficient> = resp.json().await.unwrap();
+    let pairs: Vec<PairingSuggestion> = resp.json().await.unwrap();
     assert_eq!(pairs.len(), 1);
-    assert!((pairs[0].coefficient - 0.0).abs() < f64::EPSILON);
-    assert!(pairs[0].safe); // 0.0 < 0.0625
+    // Disjoint lineages → zero overlap → safe.
+    assert_eq!(pairs[0].maternal_overlap, 0.0);
+    assert_eq!(pairs[0].paternal_overlap, 0.0);
+    assert_eq!(pairs[0].risk_percent, 0);
+    assert_eq!(pairs[0].risk_level, "safe");
 }
 
 // ---------------------------------------------------------------------------
@@ -428,15 +434,157 @@ async fn breeding_suggest_full_siblings() {
     let resp = reqwest::get(format!("{base}/api/breeding/suggest"))
         .await
         .unwrap();
-    let pairs: Vec<InbreedingCoefficient> = resp.json().await.unwrap();
+    let pairs: Vec<PairingSuggestion> = resp.json().await.unwrap();
 
-    // Find the son×daughter pairing (id=3 × id=4)
+    // Phase 4 scores by genetic-profile overlap, not parentage. The son×daughter
+    // pair (id=3 × id=4) are both 100% lineage A, so they read as full overlap →
+    // avoid. (Parent-based sibling detection still lives in /api/inbreeding-check.)
     let sibling_pair = pairs
         .iter()
-        .find(|p| p.male_id == 3 && p.female_id == 4)
+        .find(|p| p.bird_a_id == 3 && p.bird_b_id == 4)
         .expect("should have son×daughter pair");
-    assert!((sibling_pair.coefficient - 0.5).abs() < f64::EPSILON);
-    assert!(!sibling_pair.safe);
+    assert!((sibling_pair.maternal_overlap - 1.0).abs() < 1e-9);
+    assert_eq!(sibling_pair.risk_level, "avoid");
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: weighted inbreeding scoring + flock diversity
+// ---------------------------------------------------------------------------
+
+async fn p4_lineage(client: &reqwest::Client, base: &str, name: &str) -> i64 {
+    client
+        .post(format!("{base}/api/lineages"))
+        .json(&CreateLineage {
+            name: name.into(),
+            source: "X".into(),
+            notes: None,
+        })
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap()
+}
+
+async fn p4_bird(client: &reqwest::Client, base: &str, sex: Sex, lineages: Vec<i64>) -> i64 {
+    client
+        .post(format!("{base}/api/birds"))
+        .json(&CreateBird {
+            band_color: None,
+            sex,
+            lineage_ids: lineages,
+            hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+            mother_id: None,
+            father_id: None,
+            generation: 0,
+            status: BirdStatus::Active,
+            notes: None,
+            nfc_tag_id: None,
+            chick_group_id: None,
+        })
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn breeding_suggest_sorted_lowest_risk_first() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+    let a = p4_lineage(&client, &base, "A").await;
+    let b = p4_lineage(&client, &base, "B").await;
+    let c = p4_lineage(&client, &base, "C").await;
+
+    // One male (lineage A) against three females spanning safe/caution/avoid.
+    p4_bird(&client, &base, Sex::Male, vec![a]).await;
+    p4_bird(&client, &base, Sex::Female, vec![b]).await; // disjoint → 0.0 safe
+    p4_bird(&client, &base, Sex::Female, vec![a, b, c]).await; // 1/3 A → 0.333 caution
+    p4_bird(&client, &base, Sex::Female, vec![a]).await; // identical → 1.0 avoid
+
+    let pairs: Vec<PairingSuggestion> = reqwest::get(format!("{base}/api/breeding/suggest"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(pairs.len(), 3);
+
+    // Ascending risk: safe, caution, avoid.
+    assert_eq!(pairs[0].risk_level, "safe");
+    assert_eq!(pairs[0].risk_percent, 0);
+    assert_eq!(pairs[1].risk_level, "caution");
+    assert_eq!(pairs[1].risk_percent, 33);
+    assert_eq!(pairs[2].risk_level, "avoid");
+    assert_eq!(pairs[2].risk_percent, 100);
+
+    let risk = |p: &PairingSuggestion| p.paternal_overlap.max(p.maternal_overlap);
+    assert!(risk(&pairs[0]) <= risk(&pairs[1]) && risk(&pairs[1]) <= risk(&pairs[2]));
+}
+
+#[tokio::test]
+async fn breeding_diversity_flags_new_blood_for_single_lineage() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+    let a = p4_lineage(&client, &base, "A").await;
+    // A one-lineage flock: the only pairing is full overlap → new blood needed.
+    p4_bird(&client, &base, Sex::Male, vec![a]).await;
+    p4_bird(&client, &base, Sex::Female, vec![a]).await;
+
+    let div: FlockDiversity = reqwest::get(format!("{base}/api/breeding/diversity"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!((div.flock_confidence - 1.0).abs() < 1e-9); // gen-0 birds are certain
+    assert!((div.min_confidence - 1.0).abs() < 1e-9);
+    assert!((div.best_pairing_risk - 1.0).abs() < 1e-9);
+    assert!(div.needs_new_blood);
+    assert_eq!(div.active_lineage_count, 1);
+}
+
+#[tokio::test]
+async fn gen0_flock_different_lineages_no_new_blood() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+    let a = p4_lineage(&client, &base, "A").await;
+    let b = p4_lineage(&client, &base, "B").await;
+    // Gen-0 birds, all 100% certain, on two distinct lineages.
+    let male = p4_bird(&client, &base, Sex::Male, vec![a]).await;
+    let female = p4_bird(&client, &base, Sex::Female, vec![b]).await;
+
+    // A different-lineage pairing reads as 0% overlap.
+    let pairs: Vec<PairingSuggestion> = reqwest::get(format!("{base}/api/breeding/suggest"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let pair = pairs
+        .iter()
+        .find(|p| p.bird_a_id == male && p.bird_b_id == female)
+        .unwrap();
+    assert_eq!(pair.risk_percent, 0);
+    assert_eq!(pair.risk_level, "safe");
+
+    let div: FlockDiversity = reqwest::get(format!("{base}/api/breeding/diversity"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!((div.best_pairing_risk - 0.0).abs() < 1e-9);
+    assert!((div.min_confidence - 1.0).abs() < 1e-9);
+    assert!(!div.needs_new_blood);
+    assert_eq!(div.active_lineage_count, 2);
 }
 
 // ---------------------------------------------------------------------------

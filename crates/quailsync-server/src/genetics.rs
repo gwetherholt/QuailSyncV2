@@ -159,6 +159,49 @@ pub fn confidence(profile: &GeneticProfile) -> f64 {
     max_of(&profile.paternal).min(max_of(&profile.maternal))
 }
 
+// ---------------------------------------------------------------------------
+// Phase 4: weighted inbreeding scoring
+// ---------------------------------------------------------------------------
+
+/// An overlap at or above this is "caution"; below it is "safe".
+pub const RISK_CAUTION_THRESHOLD: f64 = 0.15;
+/// An overlap strictly above this is "avoid".
+pub const RISK_AVOID_THRESHOLD: f64 = 0.35;
+
+/// Probability-weighted overlap between two lineage distributions:
+/// `Σ over lineages of A.p[l] × B.p[l]`. `0.0` when either side is empty or the
+/// two share no lineages; `1.0` when both are the same point mass. Symmetric.
+pub fn side_overlap(a: &[LineageProbability], b: &[LineageProbability]) -> f64 {
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    let b_map: HashMap<i64, f64> = b.iter().map(|c| (c.lineage_id, c.probability)).collect();
+    a.iter()
+        .filter_map(|c| b_map.get(&c.lineage_id).map(|&bp| c.probability * bp))
+        .sum()
+}
+
+/// `(paternal_overlap, maternal_overlap)` between two birds' genetic profiles.
+/// The pairing's inbreeding risk is the larger of the two.
+pub fn pair_overlap(a: &GeneticProfile, b: &GeneticProfile) -> (f64, f64) {
+    (
+        side_overlap(&a.paternal, &b.paternal),
+        side_overlap(&a.maternal, &b.maternal),
+    )
+}
+
+/// Risk band for an overlap value: `"safe"` (<15%), `"caution"` (15–35%),
+/// `"avoid"` (>35%). Thresholds become user-configurable in Phase 5.
+pub fn risk_level(overlap: f64) -> &'static str {
+    if overlap < RISK_CAUTION_THRESHOLD {
+        "safe"
+    } else if overlap > RISK_AVOID_THRESHOLD {
+        "avoid"
+    } else {
+        "caution"
+    }
+}
+
 fn lineage_name_map(conn: &Connection) -> HashMap<i64, String> {
     conn.prepare("SELECT id, name FROM lineages")
         .and_then(|mut s| {
@@ -399,6 +442,57 @@ mod tests {
             lineage_name: String::new(),
             probability: p,
         }
+    }
+
+    #[test]
+    fn overlap_matches_spec_example() {
+        // A {NWQuail:0.8, Fernbank:0.2} vs B {Fernbank:0.83, NWQuail:0.17}
+        // = 0.8*0.17 + 0.2*0.83 = 0.302. (lineage 1 = NWQuail, 2 = Fernbank)
+        let a = vec![lp(1, 0.8), lp(2, 0.2)];
+        let b = vec![lp(2, 0.83), lp(1, 0.17)];
+        assert!(approx(side_overlap(&a, &b), 0.302));
+    }
+
+    #[test]
+    fn overlap_zero_for_disjoint_lineages() {
+        assert_eq!(side_overlap(&[lp(1, 1.0)], &[lp(2, 1.0)]), 0.0);
+    }
+
+    #[test]
+    fn overlap_full_for_identical_point_mass() {
+        let a = vec![lp(1, 1.0)];
+        assert!(approx(side_overlap(&a, &a), 1.0));
+    }
+
+    #[test]
+    fn overlap_empty_side_is_zero() {
+        assert_eq!(side_overlap(&[], &[lp(1, 1.0)]), 0.0);
+    }
+
+    #[test]
+    fn pair_overlap_scores_each_side_independently() {
+        let a = GeneticProfile {
+            paternal: vec![lp(1, 1.0)],
+            maternal: vec![lp(1, 0.8), lp(2, 0.2)],
+        };
+        let b = GeneticProfile {
+            paternal: vec![lp(2, 1.0)],
+            maternal: vec![lp(2, 0.83), lp(1, 0.17)],
+        };
+        let (pat, mat) = pair_overlap(&a, &b);
+        assert_eq!(pat, 0.0);
+        assert!(approx(mat, 0.302));
+    }
+
+    #[test]
+    fn risk_levels_follow_thresholds() {
+        assert_eq!(risk_level(0.0), "safe");
+        assert_eq!(risk_level(0.1499), "safe");
+        assert_eq!(risk_level(0.15), "caution");
+        assert_eq!(risk_level(0.302), "caution");
+        assert_eq!(risk_level(0.35), "caution");
+        assert_eq!(risk_level(0.3501), "avoid");
+        assert_eq!(risk_level(1.0), "avoid");
     }
 
     #[test]

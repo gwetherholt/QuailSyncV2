@@ -458,32 +458,134 @@ fn load_bird_records(conn: &std::sync::MutexGuard<'_, rusqlite::Connection>) -> 
     records
 }
 
+/// Every active bird with its sex and probabilistic genetic profile (Phase 4).
+/// Profiles come from `bird_genetic_profile`; the pairing/diversity scoring
+/// works purely on these distributions, not the discrete `bird_lineages` tags.
+fn load_active_profiles(conn: &rusqlite::Connection) -> Vec<(i64, Sex, GeneticProfile)> {
+    let ids: Vec<(i64, Sex)> = conn
+        .prepare("SELECT id, sex FROM birds WHERE status = 'Active'")
+        .and_then(|mut s| {
+            let it = s.query_map([], |row| {
+                let sex_str: String = row.get(1)?;
+                Ok((row.get::<_, i64>(0)?, str_to_sex(&sex_str)))
+            })?;
+            Ok(it.filter_map(|r| r.ok()).collect::<Vec<_>>())
+        })
+        .unwrap_or_default();
+    ids.into_iter()
+        .map(|(id, sex)| (id, sex, crate::genetics::read_profile(conn, id)))
+        .collect()
+}
+
+/// `max(paternal_overlap, maternal_overlap)` — a pairing's inbreeding risk.
+fn pair_risk(a: &GeneticProfile, b: &GeneticProfile) -> f64 {
+    let (pat, mat) = crate::genetics::pair_overlap(a, b);
+    pat.max(mat)
+}
+
+/// `GET /api/breeding/suggest` — every male×female pairing scored by
+/// probability-weighted lineage overlap (Phase 4), lowest risk first.
 pub(crate) async fn breeding_suggest(
     State(state): State<AppState>,
-) -> Json<Vec<InbreedingCoefficient>> {
+) -> Json<Vec<PairingSuggestion>> {
     let conn = acquire_db(&state);
-    let birds = load_bird_records(&conn);
-    let males: Vec<&BirdRecord> = birds.iter().filter(|b| b.sex == Sex::Male).collect();
-    let females: Vec<&BirdRecord> = birds.iter().filter(|b| b.sex == Sex::Female).collect();
+    let profiles = load_active_profiles(&conn);
+    let males: Vec<&(i64, Sex, GeneticProfile)> = profiles
+        .iter()
+        .filter(|(_, s, _)| *s == Sex::Male)
+        .collect();
+    let females: Vec<&(i64, Sex, GeneticProfile)> = profiles
+        .iter()
+        .filter(|(_, s, _)| *s == Sex::Female)
+        .collect();
 
-    let mut results: Vec<InbreedingCoefficient> = Vec::new();
-    for m in &males {
-        for f in &females {
-            let coefficient = compute_relatedness(m, f);
-            results.push(InbreedingCoefficient {
-                male_id: m.id,
-                female_id: f.id,
-                coefficient,
-                safe: coefficient < 0.0625,
+    let mut results: Vec<PairingSuggestion> = Vec::new();
+    for (mid, _, mp) in &males {
+        for (fid, _, fp) in &females {
+            let (paternal_overlap, maternal_overlap) = crate::genetics::pair_overlap(mp, fp);
+            let risk = paternal_overlap.max(maternal_overlap);
+            results.push(PairingSuggestion {
+                bird_a_id: *mid,
+                bird_b_id: *fid,
+                paternal_overlap,
+                maternal_overlap,
+                risk_percent: (risk * 100.0).round() as i64,
+                risk_level: crate::genetics::risk_level(risk).to_string(),
             });
         }
     }
+    // Lowest risk first; deterministic tiebreak by ids.
     results.sort_by(|a, b| {
-        a.coefficient
-            .partial_cmp(&b.coefficient)
+        let ra = a.paternal_overlap.max(a.maternal_overlap);
+        let rb = b.paternal_overlap.max(b.maternal_overlap);
+        ra.partial_cmp(&rb)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.bird_a_id.cmp(&b.bird_a_id))
+            .then_with(|| a.bird_b_id.cmp(&b.bird_b_id))
     });
     Json(results)
+}
+
+/// `GET /api/breeding/diversity` — flock-wide genetic-diversity snapshot that
+/// powers the "new blood" alert (Phase 4).
+pub(crate) async fn breeding_diversity(State(state): State<AppState>) -> Json<FlockDiversity> {
+    let conn = acquire_db(&state);
+    let profiles = load_active_profiles(&conn);
+
+    // Confidence across all active birds.
+    let confidences: Vec<f64> = profiles
+        .iter()
+        .map(|(_, _, p)| crate::genetics::confidence(p))
+        .collect();
+    let flock_confidence = if confidences.is_empty() {
+        0.0
+    } else {
+        confidences.iter().sum::<f64>() / confidences.len() as f64
+    };
+    let min_confidence = confidences.iter().copied().fold(f64::INFINITY, f64::min);
+    let min_confidence = if min_confidence.is_finite() {
+        min_confidence
+    } else {
+        0.0
+    };
+
+    // Best (lowest) achievable overlap risk among candidate male×female pairings.
+    let males: Vec<&GeneticProfile> = profiles
+        .iter()
+        .filter(|(_, s, _)| *s == Sex::Male)
+        .map(|(_, _, p)| p)
+        .collect();
+    let females: Vec<&GeneticProfile> = profiles
+        .iter()
+        .filter(|(_, s, _)| *s == Sex::Female)
+        .map(|(_, _, p)| p)
+        .collect();
+    let mut best = f64::INFINITY;
+    for mp in &males {
+        for fp in &females {
+            best = best.min(pair_risk(mp, fp));
+        }
+    }
+    let best_pairing_risk = if best.is_finite() { best } else { 1.0 };
+
+    let needs_new_blood =
+        best_pairing_risk > crate::genetics::RISK_AVOID_THRESHOLD || min_confidence < 0.50;
+
+    // Distinct lineages appearing across all active profiles (both sides).
+    let mut lineages = std::collections::HashSet::new();
+    for (_, _, p) in &profiles {
+        for c in p.paternal.iter().chain(p.maternal.iter()) {
+            lineages.insert(c.lineage_id);
+        }
+    }
+
+    Json(FlockDiversity {
+        flock_confidence,
+        min_confidence,
+        best_pairing_risk,
+        needs_new_blood,
+        active_lineage_count: lineages.len() as i64,
+    })
 }
 
 #[derive(Deserialize)]

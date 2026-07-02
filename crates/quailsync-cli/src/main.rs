@@ -6,10 +6,10 @@ use quailsync_common::{
     Alert, Bird, BirdStatus, BreedingGroup, Brooder, BrooderReading, CameraFeed, CameraStatus,
     ChickGroup, ChickMortalityLog, Clutch, ClutchStatus, CreateBird, CreateBreedingGroup,
     CreateBrooder, CreateCameraFeed, CreateChickGroup, CreateClutch, CreateLineage,
-    CreateProcessingRecord, CreateWeightRecord, FlockBreedingStats, FrameCapture,
-    InbreedingCoefficient, LifeStage, Lineage, MortalityRequest, ProcessingReason,
-    ProcessingRecord, ProcessingStatus, Severity, Sex, SystemMetrics, UpdateClutch,
-    UpdateProcessingRecord, WeightRecord, COTURNIX_BUTCHER_WEIGHT_GRAMS,
+    CreateProcessingRecord, CreateWeightRecord, FlockBreedingStats, FrameCapture, LifeStage,
+    Lineage, MortalityRequest, PairingSuggestion, ProcessingReason, ProcessingRecord,
+    ProcessingStatus, Severity, Sex, SystemMetrics, UpdateClutch, UpdateProcessingRecord,
+    WeightRecord, COTURNIX_BUTCHER_WEIGHT_GRAMS,
 };
 use serde::Deserialize;
 
@@ -1047,7 +1047,7 @@ async fn cmd_clutch_schedule(base: &str) -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------
 
 async fn cmd_breeding_suggest(base: &str) -> anyhow::Result<()> {
-    let pairs: Vec<InbreedingCoefficient> = reqwest::get(format!("{base}/api/breeding/suggest"))
+    let pairs: Vec<PairingSuggestion> = reqwest::get(format!("{base}/api/breeding/suggest"))
         .await?
         .json()
         .await?;
@@ -1096,17 +1096,18 @@ async fn cmd_breeding_suggest(base: &str) -> anyhow::Result<()> {
         "Lineage".bold(),
         "Female".bold(),
         "Lineage".bold(),
-        "Coeff".bold(),
-        "Safe".bold(),
+        "Overlap".bold(),
+        "Risk".bold(),
     );
     println!("  {}", "-".repeat(78));
 
     for p in &pairs {
-        let male_lbl = bird_label(p.male_id);
-        let male_bl = bird_lineage_name(p.male_id);
-        let female_lbl = bird_label(p.female_id);
-        let female_bl = bird_lineage_name(p.female_id);
-        let coeff_str = format!("{:.3}", p.coefficient);
+        let male_lbl = bird_label(p.bird_a_id);
+        let male_bl = bird_lineage_name(p.bird_a_id);
+        let female_lbl = bird_label(p.bird_b_id);
+        let female_bl = bird_lineage_name(p.bird_b_id);
+        // The pairing's risk is the larger of the two side overlaps.
+        let overlap_str = format!("{}%", p.risk_percent);
 
         let line = format!(
             "  {:<14} {:<16} {:<14} {:<16} {:<8} {}",
@@ -1114,18 +1115,18 @@ async fn cmd_breeding_suggest(base: &str) -> anyhow::Result<()> {
             male_bl,
             female_lbl,
             female_bl,
-            coeff_str,
-            if p.safe { "YES" } else { "NO" },
+            overlap_str,
+            p.risk_level.to_uppercase(),
         );
 
-        if p.safe {
-            println!("{}", line.green());
-        } else {
-            println!("{}", line.red());
+        match p.risk_level.as_str() {
+            "safe" => println!("{}", line.green()),
+            "caution" => println!("{}", line.yellow()),
+            _ => println!("{}", line.red()),
         }
     }
 
-    let safe_count = pairs.iter().filter(|p| p.safe).count();
+    let safe_count = pairs.iter().filter(|p| p.risk_level == "safe").count();
     println!();
     println!(
         "  {} safe pairs out of {} total",
