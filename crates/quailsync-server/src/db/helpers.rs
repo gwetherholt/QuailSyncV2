@@ -179,26 +179,31 @@ pub fn row_to_bird(row: &rusqlite::Row) -> rusqlite::Result<Bird> {
     })
 }
 
+/// Maps a `clutches` row produced by `CLUTCH_SELECT` (columns in this exact
+/// order): id, breeding_group_id, breeding_group_name (JOINed), lineage_id,
+/// eggs_set, eggs_fertile, eggs_hatched, set_date, expected_hatch_date, status,
+/// notes, eggs_stillborn, eggs_quit, eggs_infertile, eggs_damaged, hatch_notes.
 pub fn row_to_clutch(row: &rusqlite::Row) -> rusqlite::Result<Clutch> {
-    let set_str: String = row.get(6)?;
-    let exp_str: String = row.get(7)?;
-    let status_str: String = row.get(8)?;
+    let set_str: String = row.get(7)?;
+    let exp_str: String = row.get(8)?;
+    let status_str: String = row.get(9)?;
     Ok(Clutch {
         id: row.get(0)?,
-        breeding_pair_id: row.get(1)?,
-        lineage_id: row.get(2)?,
-        eggs_set: row.get(3)?,
-        eggs_fertile: row.get(4)?,
-        eggs_hatched: row.get(5)?,
+        breeding_group_id: row.get(1)?,
+        breeding_group_name: row.get(2)?,
+        lineage_id: row.get(3)?,
+        eggs_set: row.get(4)?,
+        eggs_fertile: row.get(5)?,
+        eggs_hatched: row.get(6)?,
         set_date: NaiveDate::parse_from_str(&set_str, "%Y-%m-%d").unwrap_or_default(),
         expected_hatch_date: NaiveDate::parse_from_str(&exp_str, "%Y-%m-%d").unwrap_or_default(),
         status: str_to_clutch_status(&status_str),
-        notes: row.get(9)?,
-        eggs_stillborn: row.get(10)?,
-        eggs_quit: row.get(11)?,
-        eggs_infertile: row.get(12)?,
-        eggs_damaged: row.get(13)?,
-        hatch_notes: row.get(14)?,
+        notes: row.get(10)?,
+        eggs_stillborn: row.get(11)?,
+        eggs_quit: row.get(12)?,
+        eggs_infertile: row.get(13)?,
+        eggs_damaged: row.get(14)?,
+        hatch_notes: row.get(15)?,
     })
 }
 
@@ -241,19 +246,6 @@ pub fn row_to_brooder(row: &rusqlite::Row) -> rusqlite::Result<Brooder> {
         notes: row.get(5)?,
         camera_url: row.get(6)?,
         housing_type: str_to_housing_type(&housing_str),
-    })
-}
-
-pub fn row_to_breeding_pair(row: &rusqlite::Row) -> rusqlite::Result<BreedingPair> {
-    let start_str: String = row.get(3)?;
-    let end_str: Option<String> = row.get(4)?;
-    Ok(BreedingPair {
-        id: row.get(0)?,
-        male_id: row.get(1)?,
-        female_id: row.get(2)?,
-        start_date: NaiveDate::parse_from_str(&start_str, "%Y-%m-%d").unwrap_or_default(),
-        end_date: end_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok()),
-        notes: row.get(5)?,
     })
 }
 

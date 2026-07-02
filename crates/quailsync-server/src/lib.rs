@@ -176,10 +176,6 @@ pub fn build_app(state: AppState) -> Router {
             axum::routing::delete(birds::delete_weight),
         )
         .route(
-            "/api/breeding-pairs",
-            get(breeding::list_breeding_pairs).post(breeding::create_breeding_pair),
-        )
-        .route(
             "/api/clutches",
             get(clutches::list_clutches).post(clutches::create_clutch),
         )

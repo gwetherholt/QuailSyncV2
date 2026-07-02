@@ -10,45 +10,6 @@ use serde::{Deserialize, Serialize};
 use crate::db::helpers::*;
 use crate::state::{acquire_db, db_error, AppState};
 
-// --- Breeding Pairs ---
-
-pub(crate) async fn create_breeding_pair(
-    State(state): State<AppState>,
-    Json(body): Json<CreateBreedingPair>,
-) -> impl IntoResponse {
-    let conn = acquire_db(&state);
-    if let Err(e) = conn.execute(
-        "INSERT INTO breeding_pairs (male_id, female_id, start_date, end_date, notes) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![body.male_id, body.female_id, body.start_date.to_string(), body.end_date.map(|d| d.to_string()), body.notes],
-    ) {
-        return db_error(e);
-    }
-    let id = conn.last_insert_rowid();
-    (
-        StatusCode::CREATED,
-        Json(BreedingPair {
-            id,
-            male_id: body.male_id,
-            female_id: body.female_id,
-            start_date: body.start_date,
-            end_date: body.end_date,
-            notes: body.notes,
-        }),
-    )
-        .into_response()
-}
-
-pub(crate) async fn list_breeding_pairs(State(state): State<AppState>) -> Json<Vec<BreedingPair>> {
-    let conn = acquire_db(&state);
-    let mut stmt = conn.prepare("SELECT id, male_id, female_id, start_date, end_date, notes FROM breeding_pairs ORDER BY id").expect("prepare failed");
-    let rows: Vec<BreedingPair> = stmt
-        .query_map([], row_to_breeding_pair)
-        .unwrap()
-        .filter_map(|r| r.ok())
-        .collect();
-    Json(rows)
-}
-
 // --- Breeding Groups ---
 
 /// Reads a group's full male list from the `breeding_group_males` junction —

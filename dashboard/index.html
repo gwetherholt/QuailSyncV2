@@ -2724,6 +2724,7 @@
      --------------------------------------------------------- */
   Page.Clutches = {
     _clutches: [],
+    _groups: [],
     render: function(app){
       app.innerHTML =
         '<div class="page-top"><div class="page-title">&#x1F95A; Clutches</div><button class="btn-primary" onclick="Page.Clutches.openModal()">+ Add Clutch</button></div>' +
@@ -2738,6 +2739,8 @@
     _load: async function(){
       var bl = await API.get('/api/lineages');
       if(bl) _lineages = bl;
+      var groups = await API.get('/api/breeding-groups');
+      if(groups) this._groups = groups;
       var data = await API.get('/api/clutches');
       if(data) this._clutches = data;
       this._renderTimeline();
@@ -2854,6 +2857,9 @@
         // Body
         html += '<div class="clutch-card-body">';
         html += '<h4>Clutch #'+c.id+(blName ? ' &mdash; '+escapeHtml(blName) : '')+'</h4>';
+        if(c.breeding_group_name){
+          html += '<div style="font-size:.78rem;color:var(--sage-dark);margin:-.2rem 0 .35rem">Group: '+escapeHtml(c.breeding_group_name)+'</div>';
+        }
 
         // Egg counts
         html += '<div class="clutch-egg-counts">';
@@ -3035,9 +3041,15 @@
       _lineages.forEach(function(bl){
         blOpts+='<option value="'+bl.id+'">'+bl.name+'</option>';
       });
+      // Breeding group options (optional — the group is the male × females cross).
+      var grpOpts = '<option value="">-- None --</option>';
+      this._groups.forEach(function(g){
+        grpOpts+='<option value="'+g.id+'">'+escapeHtml(g.name)+'</option>';
+      });
       var today = new Date().toISOString().split('T')[0];
       var html = '<div class="modal-overlay" id="clutch-modal-overlay" onclick="if(event.target===this)Page.Clutches.closeModal()">' +
         '<div class="modal"><h3>Add Clutch</h3>' +
+        '<label>Breeding Group</label><select id="mc-group">'+grpOpts+'</select>' +
         '<label>Lineage</label><select id="mc-lineage">'+blOpts+'</select>' +
         '<label>Eggs Set</label><input id="mc-eggs" type="number" min="1" value="12">' +
         '<label>Set Date</label><input id="mc-date" type="date" value="'+today+'">' +
@@ -3051,6 +3063,7 @@
       if(ov) ov.remove();
     },
     submitClutch: async function(){
+      var group = document.getElementById('mc-group').value;
       var lineage = document.getElementById('mc-lineage').value;
       var eggs = parseInt(document.getElementById('mc-eggs').value);
       var setDate = document.getElementById('mc-date').value;
@@ -3059,7 +3072,7 @@
       if(!eggs || !setDate){ toast('Eggs count and set date are required','error'); return; }
 
       var result = await API.post('/api/clutches', {
-        breeding_pair_id: null,
+        breeding_group_id: group ? parseInt(group) : null,
         lineage_id: lineage ? parseInt(lineage) : null,
         eggs_set: eggs, eggs_fertile: null, eggs_hatched: null,
         set_date: setDate, status: 'Incubating', notes: notes

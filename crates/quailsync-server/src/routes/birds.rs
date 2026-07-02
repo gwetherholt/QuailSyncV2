@@ -213,11 +213,6 @@ pub(crate) async fn delete_bird(
     // Cascade-delete related records (section 8)
     conn.execute("DELETE FROM weight_records WHERE bird_id = ?1", params![id])
         .ok();
-    conn.execute(
-        "DELETE FROM breeding_pairs WHERE male_id = ?1 OR female_id = ?1",
-        params![id],
-    )
-    .ok();
     // If this bird was a female member, remove her membership row.
     conn.execute(
         "DELETE FROM breeding_group_members WHERE female_id = ?1",

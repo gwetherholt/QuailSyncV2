@@ -230,19 +230,14 @@ pub struct Bird {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BreedingPair {
-    pub id: i64,
-    pub male_id: i64,
-    pub female_id: i64,
-    pub start_date: NaiveDate,
-    pub end_date: Option<NaiveDate>,
-    pub notes: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Clutch {
     pub id: i64,
-    pub breeding_pair_id: Option<i64>,
+    /// The breeding group that produced the eggs (which male × which females).
+    /// Nullable — lineage-only clutches (and pre-feature rows) have none.
+    pub breeding_group_id: Option<i64>,
+    /// The group's display name, JOINed in on read so clients don't need a
+    /// separate lookup. `None` when the clutch has no group.
+    pub breeding_group_name: Option<String>,
     pub lineage_id: Option<i64>,
     pub eggs_set: u32,
     pub eggs_fertile: Option<u32>,
@@ -290,17 +285,11 @@ pub struct CreateBird {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateBreedingPair {
-    pub male_id: i64,
-    pub female_id: i64,
-    pub start_date: NaiveDate,
-    pub end_date: Option<NaiveDate>,
-    pub notes: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateClutch {
-    pub breeding_pair_id: Option<i64>,
+    /// Optional breeding group that produced the eggs. Lineage-only clutches
+    /// (no group) are still valid.
+    #[serde(default)]
+    pub breeding_group_id: Option<i64>,
     pub lineage_id: Option<i64>,
     pub eggs_set: u32,
     pub eggs_fertile: Option<u32>,

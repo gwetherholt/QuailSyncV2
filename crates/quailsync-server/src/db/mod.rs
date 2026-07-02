@@ -131,18 +131,9 @@ pub fn init_db(conn: &Connection) {
             nfc_tag_id      TEXT    UNIQUE
         );
 
-        CREATE TABLE IF NOT EXISTS breeding_pairs (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            male_id         INTEGER NOT NULL REFERENCES birds(id),
-            female_id       INTEGER NOT NULL REFERENCES birds(id),
-            start_date      TEXT    NOT NULL,
-            end_date        TEXT,
-            notes           TEXT
-        );
-
         CREATE TABLE IF NOT EXISTS clutches (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-            breeding_pair_id    INTEGER REFERENCES breeding_pairs(id),
+            breeding_group_id   INTEGER REFERENCES breeding_groups(id),
             lineage_id          INTEGER REFERENCES lineages(id),
             eggs_set            INTEGER NOT NULL,
             eggs_fertile        INTEGER,
@@ -260,6 +251,60 @@ pub fn init_db(conn: &Connection) {
         .expect("ALTER TABLE brooders ADD COLUMN housing_type failed");
         println!("[migration] added brooders.housing_type (default 'brooder')");
     }
+
+    // --- clutches: link to a breeding group; drop the dead breeding_pair_id ---
+    // 1) Additive: add breeding_group_id so an existing (live Pi) DB picks it up
+    //    without losing rows. Nullable — pre-feature clutches simply have none.
+    if !column_exists(conn, "clutches", "breeding_group_id") {
+        conn.execute(
+            "ALTER TABLE clutches ADD COLUMN breeding_group_id INTEGER REFERENCES breeding_groups(id)",
+            [],
+        )
+        .expect("ALTER TABLE clutches ADD COLUMN breeding_group_id failed");
+        println!("[migration] added clutches.breeding_group_id");
+    }
+    // 2) Rebuild to drop the dead breeding_pair_id column (nothing writes it;
+    //    portable across SQLite versions — DROP COLUMN isn't always available).
+    //    breeding_group_id is guaranteed present by step 1, so the copy is safe.
+    if column_exists(conn, "clutches", "breeding_pair_id") {
+        conn.execute_batch("PRAGMA foreign_keys=OFF;").ok();
+        conn.execute_batch(
+            "CREATE TABLE clutches_rebuild (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                breeding_group_id   INTEGER REFERENCES breeding_groups(id),
+                lineage_id          INTEGER REFERENCES lineages(id),
+                eggs_set            INTEGER NOT NULL,
+                eggs_fertile        INTEGER,
+                eggs_hatched        INTEGER,
+                set_date            TEXT    NOT NULL,
+                expected_hatch_date TEXT    NOT NULL,
+                status              TEXT    NOT NULL DEFAULT 'Incubating',
+                notes               TEXT,
+                eggs_stillborn      INTEGER,
+                eggs_quit           INTEGER,
+                eggs_infertile      INTEGER,
+                eggs_damaged        INTEGER,
+                hatch_notes         TEXT
+            );
+            INSERT INTO clutches_rebuild
+                (id, breeding_group_id, lineage_id, eggs_set, eggs_fertile, eggs_hatched,
+                 set_date, expected_hatch_date, status, notes, eggs_stillborn, eggs_quit,
+                 eggs_infertile, eggs_damaged, hatch_notes)
+            SELECT id, breeding_group_id, lineage_id, eggs_set, eggs_fertile, eggs_hatched,
+                   set_date, expected_hatch_date, status, notes, eggs_stillborn, eggs_quit,
+                   eggs_infertile, eggs_damaged, hatch_notes
+            FROM clutches;
+            DROP TABLE clutches;
+            ALTER TABLE clutches_rebuild RENAME TO clutches;",
+        )
+        .expect("clutches rebuild (drop breeding_pair_id) failed");
+        conn.execute_batch("PRAGMA foreign_keys=ON;").ok();
+        println!("[migration] rebuilt clutches without breeding_pair_id");
+    }
+    // 3) The breeding_pairs table is dead (0 rows, no code references it now).
+    //    Safe to drop once clutches no longer references it.
+    conn.execute("DROP TABLE IF EXISTS breeding_pairs", []).ok();
+
     conn.execute(
         "ALTER TABLE birds ADD COLUMN current_brooder_id INTEGER REFERENCES brooders(id)",
         [],

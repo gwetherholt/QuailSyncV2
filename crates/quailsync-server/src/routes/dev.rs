@@ -272,7 +272,6 @@ const ALL_TABLES: &[&str] = &[
     "alerts",
     "system_alerts",
     "breeding_groups",
-    "breeding_pairs",
     "chick_groups",
     "clutches",
     "birds",
@@ -417,15 +416,16 @@ fn insert_basic_seed_inner(conn: &Connection) -> rusqlite::Result<()> {
     let (incubator_1, brooder_1, brooder_2, hutch_a, hutch_b) = (1i64, 2i64, 3i64, 4i64, 5i64);
 
     // --- Clutches (2 — one incubating, one hatched) ---
-    // (breeding_pair_id, lineage_id, eggs_set, eggs_fertile, eggs_hatched, set_date, expected_hatch_date, status, notes)
+    // (breeding_group_id, lineage_id, eggs_set, eggs_fertile, eggs_hatched, set_date, expected_hatch_date, status, notes)
+    // breeding_group_id starts NULL; clutch 1 is linked to a group further down.
     conn.execute(
-        "INSERT INTO clutches (breeding_pair_id, lineage_id, eggs_set, eggs_fertile, eggs_hatched,
+        "INSERT INTO clutches (breeding_group_id, lineage_id, eggs_set, eggs_fertile, eggs_hatched,
                                set_date, expected_hatch_date, status, notes)
          VALUES (NULL, ?1, 24, 22, NULL, ?2, ?3, 'Incubating', 'Day 12 candling: 22/24 fertile')",
         params![pharaoh, ymd(12), ymd(-6)],
     )?;
     conn.execute(
-        "INSERT INTO clutches (breeding_pair_id, lineage_id, eggs_set, eggs_fertile, eggs_hatched,
+        "INSERT INTO clutches (breeding_group_id, lineage_id, eggs_set, eggs_fertile, eggs_hatched,
                                set_date, expected_hatch_date, status, notes)
          VALUES (NULL, ?1, 30, 27, 25, ?2, ?3, 'Hatched', '25 chicks moved to Brooder 1')",
         params![texas, ymd(30), ymd(12)],
@@ -738,18 +738,27 @@ fn insert_basic_seed_inner(conn: &Connection) -> rusqlite::Result<()> {
         }
     }
 
-    // --- A breeding pair so /api/breeding/suggest has data to reason over ---
-    // Pair the Pharaoh foundation male (bird 1, Red) and Pharaoh hen (bird 2, Blue).
+    // --- A breeding group so a clutch shows realistic provenance in the UI ---
+    // The Pharaoh foundation male (bird 1, Red) with the Pharaoh hen (bird 2, Blue).
     conn.execute(
-        "INSERT INTO breeding_pairs (male_id, female_id, start_date, notes)
-         VALUES (1, 2, ?1, 'Foundation Pharaoh pair')",
+        "INSERT INTO breeding_groups (name, start_date, notes, status)
+         VALUES ('Pharaoh Foundation', ?1, 'Foundation Pharaoh group', 'active')",
         params![ymd(45)],
     )?;
-
-    // Re-point clutch 1 to this pair for realistic provenance.
+    let pharaoh_group = conn.last_insert_rowid();
     conn.execute(
-        "UPDATE clutches SET breeding_pair_id = 1 WHERE id = ?1",
-        params![clutch_incubating],
+        "INSERT INTO breeding_group_males (group_id, male_id) VALUES (?1, 1)",
+        params![pharaoh_group],
+    )?;
+    conn.execute(
+        "INSERT INTO breeding_group_members (group_id, female_id) VALUES (?1, 2)",
+        params![pharaoh_group],
+    )?;
+
+    // Re-point clutch 1 to this group for realistic provenance.
+    conn.execute(
+        "UPDATE clutches SET breeding_group_id = ?1 WHERE id = ?2",
+        params![pharaoh_group, clutch_incubating],
     )?;
 
     println!("[dev] basic seed installed (5 lineages, 5 housing units, 4 chick groups, 15 birds)");
@@ -902,26 +911,8 @@ fn insert_stress_seed_inner(conn: &Connection) -> rusqlite::Result<()> {
         }
     }
 
-    // --- 5 breeding pairs across lineage boundaries — gives /breeding/suggest
-    //     plenty of cross-lineage candidate pairings to score ---
-    // Pick the first male and first female encountered for each pair.
-    let male_ids: Vec<i64> = conn
-        .prepare("SELECT id FROM birds WHERE sex='Male' ORDER BY id LIMIT 5")?
-        .query_map([], |r| r.get::<_, i64>(0))?
-        .filter_map(|r| r.ok())
-        .collect();
-    let female_ids: Vec<i64> = conn
-        .prepare("SELECT id FROM birds WHERE sex='Female' ORDER BY id LIMIT 5")?
-        .query_map([], |r| r.get::<_, i64>(0))?
-        .filter_map(|r| r.ok())
-        .collect();
-    for (m, f) in male_ids.iter().zip(female_ids.iter()) {
-        conn.execute(
-            "INSERT INTO breeding_pairs (male_id, female_id, start_date, notes)
-             VALUES (?1, ?2, ?3, 'Stress pair')",
-            params![m, f, ymd(60)],
-        )?;
-    }
+    // (Breeding suggestions are computed from birds + bird_lineages, so no
+    // separate pairing rows are needed to exercise /api/breeding/suggest.)
 
     // --- 20 chick groups spread across the brooders + a few graduated to
     //     hutches — exercises the Hatchery card rendering at volume ---

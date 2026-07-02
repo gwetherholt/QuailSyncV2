@@ -157,7 +157,10 @@ data class CreateLineageRequest(
 
 data class Clutch(
     @SerializedName("id") val id: Int,
-    @SerializedName("parent_pair_id") val parentPairId: Int? = null,
+    /** Breeding group that produced the eggs (null for lineage-only clutches).
+     *  `breedingGroupName` is JOINed in by the server so no extra lookup needed. */
+    @SerializedName("breeding_group_id") val breedingGroupId: Int? = null,
+    @SerializedName("breeding_group_name") val breedingGroupName: String? = null,
     @SerializedName("lineage_id") val lineageId: Int? = null,
     @SerializedName("lineage_name") val lineageName: String? = null,
     @SerializedName("egg_count") val eggCount: Int? = null,
@@ -182,6 +185,8 @@ data class Clutch(
 }
 
 data class CreateClutchRequest(
+    /** Optional breeding group that produced the eggs. Lineage-only clutches still work. */
+    @SerializedName("breeding_group_id") val breedingGroupId: Int? = null,
     @SerializedName("lineage_id") val lineageId: Int? = null,
     @SerializedName("eggs_set") val eggsSet: Int,
     @SerializedName("set_date") val setDate: String,

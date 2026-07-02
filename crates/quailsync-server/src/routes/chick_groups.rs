@@ -336,33 +336,12 @@ pub(crate) async fn graduate_chick_group(
         })
         .unwrap_or_default();
 
-    // Section 7: Look up parent generation from the clutch's breeding pair
-    let parent_generation: u32 = group.clutch_id
-        .and_then(|cid| {
-            conn.query_row(
-                "SELECT bp.male_id, bp.female_id FROM clutches c JOIN breeding_pairs bp ON bp.id = c.breeding_pair_id WHERE c.id = ?1",
-                params![cid],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-            ).ok()
-        })
-        .map(|(male_id, female_id)| {
-            let m_gen: u32 = conn.query_row("SELECT generation FROM birds WHERE id = ?1", params![male_id], |row| row.get(0)).unwrap_or(1);
-            let f_gen: u32 = conn.query_row("SELECT generation FROM birds WHERE id = ?1", params![female_id], |row| row.get(0)).unwrap_or(1);
-            m_gen.max(f_gen)
-        })
-        .unwrap_or(0);
-    let generation = parent_generation + 1;
-
-    // Look up parent IDs for the birds
-    let (mother_id, father_id): (Option<i64>, Option<i64>) = group.clutch_id
-        .and_then(|cid| {
-            conn.query_row(
-                "SELECT bp.female_id, bp.male_id FROM clutches c JOIN breeding_pairs bp ON bp.id = c.breeding_pair_id WHERE c.id = ?1",
-                params![cid],
-                |row| Ok((Some(row.get::<_, i64>(0)?), Some(row.get::<_, i64>(1)?))),
-            ).ok()
-        })
-        .unwrap_or((None, None));
+    // Parentage: the clutch links to a *breeding group*, which can hold several
+    // males and females — so it can't name a single mother/father. Graduated
+    // birds therefore default to generation 1 with no parent link. (This matches
+    // prior behavior: the old breeding-pair link was always null in practice.)
+    let generation: u32 = 1;
+    let (mother_id, father_id): (Option<i64>, Option<i64>) = (None, None);
 
     let mut birds_created = Vec::new();
     for gb in &body.birds {

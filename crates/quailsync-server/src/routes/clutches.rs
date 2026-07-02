@@ -15,43 +15,33 @@ pub(crate) async fn create_clutch(
     let expected = body.set_date + chrono::Duration::days(17);
     let conn = acquire_db(&state);
     if let Err(e) = conn.execute(
-        "INSERT INTO clutches (breeding_pair_id, lineage_id, eggs_set, eggs_fertile, eggs_hatched, set_date, expected_hatch_date, status, notes)
+        "INSERT INTO clutches (breeding_group_id, lineage_id, eggs_set, eggs_fertile, eggs_hatched, set_date, expected_hatch_date, status, notes)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![body.breeding_pair_id, body.lineage_id, body.eggs_set, body.eggs_fertile, body.eggs_hatched,
+        params![body.breeding_group_id, body.lineage_id, body.eggs_set, body.eggs_fertile, body.eggs_hatched,
             body.set_date.to_string(), expected.to_string(), clutch_status_to_str(&body.status), body.notes],
     ) {
         return db_error(e);
     }
     let id = conn.last_insert_rowid();
-    (
-        StatusCode::CREATED,
-        Json(Clutch {
-            id,
-            breeding_pair_id: body.breeding_pair_id,
-            lineage_id: body.lineage_id,
-            eggs_set: body.eggs_set,
-            eggs_fertile: body.eggs_fertile,
-            eggs_hatched: body.eggs_hatched,
-            set_date: body.set_date,
-            expected_hatch_date: expected,
-            status: body.status,
-            notes: body.notes,
-            eggs_stillborn: None,
-            eggs_quit: None,
-            eggs_infertile: None,
-            eggs_damaged: None,
-            hatch_notes: None,
-        }),
-    )
-        .into_response()
+    // Re-read via the JOIN so the response carries breeding_group_name.
+    match conn.query_row(
+        &format!("{CLUTCH_SELECT} WHERE c.id = ?1"),
+        params![id],
+        row_to_clutch,
+    ) {
+        Ok(clutch) => (StatusCode::CREATED, Json(clutch)).into_response(),
+        Err(e) => db_error(e),
+    }
 }
 
-const CLUTCH_SELECT: &str = "SELECT id, breeding_pair_id, lineage_id, eggs_set, eggs_fertile, eggs_hatched, set_date, expected_hatch_date, status, notes, eggs_stillborn, eggs_quit, eggs_infertile, eggs_damaged, hatch_notes FROM clutches";
+// Clutch read, with the breeding group's name LEFT-JOINed in (null when the
+// clutch has no group). Column order matches `row_to_clutch`.
+const CLUTCH_SELECT: &str = "SELECT c.id, c.breeding_group_id, g.name, c.lineage_id, c.eggs_set, c.eggs_fertile, c.eggs_hatched, c.set_date, c.expected_hatch_date, c.status, c.notes, c.eggs_stillborn, c.eggs_quit, c.eggs_infertile, c.eggs_damaged, c.hatch_notes FROM clutches c LEFT JOIN breeding_groups g ON g.id = c.breeding_group_id";
 
 pub(crate) async fn list_clutches(State(state): State<AppState>) -> Json<Vec<Clutch>> {
     let conn = acquire_db(&state);
     let mut stmt = conn
-        .prepare(&format!("{CLUTCH_SELECT} ORDER BY id"))
+        .prepare(&format!("{CLUTCH_SELECT} ORDER BY c.id"))
         .expect("prepare failed");
     let rows: Vec<Clutch> = stmt
         .query_map([], row_to_clutch)
@@ -148,7 +138,7 @@ pub(crate) async fn update_clutch(
     }
 
     match conn.query_row(
-        &format!("{CLUTCH_SELECT} WHERE id = ?1"),
+        &format!("{CLUTCH_SELECT} WHERE c.id = ?1"),
         params![id],
         row_to_clutch,
     ) {

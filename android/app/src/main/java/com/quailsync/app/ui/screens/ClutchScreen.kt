@@ -89,6 +89,7 @@ import com.quailsync.app.data.ChickGroupDto
 import com.quailsync.app.data.Clutch
 import com.quailsync.app.data.CreateChickGroupRequest
 import com.quailsync.app.data.CreateLineageRequest
+import com.quailsync.app.data.BreedingGroupDto
 import com.quailsync.app.data.CreateClutchRequest
 import com.quailsync.app.data.MortalityRequest
 import com.quailsync.app.data.QuailSyncApi
@@ -127,6 +128,8 @@ class ClutchViewModel(application: Application) : AndroidViewModel(application) 
     val clutches: StateFlow<List<Clutch>> = _clutches.asStateFlow()
     private val _lineages = MutableStateFlow<List<Lineage>>(emptyList())
     val lineages: StateFlow<List<Lineage>> = _lineages.asStateFlow()
+    private val _breedingGroups = MutableStateFlow<List<BreedingGroupDto>>(emptyList())
+    val breedingGroups: StateFlow<List<BreedingGroupDto>> = _breedingGroups.asStateFlow()
     private val _chickGroups = MutableStateFlow<List<ChickGroupDto>>(emptyList())
     val chickGroups: StateFlow<List<ChickGroupDto>> = _chickGroups.asStateFlow()
     private val _brooders = MutableStateFlow<List<Brooder>>(emptyList())
@@ -145,6 +148,7 @@ class ClutchViewModel(application: Application) : AndroidViewModel(application) 
         try {
             _clutches.value = api.getClutches()
             _lineages.value = try { api.getLineages() } catch (_: Exception) { emptyList() }
+            _breedingGroups.value = try { api.getBreedingGroups() } catch (_: Exception) { emptyList() }
             _chickGroups.value = try { api.getChickGroups() } catch (_: Exception) { emptyList() }
             _brooders.value = try { api.getBrooders() } catch (_: Exception) { emptyList() }
         } catch (e: Exception) { Log.e("QuailSync", "Failed to load hatchery data", e) }
@@ -568,9 +572,12 @@ fun ClutchScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddClutchDialog(viewModel: ClutchViewModel, onDismiss: () -> Unit, onSuccess: () -> Unit) {
-    // Use live lineages from the ViewModel so new ones appear immediately
+    // Use live lineages + breeding groups from the ViewModel.
     val liveLineages by viewModel.lineages.collectAsState()
+    val breedingGroups by viewModel.breedingGroups.collectAsState()
 
+    var selectedGroupId by remember { mutableStateOf<Int?>(null) }
+    var groupExpanded by remember { mutableStateOf(false) }
     var selectedLineageId by remember { mutableStateOf<Int?>(null) }
     var eggsSet by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
@@ -595,6 +602,23 @@ fun AddClutchDialog(viewModel: ClutchViewModel, onDismiss: () -> Unit, onSuccess
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
+                // Breeding group dropdown (optional — the group is the male ×
+                // females cross that produced the eggs).
+                ExposedDropdownMenuBox(groupExpanded, { groupExpanded = it }) {
+                    OutlinedTextField(
+                        value = selectedGroupId?.let { id -> breedingGroups.find { it.id == id }?.name ?: "" } ?: "",
+                        onValueChange = {}, readOnly = true, label = { Text("Breeding group (optional)") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(groupExpanded) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                    )
+                    ExposedDropdownMenu(groupExpanded, { groupExpanded = false }) {
+                        DropdownMenuItem(text = { Text("— None —") }, onClick = { selectedGroupId = null; groupExpanded = false })
+                        breedingGroups.forEach { g ->
+                            DropdownMenuItem(text = { Text(g.name) }, onClick = { selectedGroupId = g.id; groupExpanded = false })
+                        }
+                    }
+                }
+
                 // Lineage dropdown
                 ExposedDropdownMenuBox(expanded, { expanded = it }) {
                     OutlinedTextField(
@@ -694,6 +718,7 @@ fun AddClutchDialog(viewModel: ClutchViewModel, onDismiss: () -> Unit, onSuccess
                         val count = eggsSet.toIntOrNull() ?: 0
                         if (count > 0) {
                             val ok = viewModel.createClutch(CreateClutchRequest(
+                                breedingGroupId = selectedGroupId,
                                 lineageId = selectedLineageId, eggsSet = count,
                                 setDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE),
                                 notes = notes.ifBlank { null },
@@ -907,6 +932,9 @@ fun ClutchCard(clutch: Clutch, lineageName: String?, brooderName: String? = null
                 Column(Modifier.weight(1f)) {
                     Text(lineageName ?: "Clutch #${clutch.id}", style = MaterialTheme.typography.titleLarge)
                     if (lineageName != null) Text("Clutch #${clutch.id}", style = MaterialTheme.typography.bodyMedium)
+                    clutch.breedingGroupName?.let {
+                        Text("Group: $it", style = MaterialTheme.typography.bodyMedium, color = SageGreen)
+                    }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     ClutchStatusBadge(clutch.status, isHatching)

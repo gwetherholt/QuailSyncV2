@@ -323,8 +323,9 @@ enum ClutchAction {
         eggs: u32,
         #[arg(long)]
         set_date: Option<String>,
+        /// Optional breeding group id that produced the eggs.
         #[arg(long)]
-        pair: Option<i64>,
+        group: Option<i64>,
         #[arg(long)]
         notes: Option<String>,
     },
@@ -779,7 +780,7 @@ async fn cmd_clutch_add(
     lineage: Option<i64>,
     eggs: u32,
     set_date: Option<String>,
-    pair: Option<i64>,
+    group: Option<i64>,
     notes: Option<String>,
 ) -> anyhow::Result<()> {
     let set = match set_date {
@@ -787,7 +788,7 @@ async fn cmd_clutch_add(
         None => Local::now().date_naive(),
     };
     let body = CreateClutch {
-        breeding_pair_id: pair,
+        breeding_group_id: group,
         lineage_id: lineage,
         eggs_set: eggs,
         eggs_fertile: None,
@@ -2139,9 +2140,9 @@ async fn main() {
                 lineage,
                 eggs,
                 set_date,
-                pair,
+                group,
                 notes,
-            } => cmd_clutch_add(base, lineage, eggs, set_date, pair, notes).await,
+            } => cmd_clutch_add(base, lineage, eggs, set_date, group, notes).await,
             ClutchAction::List => cmd_clutch_list(base).await,
             ClutchAction::Update {
                 id,
