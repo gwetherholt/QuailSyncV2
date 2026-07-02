@@ -9,6 +9,7 @@ is the exception, not the rule.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import time
 from pathlib import Path
@@ -52,13 +53,26 @@ def notable_reasons(
     return reasons
 
 
-def persist_frame(live_path: Path | str, dest_dir: Path | str, stem: str) -> Path:
+def persist_frame(
+    live_path: Path | str, dest_dir: Path | str, stem: str, *, atomic: bool = False
+) -> Path:
     """Copy the just-sampled frame into ``dest_dir`` as ``{stem}.jpg`` (the
-    servable, prunable location). Returns the new path."""
+    servable, prunable location). Returns the new path.
+
+    ``atomic=True`` writes to a temp file and ``os.replace``s it into place — use
+    it for the frequently-overwritten rolling ``latest.jpg`` so the server never
+    reads a half-written file mid-copy. (Timestamped frames get unique names, so
+    they don't need it.)
+    """
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / f"{stem}.jpg"
-    shutil.copyfile(str(live_path), str(dest))
+    if atomic:
+        tmp = dest_dir / f".{stem}.jpg.tmp"
+        shutil.copyfile(str(live_path), str(tmp))
+        os.replace(str(tmp), str(dest))  # atomic on the same filesystem
+    else:
+        shutil.copyfile(str(live_path), str(dest))
     return dest
 
 

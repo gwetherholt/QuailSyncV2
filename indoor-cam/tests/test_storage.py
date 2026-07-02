@@ -72,6 +72,18 @@ def test_persist_frame_copies_into_camera_dir(tmp_path):
     assert live.exists()  # original (live temp) left in place
 
 
+def test_persist_frame_atomic_leaves_no_temp(tmp_path):
+    live = tmp_path / "live.jpg"
+    live.write_bytes(b"\xff\xd8\xff data")
+    dest_dir = tmp_path / "processed" / "indoor-1"
+    out = persist_frame(live, dest_dir, "latest", atomic=True)
+    assert out == dest_dir / "latest.jpg"
+    assert out.read_bytes() == b"\xff\xd8\xff data"
+    # The temp file was renamed into place — nothing left behind.
+    assert list(dest_dir.glob(".*.tmp")) == []
+    assert [p.name for p in dest_dir.iterdir()] == ["latest.jpg"]
+
+
 def test_delete_files_is_tolerant(tmp_path):
     a = tmp_path / "a.jpg"
     a.write_bytes(b"x")

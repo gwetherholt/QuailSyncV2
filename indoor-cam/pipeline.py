@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import re
 import signal
 import statistics
@@ -256,7 +257,7 @@ def run_stream(
                 min_conf = min(confidences) if confidences else None
                 secs_since_img = None if last_image_time is None else (now - last_image_time)
 
-                # Is this frame notable enough to keep/upload at all?
+                # Is this frame notable enough to retain/upload at all?
                 save_reasons = notable_reasons(
                     post_reason=reason,
                     min_confidence=min_conf,
@@ -268,10 +269,35 @@ def run_stream(
                 notable = bool(save_reasons)
 
                 # Runtime toggles (cached ~60s; default ON on any fetch failure).
-                # When a toggle is off we skip that action but STILL post the JSON.
                 image_save_enabled = settings_client.image_save_enabled()
                 roboflow_enabled = settings_client.roboflow_upload_enabled()
 
+                # 1. Rolling "latest" frame — ALWAYS overwritten every POST cycle
+                #    so the app has a current image to display. Exactly one flat
+                #    file per camera (+ its annotated copy); never uploaded to
+                #    Roboflow, and never pruned (its mtime is always fresh).
+                latest_path = dest_dir / "latest.jpg"
+                latest_annotated = dest_dir / "latest_annotated.jpg"
+                latest_ok = False
+                try:
+                    # Atomic so a poller never serves a half-written latest.jpg.
+                    persist_frame(live_path, dest_dir, "latest", atomic=True)
+                    # Annotate to a temp then atomically swap it into place.
+                    tmp_annot = dest_dir / ".latest_annotated.jpg.tmp"
+                    try:
+                        annotate_fn(latest_path, result, tmp_annot)
+                        if tmp_annot.exists():
+                            os.replace(str(tmp_annot), str(latest_annotated))
+                    except Exception as exc:  # noqa: BLE001 — annotation is best-effort
+                        logger.warning("Latest-frame annotation failed: %s", exc)
+                        delete_files(tmp_annot)
+                    latest_ok = True
+                except Exception as exc:  # noqa: BLE001 — never break the cycle over a write
+                    logger.warning("Could not write rolling latest frame: %s", exc)
+
+                # 2. Notable timestamped frame — retained for training + uploaded
+                #    to Roboflow (unchanged behavior). image-save toggle gates
+                #    retention; roboflow toggle + config gate the upload.
                 do_save = notable and image_save_enabled
                 do_upload = (
                     notable
@@ -279,59 +305,59 @@ def run_stream(
                     and uploader is not None
                     and getattr(uploader, "enabled", False)
                 )
-                # A frame must be on disk either to keep it or to upload it.
-                need_file = do_save or do_upload
+                need_notable = do_save or do_upload
 
-                persisted = annotated = None
-                if need_file:
+                notable_persisted = notable_annotated = None
+                if need_notable:
                     # Seq suffix guarantees a unique name even for two saves in
                     # the same second (second-granular timestamps would collide).
                     saved_seq += 1
                     stem = f"{datetime.now(timezone.utc):%Y%m%d-%H%M%S}_{cam_slug}_{saved_seq:05d}"
-                    persisted = persist_frame(live_path, dest_dir, stem)
-                    annotated = dest_dir / f"{stem}_annotated.jpg"
+                    notable_persisted = persist_frame(live_path, dest_dir, stem)
+                    notable_annotated = dest_dir / f"{stem}_annotated.jpg"
                     try:
-                        annotate_fn(persisted, result, annotated)
+                        annotate_fn(notable_persisted, result, notable_annotated)
                     except Exception as exc:  # noqa: BLE001 — annotation is best-effort
                         logger.warning("Annotation failed: %s", exc)
-                    result.image_path = str(persisted)
                     if do_save:
                         last_image_time = now
 
-                # 3. Always POST the JSON observation. Image fields are populated
-                #    only when the frame is actually saved to disk (image-save
-                #    toggle on + notable).
+                # 3. Always POST the JSON observation, pointing the image fields
+                #    at the rolling latest so the app always has a fresh image.
+                result.image_path = str(latest_path)  # -> latest.jpg / latest_annotated.jpg
                 ts = datetime.now(timezone.utc).isoformat()
                 observation_id = bridge.post(
-                    result, timestamp=ts, detection_count=smoothed, include_image=do_save
+                    result, timestamp=ts, detection_count=smoothed, include_image=latest_ok
                 )
                 batcher.record_post(smoothed, now)
                 logger.info(
-                    "POST count=%d reason=%s delivered=%s save=%s upload=%s notable=%s",
+                    "POST count=%d reason=%s delivered=%s notable=%s save=%s upload=%s",
                     smoothed,
                     reason,
                     observation_id is not None,
+                    ",".join(save_reasons) if notable else "none",
                     do_save,
                     do_upload,
-                    ",".join(save_reasons) if notable else "none",
                 )
 
-                # 4. Roboflow active learning (when the toggle + config allow it).
-                #    On success reclaim the local file and clear the observation's
-                #    image refs (if we'd saved them, so reads don't 404). Keep a
-                #    *saved* file on failure for retry; drop an upload-only temp
-                #    file that didn't make it.
-                uploaded = uploader.upload(result) if do_upload else False
+                # 4. Roboflow active learning — only the NOTABLE timestamped
+                #    frame is uploaded, never the rolling latest. On success
+                #    reclaim the local copy (Roboflow is the store). An
+                #    upload-only temp (image-save off) is dropped when the upload
+                #    is skipped/fails; a retained frame is kept for the daily prune.
+                uploaded = False
+                if do_upload and notable_persisted is not None:
+                    result.image_path = str(notable_persisted)  # upload the timestamped frame
+                    uploaded = uploader.upload(result)
                 if uploaded:
-                    delete_files(persisted, annotated)
-                    if do_save and observation_id is not None:
-                        bridge.clear_image(observation_id)
-                    logger.debug("Uploaded to Roboflow; reclaimed local frame")
-                elif need_file and not do_save:
-                    # Persisted only for an upload that was skipped/failed -> drop.
-                    delete_files(persisted, annotated)
-                elif do_save and not uploaded:
-                    logger.debug("Saved %s to disk (no Roboflow upload)", persisted.name)
+                    delete_files(notable_persisted, notable_annotated)
+                    logger.debug("Uploaded %s to Roboflow; reclaimed local copy", notable_persisted.name)
+                elif need_notable and not do_save:
+                    # Persisted only to upload it (image-save off) but the upload
+                    # was skipped/failed -> don't keep it on disk.
+                    delete_files(notable_persisted, notable_annotated)
+                elif do_save:
+                    logger.debug("Retained %s for training (pruned after retention)", notable_persisted.name)
 
             # 5. Daily auto-prune of any leftover saved frames.
             if (clock() - last_prune) >= PRUNE_INTERVAL_SECONDS:

@@ -218,6 +218,8 @@
 
   /* ---------- Trail Cam Analytics ---------- */
   .trailcam-analytics{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:1rem}
+  /* ---------- Indoor Camera ---------- */
+  .indoorcam-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:1rem}
   .tca-card{background:var(--beige);border-radius:12px;padding:1rem}
   .tca-head{display:flex;align-items:baseline;justify-content:space-between;gap:.5rem;margin-bottom:.6rem}
   .tca-title{font-weight:700;font-size:.95rem}
@@ -1088,6 +1090,7 @@
     render: function(app){
       app.innerHTML = '<div class="dash-grid">' +
         '<div class="panel" style="grid-column:1/-1"><div class="panel-body" id="d-brooder">'+loadingHTML()+'</div></div>' +
+        '<div class="panel" style="grid-column:1/-1"><div class="panel-header"><span class="panel-header-left">&#x1F4F7; Indoor Camera</span></div><div class="panel-body" id="d-indoorcam">'+loadingHTML()+'</div></div>' +
         '<div class="panel" style="grid-column:1/-1"><div class="panel-header"><span class="panel-header-left">&#x1F4F8; Trail Cam Analytics</span><span style="font-size:.7rem;color:#999">last 7 days</span></div><div class="panel-body" id="d-trailcam">'+loadingHTML()+'</div></div>' +
         '<div class="dash-row-2">' +
           '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F6A8; Alerts</span><a class="view-all-link" id="d-alerts-viewall" style="display:none">View all</a></div><div class="panel-body"><div class="alerts-scroll" id="d-alerts">'+loadingHTML()+'</div></div></div>' +
@@ -1115,6 +1118,9 @@
       // Trail Cam Analytics: 7-day sparkline + activity heatmap per camera.
       this._pollTrailcamAnalytics();
       addInterval(function(){ self._pollTrailcamAnalytics(); }, 300000);
+      // Indoor camera: live chick count + latest saved image + assignment.
+      this._pollIndoorCam();
+      addInterval(function(){ self._pollIndoorCam(); }, 30000);
       addInterval(this._pollStats, 60000);
       addInterval(this._pollFlock, 60000);
     },
@@ -1560,6 +1566,120 @@
             + '</div>';
         }).join('');
       }
+    },
+
+    /* ---------- Indoor Camera (live chick count + image + assignment) ---------- */
+
+    // The indoor camera(s): GET /api/indoor-cameras for the registry + current
+    // assignment, and /api/indoorcam/latest/{id} for the live chick count and
+    // any saved image. Assignment is restricted to brooders + incubators.
+    _pollIndoorCam: async function(){
+      var el = document.getElementById('d-indoorcam');
+      if(!el) return;
+      var results = await Promise.all([
+        API.get('/api/indoor-cameras'),
+        API.get('/api/brooders'),
+      ]);
+      var cameras = results[0];
+      // Indoor cameras only watch brooders/incubators — never hutches.
+      this._indoorBrooders = (results[1] || []).filter(function(b){
+        return b.housing_type === 'brooder' || b.housing_type === 'incubator';
+      });
+      if(!cameras){ el.innerHTML = emptyState('&#x1F4F7;','Could not load indoor camera','',''); return; }
+      if(!cameras.length){
+        el.innerHTML = emptyState('&#x1F4F7;','No indoor camera registered yet','','');
+        return;
+      }
+      var self = this;
+      var cards = await Promise.all(cameras.map(async function(cam){
+        // 404 (no observations yet) -> null, handled in the renderer.
+        var latest = await API.get('/api/indoorcam/latest/' + encodeURIComponent(cam.camera_id));
+        return self._renderIndoorCamCard(cam, latest);
+      }));
+      el.innerHTML = '<div class="indoorcam-cards">' + cards.join('') + '</div>';
+    },
+
+    _indoorBrooderOptions: function(){
+      return this._indoorBrooders.map(function(b){
+        var kind = b.housing_type === 'incubator' ? ' (incubator)' : '';
+        return '<option value="'+b.id+'">'+escapeHtml(b.name)+kind+'</option>';
+      }).join('');
+    },
+
+    _renderIndoorCamCard: function(cam, latest){
+      var title = escapeHtml(cam.name || cam.camera_id);
+
+      // Live count + when it was captured.
+      var countHtml;
+      if(latest && latest.detection_count != null){
+        var n = latest.detection_count;
+        countHtml = '<div style="font-size:1.4rem;font-weight:700;color:var(--sage-dark)">'
+          + n + ' chick' + (n === 1 ? '' : 's') + ' detected</div>'
+          + '<div style="color:#888;font-size:.8rem">' + relativeTime(latest.timestamp) + '</div>';
+      } else {
+        countHtml = '<div style="color:#999">No detections yet</div>';
+      }
+
+      // Saved image, if this observation kept one (most won't). Prefer the
+      // annotated frame (boxes drawn) when it's on disk; hide on 404, e.g. when
+      // the frame was uploaded to Roboflow and then deleted.
+      var imgUrl = (latest && (latest.annotated_image_url || latest.image_url)) || null;
+      var imgHtml = '';
+      if(imgUrl){
+        // Cache-bust: the rolling latest.jpg keeps the same URL but changes each
+        // cycle, so key the <img> by the observation timestamp to force a reload.
+        var src = encodeURI(imgUrl) + (latest.timestamp ? ('?v=' + encodeURIComponent(latest.timestamp)) : '');
+        imgHtml = '<img src="' + src + '" alt="latest indoor frame" '
+          + 'style="width:100%;max-width:320px;border-radius:10px;margin-top:.6rem;display:block" '
+          + 'onerror="this.style.display=\'none\'">';
+      }
+
+      // Assignment status + control (brooders/incubators only).
+      var assignHtml;
+      if(cam.assignment){
+        var kind = cam.assignment.housing_type ? ' ('+escapeHtml(cam.assignment.housing_type)+')' : '';
+        assignHtml = '<div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-top:.7rem">'
+          + '<span style="color:#888">Watching</span>'
+          + '<span style="font-weight:600;color:var(--sage-dark)">'+escapeHtml(cam.assignment.brooder_name)+kind+'</span>'
+          + '<button class="status-btn" onclick="Page.Dashboard.unassignIndoorCam('+cam.id+')">Unassign</button></div>';
+      } else if(this._indoorBrooders.length){
+        assignHtml = '<div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-top:.7rem">'
+          + '<span style="color:#999">Unassigned</span>'
+          + '<select id="indoorcam-assign-'+cam.id+'" style="padding:.35rem;border-radius:6px;border:1px solid #ccc">'+this._indoorBrooderOptions()+'</select>'
+          + '<button class="btn-primary" style="padding:.35rem .7rem" onclick="Page.Dashboard.assignIndoorCam('+cam.id+')">Assign</button></div>';
+      } else {
+        assignHtml = '<div style="color:#999;margin-top:.7rem">Unassigned &middot; no brooders or incubators to assign</div>';
+      }
+
+      return '<div class="indoorcam-card" style="border:1px solid var(--border,#e6e0d8);border-radius:12px;padding:1rem;background:#fff">'
+        + '<div style="font-weight:600;margin-bottom:.4rem">' + title + '</div>'
+        + countHtml + imgHtml + assignHtml
+        + '</div>';
+    },
+
+    assignIndoorCam: async function(camId){
+      var sel = document.getElementById('indoorcam-assign-'+camId);
+      if(!sel || !sel.value){ toast('Select a brooder or incubator first','error'); return; }
+      try {
+        var resp = await fetch('/api/indoor-cameras/'+camId+'/assign', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ brooder_id: parseInt(sel.value, 10) }),
+        });
+        if(!resp.ok){ var msg = await resp.text(); toast(msg || 'Assign failed','error'); return; }
+        toast('Indoor camera assigned');
+        this._pollIndoorCam();
+      } catch(e){ toast('Assign failed: '+(e && e.message ? e.message : 'network error'),'error'); }
+    },
+
+    unassignIndoorCam: async function(camId){
+      if(!confirm('Unassign the indoor camera?')) return;
+      try {
+        var resp = await fetch('/api/indoor-cameras/'+camId+'/assign', { method: 'DELETE' });
+        if(!resp.ok){ var msg = await resp.text(); toast(msg || 'Unassign failed','error'); return; }
+        toast('Indoor camera unassigned');
+        this._pollIndoorCam();
+      } catch(e){ toast('Unassign failed','error'); }
     },
 
     /* ---------- Trail Cam Analytics (7-day bird-count trends) ---------- */

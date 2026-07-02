@@ -374,6 +374,50 @@ data class AssignCameraRequest(
     @SerializedName("brooder_id") val brooderId: Int,
 )
 
+// --- Indoor cameras (RTSP chick-counter) -----------------------------------
+
+/** Latest indoor-camera observation (GET /api/indoorcam/latest/{camera_id}).
+ *  `imageUrl`/`annotatedImageUrl` are server-relative — prepend the configured
+ *  server base URL. Most observations carry NO image (null): only "notable"
+ *  frames are saved, and those may be cleared after a Roboflow upload. */
+data class IndoorcamLatest(
+    @SerializedName("camera_id") val cameraId: String? = null,
+    @SerializedName("detection_count") val detectionCount: Int? = null,
+    @SerializedName("timestamp") val timestamp: String? = null,
+    @SerializedName("confidence_avg") val confidenceAvg: Double? = null,
+    @SerializedName("image_url") val imageUrl: String? = null,
+    @SerializedName("annotated_image_url") val annotatedImageUrl: String? = null,
+    @SerializedName("detections") val detections: List<TrailcamDetection> = emptyList(),
+)
+
+/** A registered indoor camera with its current assignment (GET
+ *  /api/indoor-cameras). Indoor cameras only watch brooders/incubators. */
+data class IndoorCamera(
+    @SerializedName("id") val id: Int,
+    @SerializedName("camera_id") val cameraId: String,
+    @SerializedName("name") val name: String? = null,
+    @SerializedName("rtsp_url") val rtspUrl: String? = null,
+    @SerializedName("model") val model: String? = null,
+    @SerializedName("first_seen") val firstSeen: String? = null,
+    @SerializedName("last_seen") val lastSeen: String? = null,
+    @SerializedName("created_at") val createdAt: String? = null,
+    @SerializedName("assignment") val assignment: IndoorCameraAssignment? = null,
+)
+
+/** Current assignment of an indoor camera. `housingType` is "brooder" or
+ *  "incubator" (never "hutch" — the server rejects that). */
+data class IndoorCameraAssignment(
+    @SerializedName("brooder_id") val brooderId: Int,
+    @SerializedName("brooder_name") val brooderName: String,
+    @SerializedName("housing_type") val housingType: String? = null,
+    @SerializedName("assigned_at") val assignedAt: String? = null,
+)
+
+/** Body of PUT /api/indoor-cameras/{id}/assign. */
+data class AssignIndoorCameraRequest(
+    @SerializedName("brooder_id") val brooderId: Int,
+)
+
 data class TargetTempResponse(
     @SerializedName("brooder_id") val brooderId: Int,
     @SerializedName("target_temp_f") val targetTempF: Double,
@@ -756,6 +800,25 @@ interface QuailSyncApi {
 
     @retrofit2.http.HTTP(method = "DELETE", path = "api/trail-cameras/{id}/assign", hasBody = false)
     suspend fun unassignTrailCamera(@Path("id") id: Int): retrofit2.Response<Unit>
+
+    // Indoor cameras: observation read (count + image) + registry/assignment.
+    @GET("api/indoorcam/cameras")
+    suspend fun getIndoorcamCameras(): List<TrailcamCamera>
+
+    @GET("api/indoorcam/latest/{camera_id}")
+    suspend fun getIndoorcamLatest(@Path("camera_id") cameraId: String): IndoorcamLatest
+
+    @GET("api/indoor-cameras")
+    suspend fun getIndoorCameras(): List<IndoorCamera>
+
+    @PUT("api/indoor-cameras/{id}/assign")
+    suspend fun assignIndoorCamera(
+        @Path("id") id: Int,
+        @Body body: AssignIndoorCameraRequest,
+    ): IndoorCamera
+
+    @retrofit2.http.HTTP(method = "DELETE", path = "api/indoor-cameras/{id}/assign", hasBody = false)
+    suspend fun unassignIndoorCamera(@Path("id") id: Int): retrofit2.Response<Unit>
 
     @GET("api/lineages")
     suspend fun getLineages(): List<Lineage>

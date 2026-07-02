@@ -111,6 +111,9 @@ import androidx.compose.ui.graphics.painter.ColorPainter
 import coil.compose.AsyncImage
 import com.quailsync.app.data.TrailcamCamera
 import com.quailsync.app.data.TrailcamLatest
+import com.quailsync.app.data.AssignIndoorCameraRequest
+import com.quailsync.app.data.IndoorCamera
+import com.quailsync.app.data.IndoorcamLatest
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.ZoneId
@@ -420,9 +423,9 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // Two fixed tabs: the live IMX477 hutch stream, and a scrollable list of all
-    // outdoor cameras the server reports (one card each, dynamically).
-    val tabTitles = listOf("Hutch Camera", "Outdoor Cams")
+    // Three tabs: the live IMX477 hutch stream, a list of outdoor (trail)
+    // cameras, and the indoor RTSP chick-counter camera(s).
+    val tabTitles = listOf("Hutch Camera", "Outdoor Cams", "Indoor Cams")
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
@@ -458,7 +461,8 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
             }
         }
 
-        if (selectedTab == 0) {
+        when (selectedTab) {
+            0 -> {
             // --- Hutch Camera (existing live IMX477 MJPEG content) ---
             when {
                 isLoading && cameraItems.isEmpty() -> {
@@ -502,13 +506,19 @@ fun CameraScreen(viewModel: CameraViewModel = viewModel()) {
                     }
                 }
             }
-        } else {
-            // --- Outdoor Cams: vertical scrollable list, one card per camera ---
-            OutdoorCamsList(
-                cameras = outdoorCameras,
-                isLoadingCameras = isLoading,
-                onRefresh = { viewModel.refresh() },
-            )
+            }
+            1 -> {
+                // --- Outdoor Cams: vertical scrollable list, one card per camera ---
+                OutdoorCamsList(
+                    cameras = outdoorCameras,
+                    isLoadingCameras = isLoading,
+                    onRefresh = { viewModel.refresh() },
+                )
+            }
+            else -> {
+                // --- Indoor Cams: chick count + latest saved image + assignment ---
+                IndoorCamsList(onRefresh = { viewModel.refresh() })
+            }
         }
     }
 
@@ -1043,6 +1053,307 @@ private fun formatCaptureTime(iso: String?): String {
 
 private fun formatConfidence(value: Double?): String =
     if (value == null) "—" else "${(value * 100).roundToInt()}%"
+
+// =====================================================================
+// Indoor Cams — RTSP chick-counter: live count + saved image + assignment
+// =====================================================================
+
+private sealed interface IndoorObsState {
+    data object Loading : IndoorObsState
+    data object Empty : IndoorObsState
+    data class Error(val message: String) : IndoorObsState
+    data class Data(val latest: IndoorcamLatest) : IndoorObsState
+}
+
+/** The "Indoor Cams" tab: a pull-to-refresh list with one [IndoorCamCard] per
+ *  registered indoor camera. Loads the registry (for assignment) + the housing
+ *  units it may attach to (brooders/incubators only — never hutches). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun IndoorCamsList(onRefresh: () -> Unit) {
+    val context = LocalContext.current
+    val api = remember { QuailSyncApi.create(ServerConfig.getServerUrl(context)) }
+    val scope = rememberCoroutineScope()
+
+    var cameras by remember { mutableStateOf<List<IndoorCamera>>(emptyList()) }
+    var assignableUnits by remember { mutableStateOf<List<Brooder>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var isRefreshing by remember { mutableStateOf(false) }
+    // Bumped after any (re)load so each card re-fetches its latest observation.
+    var refreshKey by remember { mutableIntStateOf(0) }
+
+    suspend fun load() {
+        try {
+            val cams = withContext(Dispatchers.IO) { api.getIndoorCameras() }
+            val units = withContext(Dispatchers.IO) { api.getBrooders() }
+            cameras = cams
+            // Indoor cameras only attach to brooders/incubators, never hutches.
+            assignableUnits = units.filter { it.housingType == "brooder" || it.housingType == "incubator" }
+            error = null
+        } catch (e: Exception) {
+            Log.e("QuailSync", "Failed to load indoor cameras", e)
+            error = e.message ?: "Couldn't reach the server"
+        } finally {
+            loading = false
+        }
+    }
+
+    LaunchedEffect(Unit) { load() }
+
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = {
+            scope.launch {
+                isRefreshing = true
+                onRefresh()
+                load()
+                refreshKey++
+                isRefreshing = false
+            }
+        },
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        when {
+            loading && cameras.isEmpty() -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = SageGreen)
+                }
+            }
+            cameras.isEmpty() -> {
+                Column(
+                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Spacer(Modifier.height(64.dp))
+                    Icon(Icons.Default.PhotoCamera, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        error ?: "No indoor camera yet.\nIt appears automatically once the pipeline posts an observation.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+            else -> {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    items(cameras, key = { it.id }) { cam ->
+                        IndoorCamCard(
+                            camera = cam,
+                            assignableUnits = assignableUnits,
+                            refreshKey = refreshKey,
+                            onAssign = { brooderId ->
+                                scope.launch {
+                                    try {
+                                        withContext(Dispatchers.IO) {
+                                            api.assignIndoorCamera(cam.id, AssignIndoorCameraRequest(brooderId))
+                                        }
+                                        load(); refreshKey++
+                                    } catch (e: Exception) {
+                                        Log.e("QuailSync", "Assign indoor cam failed", e)
+                                    }
+                                }
+                            },
+                            onUnassign = {
+                                scope.launch {
+                                    try {
+                                        withContext(Dispatchers.IO) { api.unassignIndoorCamera(cam.id) }
+                                        load(); refreshKey++
+                                    } catch (e: Exception) {
+                                        Log.e("QuailSync", "Unassign indoor cam failed", e)
+                                    }
+                                }
+                            },
+                        )
+                    }
+                    item { Spacer(Modifier.height(8.dp)) }
+                }
+            }
+        }
+    }
+}
+
+/** One indoor camera: header + live chick count, a saved frame if the
+ *  observation kept one, and the brooder/incubator assignment control. Fetches
+ *  its own latest observation; re-fetches when [refreshKey] changes. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun IndoorCamCard(
+    camera: IndoorCamera,
+    assignableUnits: List<Brooder>,
+    refreshKey: Int,
+    onAssign: (Int) -> Unit,
+    onUnassign: () -> Unit,
+) {
+    val context = LocalContext.current
+    val baseUrl = remember { ServerConfig.getServerUrl(context).trimEnd('/') }
+    val api = remember { QuailSyncApi.create(ServerConfig.getServerUrl(context)) }
+
+    var state by remember(camera.cameraId) { mutableStateOf<IndoorObsState>(IndoorObsState.Loading) }
+    LaunchedEffect(camera.cameraId, refreshKey) {
+        state = IndoorObsState.Loading
+        state = try {
+            val latest = withContext(Dispatchers.IO) { api.getIndoorcamLatest(camera.cameraId) }
+            IndoorObsState.Data(latest)
+        } catch (e: retrofit2.HttpException) {
+            // 404 = no observations yet for this camera (vs. a real error).
+            if (e.code() == 404) IndoorObsState.Empty else IndoorObsState.Error("Server error (HTTP ${e.code()})")
+        } catch (e: Exception) {
+            Log.e("QuailSync", "Failed to load indoor cam ${camera.cameraId}", e)
+            IndoorObsState.Error(e.message ?: "Couldn't reach the server")
+        }
+    }
+
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(2.dp),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(camera.name ?: camera.cameraId, style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(10.dp))
+            when (val s = state) {
+                is IndoorObsState.Loading -> CircularProgressIndicator(
+                    color = SageGreen, modifier = Modifier.size(28.dp), strokeWidth = 2.dp,
+                )
+                is IndoorObsState.Empty -> Text(
+                    "No detections yet.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                is IndoorObsState.Error -> Text(
+                    s.message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                is IndoorObsState.Data -> IndoorObsContent(s.latest, baseUrl)
+            }
+
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(12.dp))
+            IndoorAssignmentSection(camera, assignableUnits, onAssign, onUnassign)
+        }
+    }
+}
+
+/** Live chick count + freshness, plus the saved frame if the observation kept
+ *  one (most won't — only "notable" frames are saved, and they may be cleared
+ *  after a Roboflow upload, so the image is hidden if it 404s). */
+@Composable
+private fun IndoorObsContent(latest: IndoorcamLatest, baseUrl: String) {
+    fun absolute(url: String?): String? = url?.let { if (it.startsWith("http")) it else "$baseUrl$it" }
+    val count = latest.detectionCount ?: 0
+    Text(
+        "$count chick${if (count == 1) "" else "s"} detected",
+        style = MaterialTheme.typography.headlineSmall,
+        fontWeight = FontWeight.Bold,
+        color = SageGreen,
+    )
+    val freshness = freshnessFor(latest.timestamp)
+    Text(
+        freshness?.text ?: formatCaptureTime(latest.timestamp),
+        style = MaterialTheme.typography.bodyMedium,
+        color = freshness?.color ?: MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    // Prefer the annotated frame (only present when on disk); fall back to raw.
+    val imageUrl = absolute(latest.annotatedImageUrl) ?: absolute(latest.imageUrl)
+    if (imageUrl != null) {
+        // Cache-bust: the rolling latest.jpg reuses one URL but changes each
+        // cycle, so key Coil by the observation timestamp to force a reload.
+        val model = latest.timestamp?.let { "$imageUrl?v=${java.net.URLEncoder.encode(it, "UTF-8")}" } ?: imageUrl
+        Spacer(Modifier.height(10.dp))
+        AsyncImage(
+            model = model,
+            contentDescription = "Latest indoor frame",
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(4f / 3f)
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color.Black),
+            contentScale = ContentScale.Crop,
+        )
+    }
+}
+
+/** Assignment row: shows the watched brooder/incubator with an Unassign button,
+ *  or an "Assign to" dropdown (brooders + incubators only) when unassigned. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun IndoorAssignmentSection(
+    camera: IndoorCamera,
+    assignableUnits: List<Brooder>,
+    onAssign: (Int) -> Unit,
+    onUnassign: () -> Unit,
+) {
+    val assignment = camera.assignment
+    when {
+        assignment != null -> {
+            Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Watching", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    val kind = assignment.housingType?.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""
+                    Text(
+                        "${assignment.brooderName}$kind",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = SageGreen,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                OutlinedButton(onClick = onUnassign, colors = ButtonDefaults.outlinedButtonColors(contentColor = SageGreen)) {
+                    Text("Unassign")
+                }
+            }
+        }
+        assignableUnits.isEmpty() -> {
+            Text(
+                "Unassigned · no brooders or incubators to assign",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        else -> {
+            var expanded by remember { mutableStateOf(false) }
+            var selectedId by remember(camera.id) { mutableStateOf<Int?>(null) }
+            val selectedName = assignableUnits.find { it.id == selectedId }?.name
+
+            Text("Unassigned", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            ExposedDropdownMenuBox(expanded, { expanded = it }) {
+                OutlinedTextField(
+                    value = selectedName ?: "Select brooder or incubator",
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Assign to") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+                    modifier = Modifier.menuAnchor().fillMaxWidth(),
+                )
+                ExposedDropdownMenu(expanded, { expanded = false }) {
+                    assignableUnits.forEach { unit ->
+                        val kind = if (unit.housingType == "incubator") " (incubator)" else ""
+                        DropdownMenuItem(
+                            text = { Text("${unit.name}$kind") },
+                            onClick = { selectedId = unit.id; expanded = false },
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = { selectedId?.let(onAssign) },
+                enabled = selectedId != null,
+                colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
+            ) { Text("Assign") }
+        }
+    }
+}
 
 // =====================================================================
 // Camera Card

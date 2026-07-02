@@ -171,7 +171,15 @@ def _run(cfg, *, frames_ok, results, bridge, uploader, settings=None, tick=1.0, 
 # ---------------------------------------------------------------------------
 
 
-def test_startup_frame_saved_uploaded_and_deleted(monkeypatch, tmp_path, make_result):
+def _jpg_names(cam_dir):
+    return sorted(p.name for p in cam_dir.glob("*.jpg"))
+
+
+def _timestamped(names):
+    return [n for n in names if n not in ("latest.jpg", "latest_annotated.jpg")]
+
+
+def test_startup_frame_uploaded_and_rolling_latest_written(monkeypatch, tmp_path, make_result):
     cfg = _reload_config(monkeypatch, tmp_path)
     bridge = FakeBridge()
     uploader = FakeUploader(ok=True)
@@ -179,45 +187,49 @@ def test_startup_frame_saved_uploaded_and_deleted(monkeypatch, tmp_path, make_re
 
     _run(cfg, frames_ok=[True], results=results, bridge=bridge, uploader=uploader)
 
-    # One POST, smoothed count = 3, image included (startup save).
+    cam_dir = cfg.PROCESSED_DIR / "indoor-1"
+    # One POST; it always carries the rolling latest image.
     assert len(bridge.posts) == 1
     assert bridge.posts[0]["count"] == 3
     assert bridge.posts[0]["include_image"] is True
-    # Uploaded to Roboflow, then the local frame was deleted (upload ok)...
+    assert bridge.posts[0]["image_path"].endswith("latest.jpg")
+    # The NOTABLE (timestamped) frame is what goes to Roboflow — never the latest.
     assert len(uploader.uploads) == 1
-    cam_dir = cfg.PROCESSED_DIR / "indoor-1"
-    assert list(cam_dir.glob("*.jpg")) == []  # reclaimed after successful upload
-    # ...and the server was told to clear that observation's image fields.
-    assert bridge.cleared == [100]  # the first POST's observation id
+    assert not uploader.uploads[0].endswith("latest.jpg")
+    # After a successful upload the timestamped frame is reclaimed; the rolling
+    # latest stays so the app keeps a current image.
+    assert _jpg_names(cam_dir) == ["latest.jpg"]
+    # We no longer clear image fields — the observation points at the rolling latest.
+    assert bridge.cleared == []
 
 
-def test_routine_post_has_no_image(monkeypatch, tmp_path, make_result):
+def test_routine_post_still_carries_rolling_latest(monkeypatch, tmp_path, make_result):
     cfg = _reload_config(monkeypatch, tmp_path)
     bridge = FakeBridge()
     uploader = FakeUploader(ok=True)
-    # Two identical, high-confidence frames; advance 61s/frame so frame 2 posts
-    # on the interval but is NOT notable -> no image saved.
+    # Two identical high-confidence frames, 61s apart: frame 2 posts on the
+    # interval but is NOT notable — yet it still carries the rolling latest image.
     results = [
         make_result(confidences=(0.9,), total=3),
         make_result(confidences=(0.9,), total=3),
     ]
     _run(cfg, frames_ok=[True, True], results=results, bridge=bridge, uploader=uploader, tick=61.0)
 
+    cam_dir = cfg.PROCESSED_DIR / "indoor-1"
     assert len(bridge.posts) == 2
-    assert bridge.posts[0]["include_image"] is True   # startup
-    assert bridge.posts[1]["include_image"] is False  # routine interval post
-    assert bridge.posts[1]["count"] == 3
-    assert len(uploader.uploads) == 1  # only the startup frame was uploaded
-    # Only the uploaded+deleted startup frame had its image fields cleared.
-    assert bridge.cleared == [100]
+    assert all(p["include_image"] for p in bridge.posts)
+    assert all(p["image_path"].endswith("latest.jpg") for p in bridge.posts)
+    assert len(uploader.uploads) == 1  # only the notable startup frame was uploaded
+    # Just the single overwritten rolling file remains (no disk growth).
+    assert _jpg_names(cam_dir) == ["latest.jpg"]
 
 
-def test_count_change_triggers_immediate_post_and_smoothing(monkeypatch, tmp_path, make_result):
+def test_count_change_smoothing_and_retained_frames(monkeypatch, tmp_path, make_result):
     cfg = _reload_config(monkeypatch, tmp_path)
     bridge = FakeBridge()
-    uploader = FakeUploader(ok=False)  # uploads fail -> frames kept for retry
-    # frame1 count 2 (startup); frame2 count 6 within the interval -> smoothed
-    # median([2,6])=4, which is +2 from 2 -> immediate count_change post.
+    uploader = FakeUploader(ok=False)  # uploads fail -> notable frames kept for retry
+    # frame1 count 2 (startup); frame2 count 6 -> smoothed median([2,6])=4, +2
+    # from 2 -> immediate count_change post.
     results = [
         make_result(confidences=(0.9,), total=2),
         make_result(confidences=(0.9,), total=6),
@@ -225,30 +237,31 @@ def test_count_change_triggers_immediate_post_and_smoothing(monkeypatch, tmp_pat
     _run(cfg, frames_ok=[True, True], results=results, bridge=bridge, uploader=uploader, tick=1.0)
 
     assert [p["count"] for p in bridge.posts] == [2, 4]
-    assert [p["include_image"] for p in bridge.posts] == [True, True]
-    # Both uploads attempted but failed -> both frames kept on disk for retry,
-    # and no image fields were cleared (the files still exist to be served).
-    assert len(uploader.uploads) == 2
+    assert all(p["include_image"] for p in bridge.posts)
+    assert len(uploader.uploads) == 2  # both notable frames attempted
     assert bridge.cleared == []
-    cam_dir = cfg.PROCESSED_DIR / "indoor-1"
-    assert len(list(cam_dir.glob("*.jpg"))) == 2
+    # Both notable timestamped frames kept (upload failed) alongside the latest.
+    names = _jpg_names(cfg.PROCESSED_DIR / "indoor-1")
+    assert "latest.jpg" in names
+    assert len(_timestamped(names)) == 2
 
 
-def test_low_confidence_frame_is_saved(monkeypatch, tmp_path, make_result):
+def test_low_confidence_frame_is_retained(monkeypatch, tmp_path, make_result):
     cfg = _reload_config(monkeypatch, tmp_path)
     bridge = FakeBridge()
     uploader = FakeUploader(ok=False)
-    # Two frames, same count, but frame 2 has a low-confidence detection (<0.4)
-    # and posts on the interval -> notable (low_confidence) -> image saved.
+    # frame 2 has a low-confidence detection (<0.4) -> notable (low_confidence).
     results = [
         make_result(confidences=(0.9,), total=3),
         make_result(confidences=(0.3,), total=3),
     ]
     _run(cfg, frames_ok=[True, True], results=results, bridge=bridge, uploader=uploader, tick=61.0)
 
-    assert bridge.posts[1]["include_image"] is True  # saved for being uncertain
-    cam_dir = cfg.PROCESSED_DIR / "indoor-1"
-    assert len(list(cam_dir.glob("*.jpg"))) == 2  # startup + low-confidence
+    assert bridge.posts[1]["include_image"] is True
+    names = _jpg_names(cfg.PROCESSED_DIR / "indoor-1")
+    # startup + low-confidence timestamped frames retained + the rolling latest.
+    assert "latest.jpg" in names
+    assert len(_timestamped(names)) == 2
 
 
 def test_dropped_frame_triggers_reconnect(monkeypatch, tmp_path, make_result):
@@ -267,11 +280,12 @@ def test_dropped_frame_triggers_reconnect(monkeypatch, tmp_path, make_result):
 
 
 # ---------------------------------------------------------------------------
-# in-app toggles (system settings) gate save + upload, never the JSON POST
+# in-app toggles gate retention + Roboflow upload, but NEVER the rolling latest
+# (the app always gets a current image) nor the JSON POST.
 # ---------------------------------------------------------------------------
 
 
-def test_roboflow_toggle_off_skips_upload_but_keeps_image(monkeypatch, tmp_path, make_result):
+def test_roboflow_toggle_off_skips_upload_but_retains_and_shows_image(monkeypatch, tmp_path, make_result):
     cfg = _reload_config(monkeypatch, tmp_path)
     bridge = FakeBridge()
     uploader = FakeUploader(ok=True)
@@ -280,17 +294,18 @@ def test_roboflow_toggle_off_skips_upload_but_keeps_image(monkeypatch, tmp_path,
 
     _run(cfg, frames_ok=[True], results=results, bridge=bridge, uploader=uploader, settings=settings)
 
-    # Observation posted WITH an image; nothing uploaded or cleared.
+    # Observation posted WITH the rolling-latest image; nothing uploaded.
     assert len(bridge.posts) == 1
     assert bridge.posts[0]["include_image"] is True
     assert uploader.uploads == []
     assert bridge.cleared == []
-    # The frame is kept on disk (saved to PC).
-    cam_dir = cfg.PROCESSED_DIR / "indoor-1"
-    assert len(list(cam_dir.glob("*.jpg"))) == 1
+    # image-save on -> the notable frame is retained on disk alongside the latest.
+    names = _jpg_names(cfg.PROCESSED_DIR / "indoor-1")
+    assert "latest.jpg" in names
+    assert len(_timestamped(names)) == 1
 
 
-def test_image_save_toggle_off_skips_disk_but_still_uploads(monkeypatch, tmp_path, make_result):
+def test_image_save_toggle_off_still_uploads_and_shows_latest(monkeypatch, tmp_path, make_result):
     cfg = _reload_config(monkeypatch, tmp_path)
     bridge = FakeBridge()
     uploader = FakeUploader(ok=True)
@@ -299,16 +314,16 @@ def test_image_save_toggle_off_skips_disk_but_still_uploads(monkeypatch, tmp_pat
 
     _run(cfg, frames_ok=[True], results=results, bridge=bridge, uploader=uploader, settings=settings)
 
-    # Posted WITHOUT an image; uploaded to Roboflow; the temp frame is not kept.
-    assert len(bridge.posts) == 1
-    assert bridge.posts[0]["include_image"] is False
+    # The rolling latest still gives the app an image; the notable frame still
+    # uploads to Roboflow, but it's NOT retained on disk (image-save off).
+    assert bridge.posts[0]["include_image"] is True
     assert len(uploader.uploads) == 1
-    assert bridge.cleared == []  # nothing to clear (no image fields were set)
-    cam_dir = cfg.PROCESSED_DIR / "indoor-1"
-    assert list(cam_dir.glob("*.jpg")) == []  # not saved to PC
+    assert not uploader.uploads[0].endswith("latest.jpg")
+    assert bridge.cleared == []
+    assert _jpg_names(cfg.PROCESSED_DIR / "indoor-1") == ["latest.jpg"]
 
 
-def test_both_toggles_off_posts_json_only(monkeypatch, tmp_path, make_result):
+def test_both_toggles_off_still_shows_rolling_latest(monkeypatch, tmp_path, make_result):
     cfg = _reload_config(monkeypatch, tmp_path)
     bridge = FakeBridge()
     uploader = FakeUploader(ok=True)
@@ -317,10 +332,10 @@ def test_both_toggles_off_posts_json_only(monkeypatch, tmp_path, make_result):
 
     _run(cfg, frames_ok=[True], results=results, bridge=bridge, uploader=uploader, settings=settings)
 
-    # JSON observation still posted; no image, no upload, no disk write.
+    # Even with both toggles off, the rolling latest is written and referenced —
+    # only retention + Roboflow are skipped.
     assert len(bridge.posts) == 1
-    assert bridge.posts[0]["include_image"] is False
+    assert bridge.posts[0]["include_image"] is True
     assert bridge.posts[0]["count"] == 3
     assert uploader.uploads == []
-    cam_dir = cfg.PROCESSED_DIR / "indoor-1"
-    assert not cam_dir.exists() or list(cam_dir.glob("*.jpg")) == []
+    assert _jpg_names(cfg.PROCESSED_DIR / "indoor-1") == ["latest.jpg"]
