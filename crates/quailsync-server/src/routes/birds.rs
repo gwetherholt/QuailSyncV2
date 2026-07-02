@@ -66,29 +66,56 @@ pub(crate) async fn create_bird(
     if let Err(e) = replace_bird_lineages(&conn, id, &body.lineage_ids) {
         return db_error(e);
     }
-    let lineages = fetch_bird_lineages(&conn, id);
-    (
-        StatusCode::CREATED,
-        Json(Bird {
-            id,
-            band_color: body.band_color,
-            sex: body.sex,
-            hatch_date,
-            mother_id: body.mother_id,
-            father_id: body.father_id,
-            generation: body.generation,
-            status: body.status,
-            notes: body.notes,
-            nfc_tag_id: body.nfc_tag_id,
-            current_brooder_id: None,
-            photo_path: None,
-            photo_uploaded_at: None,
-            housing_id: None,
-            chick_group_id: body.chick_group_id,
-            lineages,
-        }),
-    )
-        .into_response()
+    // Phase 3: seed the probabilistic genetic profile. A bird banded out of a
+    // chick group inherits its clutch's snapshot distribution; a source bird
+    // created directly falls back to its own lineage tags at 100%.
+    let clutch_id = body
+        .chick_group_id
+        .and_then(|gid| crate::genetics::clutch_id_for_group(&conn, gid));
+    crate::genetics::populate_bird_profile(&conn, id, clutch_id, &body.lineage_ids);
+
+    let mut bird = Bird {
+        id,
+        band_color: body.band_color,
+        sex: body.sex,
+        hatch_date,
+        mother_id: body.mother_id,
+        father_id: body.father_id,
+        generation: body.generation,
+        status: body.status,
+        notes: body.notes,
+        nfc_tag_id: body.nfc_tag_id,
+        current_brooder_id: None,
+        photo_path: None,
+        photo_uploaded_at: None,
+        housing_id: None,
+        chick_group_id: body.chick_group_id,
+        lineages: Vec::new(),
+        genetic_profile: Default::default(),
+        confidence: 0.0,
+    };
+    hydrate_bird(&conn, &mut bird);
+    (StatusCode::CREATED, Json(bird)).into_response()
+}
+
+/// `GET /api/birds/{id}` — a single bird with its lineage tags + probabilistic
+/// genetic profile (Phase 3). 404 when the id is unknown.
+pub(crate) async fn get_bird(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let conn = acquire_db(&state);
+    match conn.query_row(
+        &format!("{BIRD_SELECT} WHERE id = ?1"),
+        params![id],
+        row_to_bird,
+    ) {
+        Ok(mut bird) => {
+            hydrate_bird(&conn, &mut bird);
+            (StatusCode::OK, Json(Some(bird))).into_response()
+        }
+        Err(_) => (StatusCode::NOT_FOUND, Json(None::<Bird>)).into_response(),
+    }
 }
 
 const BIRD_SELECT: &str = "SELECT id, band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path, photo_uploaded_at, housing_id, chick_group_id FROM birds";
@@ -198,7 +225,7 @@ pub(crate) async fn update_bird(
         row_to_bird,
     ) {
         Ok(mut bird) => {
-            bird.lineages = fetch_bird_lineages(&conn, bird.id);
+            hydrate_bird(&conn, &mut bird);
             (StatusCode::OK, Json(Some(bird))).into_response()
         }
         Err(e) => db_error(e),
@@ -279,7 +306,7 @@ pub(crate) async fn get_bird_by_nfc(
         row_to_bird,
     ) {
         Ok(mut b) => {
-            b.lineages = fetch_bird_lineages(&conn, b.id);
+            hydrate_bird(&conn, &mut b);
             (StatusCode::OK, Json(Some(b))).into_response()
         }
         Err(_) => (StatusCode::NOT_FOUND, Json(None::<Bird>)).into_response(),
@@ -304,7 +331,7 @@ pub(crate) async fn move_bird(
         row_to_bird,
     ) {
         Ok(mut bird) => {
-            bird.lineages = fetch_bird_lineages(&conn, bird.id);
+            hydrate_bird(&conn, &mut bird);
             Json(bird).into_response()
         }
         Err(e) => db_error(e),
@@ -467,7 +494,7 @@ pub(crate) async fn replace_bird_lineages_handler(
         row_to_bird,
     ) {
         Ok(mut bird) => {
-            bird.lineages = fetch_bird_lineages(&conn, bird.id);
+            hydrate_bird(&conn, &mut bird);
             (StatusCode::OK, Json(bird)).into_response()
         }
         Err(e) => db_error(e),

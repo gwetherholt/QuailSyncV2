@@ -194,6 +194,20 @@ pub fn init_db(conn: &Connection) {
             PRIMARY KEY (group_id, male_id)
         );
 
+        -- Phase 2 (probabilistic genetics): point-in-time snapshot of a breeding
+        -- group's composition, frozen when a clutch is created. One row per
+        -- (bird, lineage) so a multi-lineage bird contributes all its tags.
+        -- Moving birds afterward never changes an existing snapshot. Rows cascade
+        -- away when the parent clutch is deleted.
+        CREATE TABLE IF NOT EXISTS clutch_snapshots (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            clutch_id  INTEGER NOT NULL REFERENCES clutches(id) ON DELETE CASCADE,
+            bird_id    INTEGER NOT NULL REFERENCES birds(id),
+            sex        TEXT    NOT NULL,
+            lineage_id INTEGER NOT NULL REFERENCES lineages(id),
+            UNIQUE(clutch_id, bird_id, lineage_id)
+        );
+
         CREATE TABLE IF NOT EXISTS camera_feeds (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             name       TEXT NOT NULL,
@@ -775,6 +789,29 @@ pub fn init_db(conn: &Connection) {
             ON indoor_camera_observations(camera_id, timestamp);",
     )
     .expect("failed to create indoor_camera_observations table");
+
+    // --- Bird genetic profiles (Phase 3: probabilistic lineage) --------------
+    // Superset of the discrete `bird_lineages` junction: each bird carries a
+    // paternal + maternal probability distribution over lineages, each side
+    // summing to 1.0 (subject to the 1% tracking floor). Additive and safe for a
+    // live DB — the table is created if missing and seeded once from
+    // bird_lineages (100% on both sides for the gen-0 source birds currently in
+    // the flock; a multi-lineage bird splits equally). `bird_lineages` is kept
+    // read-only during the transition and is intentionally NOT dropped.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS bird_genetic_profile (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            bird_id     INTEGER NOT NULL REFERENCES birds(id) ON DELETE CASCADE,
+            side        TEXT    NOT NULL CHECK(side IN ('paternal', 'maternal')),
+            lineage_id  INTEGER NOT NULL REFERENCES lineages(id),
+            probability REAL    NOT NULL CHECK(probability > 0.0 AND probability <= 1.0),
+            UNIQUE(bird_id, side, lineage_id)
+        );
+         CREATE INDEX IF NOT EXISTS idx_bird_genetic_profile_bird
+            ON bird_genetic_profile(bird_id);",
+    )
+    .expect("failed to create bird_genetic_profile table");
+    crate::genetics::migrate_bird_lineages(conn);
 
     // --- Performance indexes ---
     conn.execute_batch(

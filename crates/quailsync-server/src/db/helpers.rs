@@ -175,7 +175,10 @@ pub fn row_to_bird(row: &rusqlite::Row) -> rusqlite::Result<Bird> {
         photo_uploaded_at: row.get(12)?,
         housing_id: row.get(13)?,
         chick_group_id: row.get(14)?,
+        // Derived fields left empty here; callers fill them via `hydrate_bird`.
         lineages: Vec::new(),
+        genetic_profile: Default::default(),
+        confidence: 0.0,
     })
 }
 
@@ -308,10 +311,21 @@ pub fn populate_chick_group_lineages(conn: &Connection, groups: &mut [ChickGroup
     }
 }
 
-/// Populate the `lineages` field on every bird in the slice.
+/// Fill a single `Bird`'s response-only derived fields: its discrete lineage
+/// tags plus its probabilistic genetic profile + confidence (Phase 3). Use this
+/// instead of setting `.lineages` alone so every bird response carries genetics.
+pub fn hydrate_bird(conn: &Connection, bird: &mut Bird) {
+    bird.lineages = fetch_bird_lineages(conn, bird.id);
+    let profile = crate::genetics::read_profile(conn, bird.id);
+    bird.confidence = crate::genetics::confidence(&profile);
+    bird.genetic_profile = profile;
+}
+
+/// Populate the derived fields (lineages + genetic profile + confidence) on
+/// every bird in the slice.
 pub fn populate_bird_lineages(conn: &Connection, birds: &mut [Bird]) {
     for b in birds.iter_mut() {
-        b.lineages = fetch_bird_lineages(conn, b.id);
+        hydrate_bird(conn, b);
     }
 }
 

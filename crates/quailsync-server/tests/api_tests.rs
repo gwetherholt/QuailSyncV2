@@ -3630,3 +3630,374 @@ mod trail_camera_tests {
         assert_eq!(resp.status(), 400);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2: clutch group-composition snapshots
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn clutch_snapshot_captures_group_composition_and_cascades() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    async fn make_lineage(client: &reqwest::Client, base: &str, name: &str) -> i64 {
+        client
+            .post(format!("{base}/api/lineages"))
+            .json(&CreateLineage {
+                name: name.into(),
+                source: String::new(),
+                notes: None,
+            })
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap()["id"]
+            .as_i64()
+            .unwrap()
+    }
+    async fn make_bird(client: &reqwest::Client, base: &str, sex: Sex, lineage: i64) -> i64 {
+        let b = CreateBird {
+            band_color: None,
+            sex,
+            lineage_ids: vec![lineage],
+            hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            mother_id: None,
+            father_id: None,
+            generation: 0,
+            status: BirdStatus::Active,
+            notes: None,
+            nfc_tag_id: None,
+            chick_group_id: None,
+        };
+        client
+            .post(format!("{base}/api/birds"))
+            .json(&b)
+            .send()
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap()["id"]
+            .as_i64()
+            .unwrap()
+    }
+
+    // Spec example: 1 NWQuail male + (4 NWQuail + 1 Fernbank) hens.
+    let nw = make_lineage(&client, &base, "NWQuail").await;
+    let fb = make_lineage(&client, &base, "Fernbank").await;
+    let male = make_bird(&client, &base, Sex::Male, nw).await;
+    let mut females = Vec::new();
+    for _ in 0..4 {
+        females.push(make_bird(&client, &base, Sex::Female, nw).await);
+    }
+    females.push(make_bird(&client, &base, Sex::Female, fb).await);
+
+    let group_id = client
+        .post(format!("{base}/api/breeding-groups"))
+        .json(&serde_json::json!({
+            "name": "Mixed hens", "male_ids": [male], "female_ids": females,
+            "start_date": "2026-01-01", "notes": null,
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+
+    // Create a clutch linked to the group — this snapshots the composition.
+    let created = client
+        .post(format!("{base}/api/clutches"))
+        .json(&serde_json::json!({
+            "breeding_group_id": group_id, "lineage_id": null, "eggs_set": 12,
+            "eggs_fertile": null, "eggs_hatched": null, "set_date": "2026-06-01",
+            "status": "Incubating", "notes": null,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), 201);
+    let created_body: serde_json::Value = created.json().await.unwrap();
+    let clutch_id = created_body["id"].as_i64().unwrap();
+    // POST already returns the snapshot.
+    assert!(created_body["snapshot"].is_object());
+
+    // GET the clutch detail and check the frozen composition + distributions.
+    let detail: serde_json::Value = reqwest::get(format!("{base}/api/clutches/{clutch_id}"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(detail["breeding_group_id"].as_i64(), Some(group_id));
+    let snap = &detail["snapshot"];
+    assert_eq!(snap["males"].as_array().unwrap().len(), 1);
+    assert_eq!(snap["females"].as_array().unwrap().len(), 5);
+
+    // Paternal: certain (single male) — 100% NWQuail.
+    let pat = snap["paternal_distribution"].as_array().unwrap();
+    assert_eq!(pat.len(), 1);
+    assert_eq!(pat[0]["lineage_id"].as_i64(), Some(nw));
+    assert!((pat[0]["probability"].as_f64().unwrap() - 1.0).abs() < 1e-9);
+
+    // Maternal: 0.8 NWQuail, 0.2 Fernbank (highest first, names included).
+    let mat = snap["maternal_distribution"].as_array().unwrap();
+    assert_eq!(mat.len(), 2);
+    assert_eq!(mat[0]["lineage_id"].as_i64(), Some(nw));
+    assert_eq!(mat[0]["lineage_name"], "NWQuail");
+    assert!((mat[0]["probability"].as_f64().unwrap() - 0.8).abs() < 1e-9);
+    assert_eq!(mat[1]["lineage_id"].as_i64(), Some(fb));
+    assert!((mat[1]["probability"].as_f64().unwrap() - 0.2).abs() < 1e-9);
+
+    // Deleting the clutch cascades away its snapshot; GET then 404s.
+    let del = client
+        .delete(format!("{base}/api/clutches/{clutch_id}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(del.status(), 204);
+    let after = reqwest::get(format!("{base}/api/clutches/{clutch_id}"))
+        .await
+        .unwrap();
+    assert_eq!(after.status(), 404);
+}
+
+#[tokio::test]
+async fn clutch_without_group_has_null_snapshot() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+    let lin = client
+        .post(format!("{base}/api/lineages"))
+        .json(&CreateLineage {
+            name: "Solo".into(),
+            source: String::new(),
+            notes: None,
+        })
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    let created: serde_json::Value = client
+        .post(format!("{base}/api/clutches"))
+        .json(&serde_json::json!({
+            "breeding_group_id": null, "lineage_id": lin, "eggs_set": 10,
+            "eggs_fertile": null, "eggs_hatched": null, "set_date": "2026-06-01",
+            "status": "Incubating", "notes": null,
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let clutch_id = created["id"].as_i64().unwrap();
+    let detail: serde_json::Value = reqwest::get(format!("{base}/api/clutches/{clutch_id}"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    // Lineage-only clutch: no snapshot.
+    assert!(detail["snapshot"].is_null());
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: probabilistic genetic profiles on birds
+// ---------------------------------------------------------------------------
+
+async fn make_lineage_p3(client: &reqwest::Client, base: &str, name: &str) -> i64 {
+    client
+        .post(format!("{base}/api/lineages"))
+        .json(&CreateLineage {
+            name: name.into(),
+            source: String::new(),
+            notes: None,
+        })
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap()
+}
+
+async fn make_source_bird_p3(client: &reqwest::Client, base: &str, sex: Sex, lineage: i64) -> i64 {
+    client
+        .post(format!("{base}/api/birds"))
+        .json(&CreateBird {
+            band_color: None,
+            sex,
+            lineage_ids: vec![lineage],
+            hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            mother_id: None,
+            father_id: None,
+            generation: 0,
+            status: BirdStatus::Active,
+            notes: None,
+            nfc_tag_id: None,
+            chick_group_id: None,
+        })
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn get_bird_includes_source_bird_genetic_profile() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    let lin = make_lineage_p3(&client, &base, "Pharaoh").await;
+    let bird_id = make_source_bird_p3(&client, &base, Sex::Female, lin).await;
+
+    // The new GET /api/birds/{id} endpoint returns the probabilistic profile.
+    let bird: Bird = reqwest::get(format!("{base}/api/birds/{bird_id}"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    // A gen-0 source bird is 100% its single lineage on both sides.
+    assert_eq!(bird.genetic_profile.paternal.len(), 1);
+    assert_eq!(bird.genetic_profile.paternal[0].lineage_id, lin);
+    assert!((bird.genetic_profile.paternal[0].probability - 1.0).abs() < 1e-9);
+    assert_eq!(bird.genetic_profile.maternal.len(), 1);
+    assert!((bird.genetic_profile.maternal[0].probability - 1.0).abs() < 1e-9);
+    // confidence = min(max(pat), max(mat)) = 1.0.
+    assert!((bird.confidence - 1.0).abs() < 1e-9);
+
+    // Unknown id 404s.
+    let missing = reqwest::get(format!("{base}/api/birds/999999"))
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+}
+
+#[tokio::test]
+async fn graduated_bird_inherits_clutch_snapshot_genetics() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    // Spec example: 1 NWQuail male + (4 NWQuail + 1 Fernbank) hens.
+    let nw = make_lineage_p3(&client, &base, "NWQuail").await;
+    let fb = make_lineage_p3(&client, &base, "Fernbank").await;
+    let male = make_source_bird_p3(&client, &base, Sex::Male, nw).await;
+    let mut females = Vec::new();
+    for _ in 0..4 {
+        females.push(make_source_bird_p3(&client, &base, Sex::Female, nw).await);
+    }
+    females.push(make_source_bird_p3(&client, &base, Sex::Female, fb).await);
+
+    let group_id = client
+        .post(format!("{base}/api/breeding-groups"))
+        .json(&serde_json::json!({
+            "name": "Mixed hens", "male_ids": [male], "female_ids": females,
+            "start_date": "2026-01-01", "notes": null,
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+
+    // Clutch linked to the group freezes the composition snapshot.
+    let clutch_id = client
+        .post(format!("{base}/api/clutches"))
+        .json(&serde_json::json!({
+            "breeding_group_id": group_id, "lineage_id": null, "eggs_set": 12,
+            "eggs_fertile": null, "eggs_hatched": null, "set_date": "2026-06-01",
+            "status": "Incubating", "notes": null,
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+
+    // A chick group descended from that clutch, then graduate one bird.
+    let group: ChickGroup = client
+        .post(format!("{base}/api/chick-groups"))
+        .json(&CreateChickGroup {
+            clutch_id: Some(clutch_id),
+            brooder_id: None,
+            initial_count: 1,
+            hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 6, 18).unwrap(),
+            notes: None,
+            lineage_ids: vec![nw],
+        })
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let graduated: Vec<Bird> = client
+        .post(format!("{base}/api/chick-groups/{}/graduate", group.id))
+        .json(&GraduateRequest {
+            target_housing_id: None,
+            birds: vec![GraduateBird {
+                sex: Sex::Female,
+                band_color: None,
+                nfc_tag_id: None,
+                notes: None,
+                weight_grams: None,
+                photo_path: None,
+            }],
+        })
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(graduated.len(), 1);
+    let chick = &graduated[0];
+
+    // Paternal: certain (single NWQuail male) — 100%.
+    assert_eq!(chick.genetic_profile.paternal.len(), 1);
+    assert_eq!(chick.genetic_profile.paternal[0].lineage_id, nw);
+    assert!((chick.genetic_profile.paternal[0].probability - 1.0).abs() < 1e-9);
+
+    // Maternal: 0.8 NWQuail, 0.2 Fernbank (highest first).
+    let mat = &chick.genetic_profile.maternal;
+    assert_eq!(mat.len(), 2);
+    assert_eq!(mat[0].lineage_id, nw);
+    assert!((mat[0].probability - 0.8).abs() < 1e-9);
+    assert_eq!(mat[1].lineage_id, fb);
+    assert!((mat[1].probability - 0.2).abs() < 1e-9);
+
+    // confidence = min(1.0, 0.8) = 0.8.
+    assert!((chick.confidence - 0.8).abs() < 1e-9);
+
+    // The same profile is served by GET /api/birds/{id}.
+    let refetched: Bird = reqwest::get(format!("{base}/api/birds/{}", chick.id))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!((refetched.confidence - 0.8).abs() < 1e-9);
+}

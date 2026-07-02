@@ -227,6 +227,15 @@ pub struct Bird {
     /// junction table; empty Vec is allowed (legacy migration only).
     #[serde(default)]
     pub lineages: Vec<Lineage>,
+    /// Probabilistic lineage distribution (Phase 3), derived from the
+    /// `bird_genetic_profile` table. Empty for birds with no recorded profile.
+    #[serde(default)]
+    pub genetic_profile: GeneticProfile,
+    /// Confidence in this bird's lineage: `min(max(paternal), max(maternal))` —
+    /// the weakest inherited side's strongest single lineage. `0.0` when either
+    /// side has no recorded distribution.
+    #[serde(default)]
+    pub confidence: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -297,6 +306,58 @@ pub struct CreateClutch {
     pub set_date: NaiveDate,
     pub status: ClutchStatus,
     pub notes: Option<String>,
+}
+
+// --- Clutch group snapshots (Phase 2: probabilistic genetics) --------------
+
+/// One bird in a clutch's frozen group snapshot, with the lineage tags it had
+/// at egg-collection time (a multi-lineage bird lists all of them).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SnapshotBird {
+    pub bird_id: i64,
+    pub lineage_ids: Vec<i64>,
+}
+
+/// A lineage with a probability weight in `0.0..=1.0`, plus its display name.
+/// Reused for snapshot maternal/paternal distributions and bird profiles.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LineageProbability {
+    pub lineage_id: i64,
+    pub lineage_name: String,
+    pub probability: f64,
+}
+
+/// A bird's probabilistic lineage (Phase 3), split by inherited side. The
+/// probabilities on each side sum to 1.0 (subject to the 1% tracking floor).
+/// Empty vecs mean the bird has no recorded genetic profile. Highest-probability
+/// lineage first on each side. Supersedes the discrete `Bird::lineages` tags for
+/// genetic reasoning; `lineages` stays populated for backward compatibility.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct GeneticProfile {
+    pub paternal: Vec<LineageProbability>,
+    pub maternal: Vec<LineageProbability>,
+}
+
+/// Frozen composition of the breeding group that produced a clutch, captured at
+/// creation time. `maternal_distribution`/`paternal_distribution` are derived
+/// from the members — each bird weighted equally and split across its lineages,
+/// so the probabilities on each side sum to 1.0 (paternal is certain for a
+/// single-male group). Drives the probabilistic lineage of the chicks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClutchSnapshot {
+    pub males: Vec<SnapshotBird>,
+    pub females: Vec<SnapshotBird>,
+    pub paternal_distribution: Vec<LineageProbability>,
+    pub maternal_distribution: Vec<LineageProbability>,
+}
+
+/// `GET /api/clutches/{id}`: the clutch plus its group snapshot. `snapshot` is
+/// `None` for lineage-only clutches (no breeding group was recorded).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClutchDetail {
+    #[serde(flatten)]
+    pub clutch: Clutch,
+    pub snapshot: Option<ClutchSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

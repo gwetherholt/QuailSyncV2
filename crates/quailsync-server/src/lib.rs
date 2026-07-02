@@ -1,5 +1,6 @@
 pub mod alerts;
 pub mod db;
+pub mod genetics;
 pub mod routes;
 pub mod state;
 pub mod ws;
@@ -98,7 +99,9 @@ pub fn build_app(state: AppState) -> Router {
         )
         .route(
             "/api/birds/{id}",
-            axum::routing::put(birds::update_bird).delete(birds::delete_bird),
+            get(birds::get_bird)
+                .put(birds::update_bird)
+                .delete(birds::delete_bird),
         )
         // Section 10: POST (not PUT) for weight creation; path matches GET route
         .route(
@@ -181,7 +184,9 @@ pub fn build_app(state: AppState) -> Router {
         )
         .route(
             "/api/clutches/{id}",
-            axum::routing::put(clutches::update_clutch).delete(clutches::delete_clutch),
+            get(clutches::get_clutch)
+                .put(clutches::update_clutch)
+                .delete(clutches::delete_clutch),
         )
         .route(
             "/api/processing",

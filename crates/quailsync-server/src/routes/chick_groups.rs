@@ -374,6 +374,12 @@ pub(crate) async fn graduate_chick_group(
             return db_error(e);
         }
 
+        // Phase 3: seed the probabilistic genetic profile from the clutch's
+        // frozen group snapshot (floored + renormalized). Falls back to the
+        // clutch's single lineage, then to the group's own lineage tags, at
+        // 100% on both sides when no snapshot exists.
+        crate::genetics::populate_bird_profile(&conn, bird_id, group.clutch_id, &group_lineage_ids);
+
         // Persist initial weight to weight_records so it shows in growth history.
         if let Some(grams) = gb.weight_grams {
             if let Err(e) = conn.execute(
@@ -384,8 +390,7 @@ pub(crate) async fn graduate_chick_group(
             }
         }
 
-        let lineages = fetch_bird_lineages(&conn, bird_id);
-        birds_created.push(Bird {
+        let mut bird = Bird {
             id: bird_id,
             band_color: gb.band_color.clone(),
             sex: gb.sex.clone(),
@@ -401,8 +406,12 @@ pub(crate) async fn graduate_chick_group(
             photo_uploaded_at: None,
             housing_id: body.target_housing_id,
             chick_group_id: Some(id),
-            lineages,
-        });
+            lineages: Vec::new(),
+            genetic_profile: Default::default(),
+            confidence: 0.0,
+        };
+        hydrate_bird(&conn, &mut bird);
+        birds_created.push(bird);
     }
 
     // Flip the group to Graduated and (if a hutch was named) record where it

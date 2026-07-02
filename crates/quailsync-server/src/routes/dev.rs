@@ -255,6 +255,7 @@ fn restore_from_production(conn: &Connection) -> rusqlite::Result<()> {
 /// keeping the order means we could enable per-statement FK checks later
 /// without rewriting the list).
 const ALL_TABLES: &[&str] = &[
+    "bird_genetic_profile",
     "bird_lineages",
     "chick_group_lineages",
     "breeding_group_members",
@@ -273,6 +274,7 @@ const ALL_TABLES: &[&str] = &[
     "system_alerts",
     "breeding_groups",
     "chick_groups",
+    "clutch_snapshots",
     "clutches",
     "birds",
     "brooders",
@@ -760,6 +762,16 @@ fn insert_basic_seed_inner(conn: &Connection) -> rusqlite::Result<()> {
         "UPDATE clutches SET breeding_group_id = ?1 WHERE id = ?2",
         params![pharaoh_group, clutch_incubating],
     )?;
+    // Phase 2: snapshot that group's composition for clutch 1 (male + hen, both Pharaoh).
+    conn.execute(
+        "INSERT OR IGNORE INTO clutch_snapshots (clutch_id, bird_id, sex, lineage_id)
+         VALUES (?1, 1, 'Male', ?2), (?1, 2, 'Female', ?2)",
+        params![clutch_incubating, pharaoh],
+    )?;
+
+    // Phase 3: seed probabilistic genetic profiles for the birds just created
+    // (init_db's migration ran before this seed, so it hasn't seen these rows).
+    crate::genetics::migrate_bird_lineages(conn);
 
     println!("[dev] basic seed installed (5 lineages, 5 housing units, 4 chick groups, 15 birds)");
     Ok(())
@@ -954,6 +966,9 @@ fn insert_stress_seed_inner(conn: &Connection) -> rusqlite::Result<()> {
             }
         }
     }
+
+    // Phase 3: seed probabilistic genetic profiles for the stress birds.
+    crate::genetics::migrate_bird_lineages(conn);
 
     println!("[dev] stress seed installed (10 lineages, 8 housing, 60 birds, 20 chick groups, 5 breeding pairs)");
     Ok(())
