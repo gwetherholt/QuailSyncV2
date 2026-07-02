@@ -7,6 +7,7 @@ errors are redacted.
 """
 
 import subprocess
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -185,12 +186,17 @@ def test_opencv_no_frame_raises(tmp_path):
 
 
 class _StreamCap:
-    def __init__(self, frames, opened=True):
-        self._frames = list(frames)
+    """Fake for a *continuous* RTSP stream. ``read()`` returns the current
+    ``latest`` frame forever (paced with a tiny sleep so the reader thread
+    doesn't busy-loop); ``fail=True`` makes every read a dropped-stream failure.
+    Set ``latest`` to simulate the live edge advancing over time."""
+
+    def __init__(self, *, latest="frame", opened=True, fail=False):
+        self.latest = latest
         self._opened = opened
+        self._fail = fail
         self.released = False
         self.buffer_set = None
-        self.url = None
 
     def isOpened(self):
         return self._opened
@@ -200,9 +206,10 @@ class _StreamCap:
         return True
 
     def read(self):
-        if self._frames:
-            return True, self._frames.pop(0)
-        return False, None
+        time.sleep(0.002)  # pace like a live stream (~500fps ceiling for the fake)
+        if self._fail:
+            return False, None
+        return True, self.latest
 
     def release(self):
         self.released = True
@@ -214,6 +221,7 @@ class _StreamCv2:
     def __init__(self, caps):
         self._caps = list(caps)
         self.opened_urls = []
+        self.written = []
 
     def VideoCapture(self, url):
         self.opened_urls.append(url)
@@ -221,25 +229,46 @@ class _StreamCv2:
 
     def imwrite(self, path, frame):
         Path(path).write_bytes(_JPEG)
+        self.written.append(frame)
         return True
 
 
 def test_stream_open_sets_buffer_and_reads_fresh_frame(tmp_path):
-    cap = _StreamCap(frames=["frame-a"])
+    cap = _StreamCap(latest="frame-a")
     cv2 = _StreamCv2([cap])
     stream = StreamCapture(url="rtsp://u:p@cam/stream1", cv2_module=cv2)  # pragma: allowlist secret
-    stream.open()
-    # Buffer trimmed to the latest frame so the 1fps sampler reads fresh data.
-    assert cap.buffer_set == (cv2.CAP_PROP_BUFFERSIZE, 1)
+    try:
+        stream.open()
+        # Buffer trimmed to the latest frame (belt-and-suspenders alongside the
+        # draining reader thread).
+        assert cap.buffer_set == (cv2.CAP_PROP_BUFFERSIZE, 1)
 
-    dest = tmp_path / "live.jpg"
-    assert stream.read_to(dest) is True
-    assert dest.exists()
-    assert cv2.opened_urls == ["rtsp://u:p@cam/stream1"]  # pragma: allowlist secret
+        dest = tmp_path / "live.jpg"
+        assert stream.read_to(dest) is True
+        assert dest.exists()
+        assert cv2.opened_urls == ["rtsp://u:p@cam/stream1"]  # pragma: allowlist secret
+    finally:
+        stream.release()
+
+
+def test_stream_read_to_writes_the_newest_frame(tmp_path):
+    # The reader keeps draining, so read_to writes whatever is newest *now* —
+    # not a frame captured just after the previous read.
+    cap = _StreamCap(latest="old")
+    cv2 = _StreamCv2([cap])
+    stream = StreamCapture(url="rtsp://cam/s", cv2_module=cv2)
+    try:
+        stream.open()
+        cap.latest = "fresh"  # live edge advances
+        time.sleep(0.02)      # let the reader pick it up
+        assert stream.read_to(tmp_path / "live.jpg") is True
+        assert cv2.written[-1] == "fresh"  # newest frame, not "old"
+    finally:
+        stream.release()
 
 
 def test_stream_open_raises_when_not_opened(tmp_path):
-    cap = _StreamCap(frames=[], opened=False)
+    cap = _StreamCap(opened=False)
     stream = StreamCapture(url="rtsp://cam/s", cv2_module=_StreamCv2([cap]))
     with pytest.raises(CaptureError):
         stream.open()
@@ -247,21 +276,28 @@ def test_stream_open_raises_when_not_opened(tmp_path):
 
 
 def test_stream_read_to_returns_false_on_drop(tmp_path):
-    cap = _StreamCap(frames=[])  # opened, but no frames -> read() fails
+    cap = _StreamCap(fail=True)  # opens, but every read fails -> dropped stream
     stream = StreamCapture(url="rtsp://cam/s", cv2_module=_StreamCv2([cap]))
-    assert stream.read_to(tmp_path / "live.jpg") is False  # caller reconnects
+    try:
+        assert stream.read_to(tmp_path / "live.jpg") is False  # caller reconnects
+    finally:
+        stream.release()
 
 
 def test_stream_reconnect_reopens_with_a_fresh_handle(tmp_path):
-    first = _StreamCap(frames=[])
-    second = _StreamCap(frames=["frame-b"])
+    first = _StreamCap(fail=True)          # drops
+    second = _StreamCap(latest="frame-b")  # healthy
     cv2 = _StreamCv2([first, second])
     stream = StreamCapture(url="rtsp://cam/s", cv2_module=cv2)
-    stream.open()
-    stream.reconnect()
-    assert first.released is True  # old handle closed
-    assert len(cv2.opened_urls) == 2  # reopened
-    assert stream.read_to(tmp_path / "live.jpg") is True  # new handle works
+    try:
+        stream.open()
+        stream.reconnect()
+        assert first.released is True   # old handle closed
+        assert len(cv2.opened_urls) == 2  # reopened
+        time.sleep(0.02)
+        assert stream.read_to(tmp_path / "live.jpg") is True  # new handle works
+    finally:
+        stream.release()
 
 
 def test_stream_requires_a_url(monkeypatch):

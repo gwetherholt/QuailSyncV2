@@ -17,3 +17,10 @@ pi-agent/core.*
 # Trail-cam secrets — real credentials file must never be committed
 # (the .example template is intentionally NOT ignored).
 .trailcam-secrets
+.indoor-cam-secrets
+
+# Indoor-cam YOLO model binaries live here on the Pi but must not bloat the repo
+# (nor be wiped by an rsync deploy). Ignore the contents but keep the directory
+# via .gitkeep so the models/ path exists in a fresh checkout.
+indoor-cam/models/*
+!indoor-cam/models/.gitkeep

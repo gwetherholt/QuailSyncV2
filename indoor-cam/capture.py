@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import threading
 from pathlib import Path
 
 # Support both `python pipeline.py` (script, sibling import) and package import.
@@ -42,18 +43,39 @@ class CaptureError(Exception):
     """Raised when a frame couldn't be captured (no URL, tool failure, empty)."""
 
 
-class StreamCapture:
-    """A long-lived OpenCV RTSP capture for continuous ~1fps sampling.
+# How long :meth:`StreamCapture.open` waits for the reader to produce the first
+# frame (or detect an immediate drop) before returning.
+_FIRST_FRAME_TIMEOUT = 10.0
 
-    The stream is held open (``cv2.VideoCapture``) across frames rather than
-    reopened per grab. The credentialed URL stays in this process's memory and
-    never appears on a command line, so the RTSP password is never exposed in
-    ``ps`` — this is why continuous capture always uses OpenCV, not ffmpeg.
+
+class StreamCapture:
+    """A long-lived OpenCV RTSP capture that always yields the *freshest* frame.
+
+    OpenCV's FFMPEG backend buffers RTSP frames, and ``CAP_PROP_BUFFERSIZE=1``
+    isn't honored by every backend — so a sampler that only calls ``read()`` once
+    per second gets a frame from the *front* of the queue, seconds stale (the one
+    captured right after the previous sample). To avoid that, a background thread
+    continuously reads (and discards) frames, keeping only the most recent;
+    :meth:`read_to` writes whatever is newest at the instant it's called. That
+    keeps the buffer drained so the sampled frame — and the count derived from it
+    — are from the current moment, not from just after the last POST.
+
+    The stream is held open across frames (never reopened per grab). The
+    credentialed URL stays in this process's memory and never appears on a
+    command line, so the RTSP password is never exposed in ``ps`` — this is why
+    continuous capture always uses OpenCV, not ffmpeg.
 
     ``cv2_module`` is injectable so the stream is testable without a camera.
     """
 
-    def __init__(self, url: str | None = None, *, cv2_module=None, buffer_size: int = 1):
+    def __init__(
+        self,
+        url: str | None = None,
+        *,
+        cv2_module=None,
+        buffer_size: int = 1,
+        first_frame_timeout: float = _FIRST_FRAME_TIMEOUT,
+    ):
         self.url = url if url is not None else config.rtsp_url()
         if not self.url:
             raise CaptureError(
@@ -62,7 +84,15 @@ class StreamCapture:
             )
         self._cv2 = cv2_module
         self._buffer_size = buffer_size
+        self._first_frame_timeout = first_frame_timeout
         self._cap = None
+        # Background reader state.
+        self._thread = None
+        self._lock = threading.Lock()
+        self._latest = None       # newest decoded frame (protected by _lock)
+        self._alive = False       # False once the stream drops -> caller reconnects
+        self._running = False     # reader-thread run flag
+        self._ready = None        # Event: first frame decoded (or drop detected)
 
     def _cv2mod(self):
         if self._cv2 is None:
@@ -77,11 +107,12 @@ class StreamCapture:
         return self._cv2
 
     def open(self) -> None:
-        """Open the stream. Raises :class:`CaptureError` if it won't connect."""
+        """Open the stream and start the background reader. Raises
+        :class:`CaptureError` if the stream won't connect."""
         cv2 = self._cv2mod()
         cap = cv2.VideoCapture(self.url)
-        # Keep only the newest frame buffered so a 1fps sampler reads a *fresh*
-        # frame, not one that's been sitting in the queue for seconds.
+        # Ask the backend to keep only the newest frame (belt-and-suspenders; the
+        # reader thread is the real defense since this isn't always honored).
         try:
             cap.set(cv2.CAP_PROP_BUFFERSIZE, self._buffer_size)
         except Exception:  # noqa: BLE001 — not all backends support it
@@ -89,16 +120,46 @@ class StreamCapture:
         if not cap.isOpened():
             cap.release()
             raise CaptureError(f"could not open RTSP stream {config.redact_rtsp(self.url)}")
+
         self._cap = cap
+        with self._lock:
+            self._latest = None
+        self._alive = True
+        self._running = True
+        self._ready = threading.Event()
+        self._thread = threading.Thread(target=self._reader_loop, args=(cap,), daemon=True)
+        self._thread.start()
         logger.info("Opened RTSP stream %s", config.redact_rtsp(self.url))
+        # Block until the first frame lands (or the stream drops / times out) so
+        # the caller's first read_to() has a frame to write.
+        self._ready.wait(self._first_frame_timeout)
+
+    def _reader_loop(self, cap) -> None:
+        """Continuously drain the stream, keeping only the newest frame. Exits on
+        the first read failure (a dropped stream) so the caller reconnects."""
+        while self._running:
+            try:
+                ok, frame = cap.read()  # blocks ~1/fps on a live stream
+            except Exception:  # noqa: BLE001 — a read error is a dropped stream
+                ok, frame = False, None
+            if not ok or frame is None:
+                self._alive = False
+                if self._ready is not None:
+                    self._ready.set()
+                return
+            with self._lock:
+                self._latest = frame
+            if self._ready is not None:
+                self._ready.set()
 
     def read_to(self, dest: Path | str) -> bool:
-        """Grab one fresh frame and write it to ``dest``. Returns False on a read
-        failure (caller should reconnect) — never raises for a dropped frame."""
+        """Write the newest frame the reader has to ``dest``. Returns False when
+        the stream has dropped (caller should reconnect) — never raises."""
         if self._cap is None:
             self.open()
-        ok, frame = self._cap.read()
-        if not ok or frame is None:
+        with self._lock:
+            frame = self._latest if self._alive else None
+        if frame is None:
             return False
         cv2 = self._cv2mod()
         dest = Path(dest)
@@ -112,11 +173,19 @@ class StreamCapture:
         self.open()
 
     def release(self) -> None:
+        self._running = False
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=2.0)
+        self._thread = None
         if self._cap is not None:
             try:
                 self._cap.release()
             finally:
                 self._cap = None
+        with self._lock:
+            self._latest = None
+        self._alive = False
 
 
 def capture_frame(
