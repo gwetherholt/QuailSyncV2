@@ -234,27 +234,37 @@ pub(crate) async fn log_mortality(
     let new_count = current - body.count;
     let today = chrono::Local::now().date_naive();
 
-    if let Err(e) = conn.execute(
+    // The audit-log INSERT and the count (and possible 'Lost') UPDATEs are one
+    // transaction so the running headcount and its mortality log can't diverge.
+    let tx = match conn.unchecked_transaction() {
+        Ok(t) => t,
+        Err(e) => return db_error(e),
+    };
+    if let Err(e) = tx.execute(
         "INSERT INTO chick_mortality_log (group_id, count, reason, date) VALUES (?1, ?2, ?3, ?4)",
         params![id, body.count, body.reason, today.to_string()],
     ) {
         return db_error(e);
     }
-    if let Err(e) = conn.execute(
+    let log_id = tx.last_insert_rowid();
+    if let Err(e) = tx.execute(
         "UPDATE chick_groups SET current_count = ?1 WHERE id = ?2",
         params![new_count, id],
     ) {
         return db_error(e);
     }
     if new_count == 0 {
-        conn.execute(
+        if let Err(e) = tx.execute(
             "UPDATE chick_groups SET status = 'Lost' WHERE id = ?1",
             params![id],
-        )
-        .ok();
+        ) {
+            return db_error(e);
+        }
+    }
+    if let Err(e) = tx.commit() {
+        return db_error(e);
     }
 
-    let log_id = conn.last_insert_rowid();
     Json(ChickMortalityLog {
         id: log_id,
         group_id: id,
@@ -343,6 +353,15 @@ pub(crate) async fn graduate_chick_group(
     let generation: u32 = 1;
     let (mother_id, father_id): (Option<i64>, Option<i64>) = (None, None);
 
+    // One transaction for the whole batch: every bird's INSERT + lineage tags +
+    // genetic profile + weight row, plus the final flip of the group to
+    // Graduated. A mid-loop failure now rolls back all created birds so the
+    // group never ends up Graduated-with-partial-birds (or Active-with-birds).
+    let tx = match conn.unchecked_transaction() {
+        Ok(t) => t,
+        Err(e) => return db_error(e),
+    };
+
     let mut birds_created = Vec::new();
     for gb in &body.birds {
         // Re-tagging guard: tags reused from prior batches must lose their
@@ -350,9 +369,9 @@ pub(crate) async fn graduate_chick_group(
         // mid-batch and bricks the rest of the loop with a 500. Mirrors
         // the same guard in routes/birds.rs::create_bird.
         if let Some(ref tag) = gb.nfc_tag_id {
-            clear_nfc_tag_from_others(&conn, tag, None);
+            clear_nfc_tag_from_others(&tx, tag, None);
         }
-        if let Err(e) = conn.execute(
+        if let Err(e) = tx.execute(
             "INSERT INTO birds (band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, current_brooder_id, photo_path, housing_id, chick_group_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'Active', ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
@@ -367,10 +386,10 @@ pub(crate) async fn graduate_chick_group(
         ) {
             return db_error(e);
         }
-        let bird_id = conn.last_insert_rowid();
+        let bird_id = tx.last_insert_rowid();
 
         // Inherit the parent group's lineages
-        if let Err(e) = replace_bird_lineages(&conn, bird_id, &group_lineage_ids) {
+        if let Err(e) = replace_bird_lineages(&tx, bird_id, &group_lineage_ids) {
             return db_error(e);
         }
 
@@ -378,11 +397,11 @@ pub(crate) async fn graduate_chick_group(
         // frozen group snapshot (floored + renormalized). Falls back to the
         // clutch's single lineage, then to the group's own lineage tags, at
         // 100% on both sides when no snapshot exists.
-        crate::genetics::populate_bird_profile(&conn, bird_id, group.clutch_id, &group_lineage_ids);
+        crate::genetics::populate_bird_profile(&tx, bird_id, group.clutch_id, &group_lineage_ids);
 
         // Persist initial weight to weight_records so it shows in growth history.
         if let Some(grams) = gb.weight_grams {
-            if let Err(e) = conn.execute(
+            if let Err(e) = tx.execute(
                 "INSERT INTO weight_records (bird_id, weight_grams, date, notes) VALUES (?1, ?2, ?3, ?4)",
                 params![bird_id, grams, group.hatch_date.to_string(), Option::<&str>::None],
             ) {
@@ -410,7 +429,7 @@ pub(crate) async fn graduate_chick_group(
             genetic_profile: Default::default(),
             confidence: 0.0,
         };
-        hydrate_bird(&conn, &mut bird);
+        hydrate_bird(&tx, &mut bird);
         birds_created.push(bird);
     }
 
@@ -418,11 +437,15 @@ pub(crate) async fn graduate_chick_group(
     // now lives. Doing both in one statement keeps the group row consistent —
     // it must never be Active with a housing_id, or Graduated without bird
     // back-links if target_housing_id was supplied.
-    conn.execute(
+    if let Err(e) = tx.execute(
         "UPDATE chick_groups SET status = 'Graduated', housing_id = COALESCE(?1, housing_id) WHERE id = ?2",
         params![body.target_housing_id, id],
-    )
-    .ok();
+    ) {
+        return db_error(e);
+    }
+    if let Err(e) = tx.commit() {
+        return db_error(e);
+    }
 
     Json(birds_created).into_response()
 }

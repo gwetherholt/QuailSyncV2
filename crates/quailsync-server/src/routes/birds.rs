@@ -237,61 +237,66 @@ pub(crate) async fn delete_bird(
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
-    // Cascade-delete related records (section 8)
-    conn.execute("DELETE FROM weight_records WHERE bird_id = ?1", params![id])
-        .ok();
+    // Cascade-delete related records in one transaction (section 8). Previously
+    // each child delete used a swallowed `.ok()` and the bird delete an
+    // `unwrap_or(0)`, so a failure on the final delete left the children gone
+    // but the bird row (or vice-versa). Now any step failing rolls the whole
+    // cascade back.
+    let tx = match conn.unchecked_transaction() {
+        Ok(t) => t,
+        Err(e) => return db_error(e),
+    };
+    if let Err(e) = tx.execute("DELETE FROM weight_records WHERE bird_id = ?1", params![id]) {
+        return db_error(e);
+    }
     // If this bird was a female member, remove her membership row.
-    conn.execute(
+    if let Err(e) = tx.execute(
         "DELETE FROM breeding_group_members WHERE female_id = ?1",
         params![id],
-    )
-    .ok();
+    ) {
+        return db_error(e);
+    }
     // If this bird was a male, capture which groups he belonged to, drop him
-    // from the junction, then mark any now-male-less group 'infertile'. The
-    // group is NOT dissolved and the females stay assigned — the group
-    // represents birds cohabiting a hutch, which doesn't change when a male
-    // dies/leaves.
+    // from the junction, then mark any now-male-less group 'infertile' via the
+    // shared transition. The group is NOT dissolved and the females stay
+    // assigned — the group represents birds cohabiting a hutch, which doesn't
+    // change when a male dies/leaves.
     let affected_groups: Vec<i64> = {
-        let mut stmt = conn
+        let mut stmt = tx
             .prepare("SELECT group_id FROM breeding_group_males WHERE male_id = ?1")
             .expect("prepare failed");
         stmt.query_map(params![id], |row| row.get::<_, i64>(0))
             .map(|rows| rows.filter_map(|r| r.ok()).collect())
             .unwrap_or_default()
     };
-    conn.execute(
+    if let Err(e) = tx.execute(
         "DELETE FROM breeding_group_males WHERE male_id = ?1",
         params![id],
-    )
-    .ok();
+    ) {
+        return db_error(e);
+    }
     for gid in affected_groups {
-        let remaining: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM breeding_group_males WHERE group_id = ?1",
-                params![gid],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        if remaining == 0 {
-            conn.execute(
-                "UPDATE breeding_groups SET status = 'infertile' WHERE id = ?1",
-                params![gid],
-            )
-            .ok();
+        if let Err(e) = crate::routes::breeding::mark_group_infertile_if_no_males(&tx, gid) {
+            return db_error(e);
         }
     }
-    conn.execute(
+    if let Err(e) = tx.execute(
         "DELETE FROM processing_records WHERE bird_id = ?1",
         params![id],
-    )
-    .ok();
-    let affected = conn
-        .execute("DELETE FROM birds WHERE id = ?1", params![id])
-        .unwrap_or(0);
+    ) {
+        return db_error(e);
+    }
+    let affected = match tx.execute("DELETE FROM birds WHERE id = ?1", params![id]) {
+        Ok(n) => n,
+        Err(e) => return db_error(e),
+    };
+    if let Err(e) = tx.commit() {
+        return db_error(e);
+    }
     if affected > 0 {
-        StatusCode::NO_CONTENT
+        StatusCode::NO_CONTENT.into_response()
     } else {
-        StatusCode::NOT_FOUND
+        StatusCode::NOT_FOUND.into_response()
     }
 }
 

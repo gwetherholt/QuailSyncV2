@@ -35,6 +35,30 @@ fn read_group_female_ids(conn: &rusqlite::Connection, group_id: i64) -> Vec<i64>
         .collect()
 }
 
+/// Set a breeding group to `infertile` when it has no males left; a group that
+/// still has males is left untouched (it was already `active`). This is the
+/// single definition of the "last male gone ⇒ infertile" transition, shared by
+/// `delete_bird` (a male bird removed) and `update_breeding_group` (the male set
+/// cleared to zero). Runs on the caller's connection/transaction and never opens
+/// its own — safe to call inside a caller-owned transaction.
+pub(crate) fn mark_group_infertile_if_no_males(
+    conn: &rusqlite::Connection,
+    group_id: i64,
+) -> rusqlite::Result<()> {
+    let male_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM breeding_group_males WHERE group_id = ?1",
+        params![group_id],
+        |row| row.get(0),
+    )?;
+    if male_count == 0 {
+        conn.execute(
+            "UPDATE breeding_groups SET status = 'infertile' WHERE id = ?1",
+            params![group_id],
+        )?;
+    }
+    Ok(())
+}
+
 pub(crate) async fn create_breeding_group(
     State(state): State<AppState>,
     Json(body): Json<CreateBreedingGroup>,
@@ -59,17 +83,25 @@ pub(crate) async fn create_breeding_group(
     };
 
     let conn = acquire_db(&state);
+    // All of the group's writes go in one transaction so a mid-sequence failure
+    // rolls back instead of persisting a half-populated group. Writers are
+    // already serialized by the single-connection design; unchecked_transaction()
+    // works on the shared &Connection.
+    let tx = match conn.unchecked_transaction() {
+        Ok(t) => t,
+        Err(e) => return db_error(e),
+    };
     // A new group always has at least one male (checked above) → 'active'.
-    if let Err(e) = conn.execute(
+    if let Err(e) = tx.execute(
         "INSERT INTO breeding_groups (name, start_date, notes, status) VALUES (?1, ?2, ?3, 'active')",
         params![body.name, body.start_date.to_string(), body.notes],
     ) {
         return db_error(e);
     }
-    let id = conn.last_insert_rowid();
+    let id = tx.last_insert_rowid();
 
     for m in &males {
-        if let Err(e) = conn.execute(
+        if let Err(e) = tx.execute(
             "INSERT INTO breeding_group_males (group_id, male_id) VALUES (?1, ?2)",
             params![id, m],
         ) {
@@ -80,18 +112,22 @@ pub(crate) async fn create_breeding_group(
     for fid in &body.female_ids {
         // A female belongs to at most one group. Adding her here transfers
         // her out of any prior group (the female picker stages this move).
-        if let Err(e) = conn.execute(
+        if let Err(e) = tx.execute(
             "DELETE FROM breeding_group_members WHERE female_id = ?1",
             params![fid],
         ) {
             return db_error(e);
         }
-        if let Err(e) = conn.execute(
+        if let Err(e) = tx.execute(
             "INSERT INTO breeding_group_members (group_id, female_id) VALUES (?1, ?2)",
             params![id, fid],
         ) {
             return db_error(e);
         }
+    }
+
+    if let Err(e) = tx.commit() {
+        return db_error(e);
     }
 
     #[derive(Serialize)]
@@ -227,8 +263,16 @@ pub(crate) async fn update_breeding_group(
             .into_response();
     }
 
+    // All updates run in one transaction: a failure part-way — e.g. after the
+    // destructive DELETE of the male junction but before the re-INSERTs — rolls
+    // back instead of leaving the group with a torn membership set.
+    let tx = match conn.unchecked_transaction() {
+        Ok(t) => t,
+        Err(e) => return db_error(e),
+    };
+
     if let Some(name) = &body.name {
-        if let Err(e) = conn.execute(
+        if let Err(e) = tx.execute(
             "UPDATE breeding_groups SET name = ?1 WHERE id = ?2",
             params![name, id],
         ) {
@@ -236,7 +280,7 @@ pub(crate) async fn update_breeding_group(
         }
     }
     if let Some(notes) = &body.notes {
-        if let Err(e) = conn.execute(
+        if let Err(e) = tx.execute(
             "UPDATE breeding_groups SET notes = ?1 WHERE id = ?2",
             params![notes, id],
         ) {
@@ -244,35 +288,31 @@ pub(crate) async fn update_breeding_group(
         }
     }
 
-    // Replace males if supplied. A non-empty male set means the group is
-    // fertile again, so flip status back to 'active' (covers re-adding a male
-    // to a previously infertile group).
+    // Replace males if supplied. A non-empty set re-activates the group (covers
+    // re-adding a male to a previously infertile group); an empty set is allowed
+    // and drives the group to `infertile` via the shared transition — the same
+    // rule delete_bird applies when the last male leaves. Females stay assigned
+    // because a group is just birds cohabiting a hutch.
     if let Some(males) = body.males() {
-        if males.is_empty() {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": "missing_male",
-                    "message": "A breeding group needs at least one male.",
-                })),
-            )
-                .into_response();
-        }
-        if let Err(e) = conn.execute(
+        if let Err(e) = tx.execute(
             "DELETE FROM breeding_group_males WHERE group_id = ?1",
             params![id],
         ) {
             return db_error(e);
         }
         for m in &males {
-            if let Err(e) = conn.execute(
+            if let Err(e) = tx.execute(
                 "INSERT INTO breeding_group_males (group_id, male_id) VALUES (?1, ?2)",
                 params![id, m],
             ) {
                 return db_error(e);
             }
         }
-        if let Err(e) = conn.execute(
+        if males.is_empty() {
+            if let Err(e) = mark_group_infertile_if_no_males(&tx, id) {
+                return db_error(e);
+            }
+        } else if let Err(e) = tx.execute(
             "UPDATE breeding_groups SET status = 'active' WHERE id = ?1",
             params![id],
         ) {
@@ -282,26 +322,30 @@ pub(crate) async fn update_breeding_group(
 
     // Replace females if supplied (transfer out of any other group).
     if let Some(females) = &body.female_ids {
-        if let Err(e) = conn.execute(
+        if let Err(e) = tx.execute(
             "DELETE FROM breeding_group_members WHERE group_id = ?1",
             params![id],
         ) {
             return db_error(e);
         }
         for fid in females {
-            if let Err(e) = conn.execute(
+            if let Err(e) = tx.execute(
                 "DELETE FROM breeding_group_members WHERE female_id = ?1",
                 params![fid],
             ) {
                 return db_error(e);
             }
-            if let Err(e) = conn.execute(
+            if let Err(e) = tx.execute(
                 "INSERT INTO breeding_group_members (group_id, female_id) VALUES (?1, ?2)",
                 params![id, fid],
             ) {
                 return db_error(e);
             }
         }
+    }
+
+    if let Err(e) = tx.commit() {
+        return db_error(e);
     }
 
     // Re-read the resulting group for the response.

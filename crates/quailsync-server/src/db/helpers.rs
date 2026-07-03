@@ -329,8 +329,13 @@ pub fn populate_bird_lineages(conn: &Connection, birds: &mut [Bird]) {
     }
 }
 
-/// Replace a chick group's lineage set atomically. Returns Err on any DB error
-/// or if the group does not exist. Validates non-empty input at the call site.
+/// Replace a chick group's lineage set (DELETE then re-INSERT), propagating any
+/// DB error. Runs on the caller's connection: pass a `&Transaction` (e.g. from
+/// `unchecked_transaction()`) for the replace to be atomic — on a bare
+/// `&Connection` each statement autocommits and a mid-loop failure truncates the
+/// set. It never opens its own transaction, so it is safe to call from inside a
+/// caller-owned one (`unchecked_transaction()` does not nest). Validates
+/// non-empty input at the call site.
 pub fn replace_chick_group_lineages(
     conn: &Connection,
     group_id: i64,
@@ -349,7 +354,11 @@ pub fn replace_chick_group_lineages(
     Ok(())
 }
 
-/// Replace a bird's lineage set atomically.
+/// Replace a bird's lineage set (DELETE then re-INSERT), propagating any DB
+/// error. Runs on the caller's connection: pass a `&Transaction` for the replace
+/// to be atomic (a bare `&Connection` autocommits each statement). Never opens
+/// its own transaction, so it is safe inside a caller-owned one — `graduate_
+/// chick_group` calls it with its batch transaction.
 pub fn replace_bird_lineages(
     conn: &Connection,
     bird_id: i64,
