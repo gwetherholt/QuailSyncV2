@@ -8,8 +8,10 @@ __pycache__/
 training/
 *.pt
 
-# Runtime data + SQLite sidecars + Pi-agent crash dumps
-data/
+# Runtime data + SQLite sidecars + Pi-agent crash dumps. Anchored (/data/, not
+# `data/`) so it ignores only the repo-root dir, never a source package named
+# `data` elsewhere (e.g. the Android app's com.quailsync.app.data).
+/data/
 pi-agent/core.*
 *.db-journal
 *.db-wal
