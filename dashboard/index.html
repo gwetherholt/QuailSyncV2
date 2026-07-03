@@ -833,6 +833,95 @@
     return '<a class="bird-link" onclick="Router.navigate(\'#/flock/bird/'+id+'\')">'+(text||'#'+id)+'</a>';
   }
 
+  /* =========================================================
+     Genetics UI (Phase 6): consistent lineage colors, profile
+     bars, confidence meters, risk pills, new-blood banner.
+     ========================================================= */
+  // Color a lineage consistently by its ID (not array position), so the same
+  // lineage shows the same swatch everywhere — profiles, clutch bars, pairings.
+  function lineageColorById(id){
+    var n = BLOODLINE_COLORS.length;
+    return BLOODLINE_COLORS[(((id || 0) % n) + n) % n];
+  }
+
+  // Cached genetics settings (display_cap + risk thresholds). Load once per page.
+  var Genetics = {
+    _s: null,
+    load: async function(){ if(!this._s){ this._s = (await API.get('/api/settings/genetics')) || {}; } return this._s; },
+    cap: function(){ return parseInt((this._s && this._s['genetics.display_cap']) || '4', 10) || 4; },
+    safe: function(){ return parseInt((this._s && this._s['genetics.threshold.safe']) || '15', 10); },
+    avoid: function(){ return parseInt((this._s && this._s['genetics.threshold.avoid']) || '35', 10); },
+  };
+
+  // Split a distribution into the top `cap` shown + a combined "trace" remainder.
+  function _capDist(dist, cap){
+    var sorted = (dist || []).slice().sort(function(a,b){ return b.probability - a.probability; });
+    return { shown: sorted.slice(0, cap), trace: sorted.slice(cap).reduce(function(s,x){ return s + x.probability; }, 0) };
+  }
+
+  // Horizontal stacked distribution bar. dist = [{lineage_id,lineage_name,probability}].
+  function distributionBar(dist, cap, height){
+    height = height || 22;
+    if(!dist || !dist.length){
+      return '<div style="height:'+height+'px;border-radius:6px;background:#f0ece4;display:flex;align-items:center;justify-content:center;font-size:.72rem;color:#999">No profile</div>';
+    }
+    var c = _capDist(dist, cap || 4);
+    var html = '<div style="display:flex;height:'+height+'px;border-radius:6px;overflow:hidden;border:1px solid #e5e0d8">';
+    c.shown.forEach(function(x){
+      var pct = x.probability * 100;
+      html += '<div title="'+escapeHtml(x.lineage_name || ('#'+x.lineage_id))+' '+pct.toFixed(1)+'%" style="width:'+pct+'%;background:'+lineageColorById(x.lineage_id)+';display:flex;align-items:center;justify-content:center;color:#4a453d;font-size:.68rem;font-weight:700">'+(pct >= 14 ? Math.round(pct)+'%' : '')+'</div>';
+    });
+    if(c.trace > 0.0001){
+      var tp = c.trace * 100;
+      html += '<div title="Trace '+tp.toFixed(1)+'%" style="width:'+tp+'%;background:#cfcabf;display:flex;align-items:center;justify-content:center;color:#555;font-size:.68rem">'+(tp >= 14 ? Math.round(tp)+'%' : '')+'</div>';
+    }
+    return html + '</div>';
+  }
+
+  function distributionLegend(dist, cap){
+    if(!dist || !dist.length) return '';
+    var c = _capDist(dist, cap || 4);
+    function chip(color, label){
+      return '<span style="display:inline-flex;align-items:center;gap:.3rem;font-size:.75rem;margin:.15rem .7rem .15rem 0"><span style="width:.7rem;height:.7rem;border-radius:2px;background:'+color+'"></span>'+label+'</span>';
+    }
+    var items = c.shown.map(function(x){ return chip(lineageColorById(x.lineage_id), escapeHtml(x.lineage_name || ('#'+x.lineage_id))+' '+Math.round(x.probability*100)+'%'); });
+    if(c.trace > 0.0001){ items.push(chip('#cfcabf', 'Trace '+Math.round(c.trace*100)+'%')); }
+    return '<div style="margin-top:.35rem">'+items.join('')+'</div>';
+  }
+
+  // Confidence meter (conf in 0..1). Green >70%, amber 50-70%, red <50%.
+  function confidenceMeter(conf, minWidth){
+    var pct = Math.round((conf || 0) * 100);
+    var color = conf > 0.7 ? '#5B8A5B' : (conf >= 0.5 ? '#D9A441' : '#C56B6B');
+    return '<div style="display:flex;align-items:center;gap:.5rem">'+
+      '<div style="flex:1;min-width:'+(minWidth || '60px')+';height:8px;border-radius:4px;background:#eee;overflow:hidden">'+
+      '<div style="width:'+pct+'%;height:100%;background:'+color+'"></div></div>'+
+      '<span style="font-size:.72rem;color:#666;min-width:2.4rem;text-align:right">'+pct+'%</span></div>';
+  }
+
+  function genBadge(gen){
+    return '<span style="display:inline-block;padding:.1rem .45rem;border-radius:10px;background:#EFEAE1;color:#6b6256;font-size:.7rem;font-weight:600;white-space:nowrap">Gen '+(gen == null ? '?' : gen)+'</span>';
+  }
+
+  function riskPill(level, pct){
+    var map = {safe:['#E3F0E3','#2E7D32'], caution:['#FBF0D9','#9A7B10'], avoid:['#F7E0E0','#C0392B']};
+    var c = map[level] || map.caution;
+    return '<span style="display:inline-block;padding:.15rem .55rem;border-radius:10px;background:'+c[0]+';color:'+c[1]+';font-size:.72rem;font-weight:700;text-transform:uppercase">'+escapeHtml(level || '')+' '+pct+'%</span>';
+  }
+
+  // New-blood alert banner from the diversity endpoint; '' when not needed.
+  // Red when best_pairing_risk exceeds the avoid threshold, amber otherwise.
+  function newBloodBanner(div){
+    if(!div || !div.needs_new_blood) return '';
+    var red = div.best_pairing_risk > (Genetics.avoid() / 100);
+    var bg = red ? '#F7E0E0' : '#FBF0D9', bd = red ? '#C0392B' : '#B8860B', fg = red ? '#8B2A1E' : '#7A5D0A';
+    var msg = red
+      ? 'No safe pairings available. Introduce a new lineage before breeding further.'
+      : 'Genetic diversity is narrowing — consider introducing new blood in the next 1-2 generations.';
+    return '<div style="background:'+bg+';border-left:4px solid '+bd+';color:'+fg+';padding:.8rem 1rem;border-radius:8px;margin-bottom:1rem;font-size:.9rem">'+
+      '<strong>&#x1F9EC; '+(red ? 'Action needed' : 'Heads up')+':</strong> '+msg+'</div>';
+  }
+
   // --- Govee sensor freshness helpers -------------------------------------
   // A sensor is "stale" (warning) if we haven't heard from it in over 10 min.
   // Server timestamps are UTC; both "YYYY-MM-DD HH:MM:SS" (no tz) and ISO-with-Z
@@ -1089,6 +1178,7 @@
   Page.Dashboard = {
     render: function(app){
       app.innerHTML = '<div class="dash-grid">' +
+        '<div id="d-newblood" style="grid-column:1/-1"></div>' +
         '<div class="panel" style="grid-column:1/-1"><div class="panel-body" id="d-brooder">'+loadingHTML()+'</div></div>' +
         '<div class="panel" style="grid-column:1/-1"><div class="panel-header"><span class="panel-header-left">&#x1F4F7; Indoor Camera</span></div><div class="panel-body" id="d-indoorcam">'+loadingHTML()+'</div></div>' +
         '<div class="panel" style="grid-column:1/-1"><div class="panel-header"><span class="panel-header-left">&#x1F4F8; Trail Cam Analytics</span><span style="font-size:.7rem;color:#999">last 7 days</span></div><div class="panel-body" id="d-trailcam">'+loadingHTML()+'</div></div>' +
@@ -1100,6 +1190,8 @@
       '</div>';
     },
     start: function(){
+      var d = this;
+      setTimeout(function(){ d._pollDiversity(); }, 500);
       addInterval(this._pollBrooder, 30000);
       addInterval(this._pollAlerts, 30000);
       // Delay headcount poll so brooder cards are rendered first
@@ -1128,6 +1220,14 @@
 
     // Sparkline temp cache: { brooderId: [temps...] } — seeded by _pollBrooder, appended by live WS
     _sparkCache: {},
+
+    // Optional flock-wide new-blood banner (Phase 6).
+    _pollDiversity: async function(){
+      await Genetics.load();
+      var d = await API.get('/api/breeding/diversity');
+      var el = document.getElementById('d-newblood');
+      if(el) el.innerHTML = newBloodBanner(d);
+    },
 
     _buildSparkBars: function(temps, maxBars, barHeight){
       var pts = temps.slice(-maxBars);
@@ -2275,8 +2375,8 @@
         '<div class="page-top"><div class="page-title">&#x1F426; Flock</div><button class="btn-primary" onclick="Page.Flock.openModal()">+ Add Bird</button></div>' +
         '<div class="filter-bar" id="flock-filters"></div>' +
         '<div class="table-wrap"><table class="data-table"><thead><tr>' +
-        '<th>ID</th><th>Band</th><th>Sex</th><th>Lineage</th><th>Hatch</th><th>Gen</th><th>Status</th><th>Parents</th>' +
-        '</tr></thead><tbody id="flock-tbody"><tr><td colspan="8">'+loadingHTML()+'</td></tr></tbody></table></div>';
+        '<th>ID</th><th>Band</th><th>Sex</th><th>Lineage</th><th>Hatch</th><th>Gen</th><th>Conf.</th><th>Status</th><th>Parents</th>' +
+        '</tr></thead><tbody id="flock-tbody"><tr><td colspan="9">'+loadingHTML()+'</td></tr></tbody></table></div>';
     },
     start: function(){
       this.filter = 'all';
@@ -2335,7 +2435,7 @@
       });
 
       if(filtered.length===0){
-        tbody.innerHTML='<tr><td colspan="8">'+emptyState('&#x1F426;','No birds found','+ Add Bird','Page.Flock.openModal()')+'</td></tr>';
+        tbody.innerHTML='<tr><td colspan="9">'+emptyState('&#x1F426;','No birds found','+ Add Bird','Page.Flock.openModal()')+'</td></tr>';
         return;
       }
 
@@ -2351,7 +2451,7 @@
         var statusCls = b.status.toLowerCase();
         var statusHtml = '<span class="status-badge '+statusCls+'">'+escapeHtml(b.status)+'</span>';
 
-        html+='<tr onclick="Router.navigate(\'#/flock/bird/'+b.id+'\')" style="cursor:pointer"><td>'+birdLink(b.id)+'</td><td>'+bandHtml+'</td><td>'+escapeHtml(b.sex)+'</td><td>'+blName+'</td><td>'+escapeHtml(b.hatch_date)+'</td><td>'+b.generation+'</td><td>'+statusHtml+'</td><td>'+parents+'</td></tr>';
+        html+='<tr onclick="Router.navigate(\'#/flock/bird/'+b.id+'\')" style="cursor:pointer"><td>'+birdLink(b.id)+'</td><td>'+bandHtml+'</td><td>'+escapeHtml(b.sex)+'</td><td>'+blName+'</td><td>'+escapeHtml(b.hatch_date)+'</td><td>'+genBadge(b.generation)+'</td><td style="min-width:80px">'+confidenceMeter(b.confidence,'45px')+'</td><td>'+statusHtml+'</td><td>'+parents+'</td></tr>';
       });
       tbody.innerHTML = html;
     },
@@ -2438,6 +2538,7 @@
       if(bl) _lineages = bl;
       var birds = await API.get('/api/birds');
       if(birds) _birds = birds;
+      await Genetics.load();
       this._bird = findBird(this._birdId);
       var weights = await API.get('/api/birds/'+this._birdId+'/weights');
       this._weights = weights || [];
@@ -2479,6 +2580,19 @@
       html += '<dt>Father</dt><dd>'+(b.father_id ? birdLink(b.father_id) : 'Unknown')+'</dd>';
       if(b.nfc_tag_id) html += '<dt>NFC Tag</dt><dd>'+escapeHtml(b.nfc_tag_id)+'</dd>';
       html += '</dl>';
+      html += '</div></div>';
+
+      // Genetic profile (Phase 6): stacked paternal/maternal bars + confidence.
+      var gp = b.genetic_profile || {paternal:[],maternal:[]};
+      var cap = Genetics.cap();
+      var subtitle = b.generation === 0
+        ? 'Source bird — lineage certain'
+        : 'Mother unknown — derived from group composition at collection';
+      html += '<div class="panel" style="margin-bottom:1.25rem"><div class="panel-header"><span class="panel-header-left">&#x1F9EC; Genetic Profile</span></div><div class="panel-body">';
+      html += '<div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.6rem">'+genBadge(b.generation)+'<span style="color:#777;font-size:.82rem">'+subtitle+'</span></div>';
+      html += '<div style="max-width:22rem;margin-bottom:.7rem"><div style="font-size:.78rem;color:#666;margin-bottom:.2rem">Confidence</div>'+confidenceMeter(b.confidence)+'</div>';
+      html += '<div style="margin-top:.6rem"><div style="font-size:.8rem;font-weight:600;margin-bottom:.25rem">Paternal side</div>'+distributionBar(gp.paternal, cap)+distributionLegend(gp.paternal, cap)+'</div>';
+      html += '<div style="margin-top:.8rem"><div style="font-size:.8rem;font-weight:600;margin-bottom:.25rem">Maternal side</div>'+distributionBar(gp.maternal, cap)+distributionLegend(gp.maternal, cap)+'</div>';
       html += '</div></div>';
 
       // Two-column detail grid
@@ -2725,6 +2839,7 @@
   Page.Clutches = {
     _clutches: [],
     _groups: [],
+    _snapshots: {},
     render: function(app){
       app.innerHTML =
         '<div class="page-top"><div class="page-title">&#x1F95A; Clutches</div><button class="btn-primary" onclick="Page.Clutches.openModal()">+ Add Clutch</button></div>' +
@@ -2743,6 +2858,16 @@
       if(groups) this._groups = groups;
       var data = await API.get('/api/clutches');
       if(data) this._clutches = data;
+      await Genetics.load();
+      // Fetch the frozen snapshot (maternal distribution) for clutches linked to
+      // a breeding group, so cards can show the maternal lineage bar.
+      this._snapshots = {};
+      var grouped = this._clutches.filter(function(c){ return c.breeding_group_id; });
+      for(var i=0;i<grouped.length;i++){
+        var detail = await API.get('/api/clutches/'+grouped[i].id);
+        var mat = detail && detail.snapshot ? detail.snapshot.maternal_distribution : null;
+        if(mat && mat.length){ this._snapshots[grouped[i].id] = mat; }
+      }
       this._renderTimeline();
       this._renderList();
     },
@@ -2859,6 +2984,11 @@
         html += '<h4>Clutch #'+c.id+(blName ? ' &mdash; '+escapeHtml(blName) : '')+'</h4>';
         if(c.breeding_group_name){
           html += '<div style="font-size:.78rem;color:var(--sage-dark);margin:-.2rem 0 .35rem">Group: '+escapeHtml(c.breeding_group_name)+'</div>';
+        }
+        // Maternal lineage distribution from the frozen group snapshot (Phase 6).
+        var matDist = Page.Clutches._snapshots[c.id];
+        if(matDist){
+          html += '<div style="margin:.1rem 0 .45rem"><div style="font-size:.7rem;color:#999;margin-bottom:.15rem">Maternal lineage</div>'+distributionBar(matDist, Genetics.cap(), 16)+distributionLegend(matDist, Genetics.cap())+'</div>';
         }
 
         // Egg counts
@@ -3049,7 +3179,8 @@
       var today = new Date().toISOString().split('T')[0];
       var html = '<div class="modal-overlay" id="clutch-modal-overlay" onclick="if(event.target===this)Page.Clutches.closeModal()">' +
         '<div class="modal"><h3>Add Clutch</h3>' +
-        '<label>Breeding Group</label><select id="mc-group">'+grpOpts+'</select>' +
+        '<label>Breeding Group</label><select id="mc-group" onchange="Page.Clutches.checkGroupLineage()">'+grpOpts+'</select>' +
+        '<div id="mc-lineage-warn"></div>' +
         '<label>Lineage</label><select id="mc-lineage">'+blOpts+'</select>' +
         '<label>Eggs Set</label><input id="mc-eggs" type="number" min="1" value="12">' +
         '<label>Set Date</label><input id="mc-date" type="date" value="'+today+'">' +
@@ -3061,6 +3192,29 @@
     closeModal: function(){
       var ov = document.getElementById('clutch-modal-overlay');
       if(ov) ov.remove();
+    },
+    // Warn when the chosen breeding group is single-lineage — chicks from it
+    // will be 100% that lineage and inbred against other same-lineage birds.
+    checkGroupLineage: function(){
+      var warnEl = document.getElementById('mc-lineage-warn');
+      if(!warnEl) return;
+      warnEl.innerHTML = '';
+      var gid = parseInt(document.getElementById('mc-group').value);
+      if(!gid) return;
+      var group = this._groups.find(function(g){ return g.id === gid; });
+      if(!group) return;
+      var ids = (group.male_ids || []).concat(group.female_ids || []);
+      if(ids.length === 0) return;
+      var union = {}, missing = false;
+      ids.forEach(function(id){
+        var b = findBird(id);
+        if(!b || !b.lineages || !b.lineages.length){ missing = true; return; }
+        b.lineages.forEach(function(l){ union[l.id] = l.name; });
+      });
+      var keys = Object.keys(union);
+      if(keys.length === 1 && !missing){
+        warnEl.innerHTML = '<div style="background:#FBF0D9;border-left:4px solid #B8860B;color:#7A5D0A;padding:.5rem .7rem;border-radius:6px;font-size:.82rem;margin:.3rem 0 .1rem">&#x26A0; Same-lineage group — chicks will have 100% overlap with other '+escapeHtml(union[keys[0]])+' birds.</div>';
+      }
     },
     submitClutch: async function(){
       var group = document.getElementById('mc-group').value;
@@ -3091,6 +3245,7 @@
     _tab: 'groups',
     _groups: [],
     _suggestions: [],
+    _diversity: null,
     render: function(app){
       app.innerHTML =
         '<div class="page-top"><div class="page-title">&#x1F48D; Breeding</div></div>' +
@@ -3111,8 +3266,10 @@
       if(bl) _lineages = bl;
       var birds = await API.get('/api/birds');
       if(birds) _birds = birds;
+      await Genetics.load();
       this._groups = await API.get('/api/breeding-groups') || [];
       this._suggestions = await API.get('/api/breeding/suggest') || [];
+      this._diversity = await API.get('/api/breeding/diversity');
       this._renderContent();
     },
     switchTab: function(tab){
@@ -3191,55 +3348,46 @@
       el.innerHTML = html;
     },
     _renderSuggestions: function(el){
-      if(this._suggestions.length === 0){
-        el.innerHTML = emptyState('&#x1F48D;','Need at least 1 male and 1 female for pairing suggestions','','');
+      var html = '';
+      // Flock diversity summary + new-blood banner (Phase 6).
+      var d = this._diversity;
+      if(d){
+        html += newBloodBanner(d);
+        function stat(label, value){
+          return '<div><div style="font-size:.7rem;color:#999;text-transform:uppercase;letter-spacing:.03em">'+label+'</div><div style="font-weight:700;font-size:1.05rem">'+value+'</div></div>';
+        }
+        html += '<div class="panel" style="margin-bottom:1rem"><div class="panel-body" style="display:flex;flex-wrap:wrap;gap:1.75rem">' +
+          stat('Flock confidence', Math.round(d.flock_confidence*100)+'%') +
+          stat('Active lineages', d.active_lineage_count) +
+          stat('Best pairing risk', Math.round(d.best_pairing_risk*100)+'%') +
+          stat('New blood', d.needs_new_blood ? 'Needed' : 'OK') +
+          '</div></div>';
+      }
+
+      if(!this._suggestions.length){
+        html += emptyState('&#x1F48D;','Need at least 1 male and 1 female for pairing suggestions','','');
+        el.innerHTML = html;
         return;
       }
-      var safest = this._suggestions.filter(function(p){return p.safe}).slice(0,10);
-      var risky = this._suggestions.filter(function(p){return !p.safe}).slice(0,5);
-      var html = '';
 
-      if(safest.length > 0){
-        html += '<div style="font-size:.78rem;color:#999;margin-bottom:.4rem;text-transform:uppercase;letter-spacing:.04em;font-weight:600">Safe Pairings</div>';
-        safest.forEach(function(p){
-          var mBird = findBird(p.male_id);
-          var fBird = findBird(p.female_id);
-          html += '<div class="pair-row safe-pair">';
-          html += '<div class="pair-info">';
-          if(mBird) html += bandDot(mBird.band_color, 12)+' ';
-          html += birdLink(p.male_id, 'Male #'+p.male_id);
-          if(mBird) html += ' <span style="font-size:.75rem;color:#888">'+formatLineages(mBird.lineages)+'</span>';
-          html += ' &times; ';
-          if(fBird) html += bandDot(fBird.band_color, 12)+' ';
-          html += birdLink(p.female_id, 'Female #'+p.female_id);
-          if(fBird) html += ' <span style="font-size:.75rem;color:#888">'+formatLineages(fBird.lineages)+'</span>';
-          html += '</div>';
-          html += '<span class="coeff safe">'+p.coefficient.toFixed(3)+'</span>';
-          html += '</div>';
-        });
-      }
-
-      if(risky.length > 0){
-        html += '<div style="font-size:.78rem;color:#999;margin:.8rem 0 .4rem;text-transform:uppercase;letter-spacing:.04em;font-weight:600">Risky Pairings</div>';
-        risky.forEach(function(p){
-          var mBird = findBird(p.male_id);
-          var fBird = findBird(p.female_id);
-          html += '<div class="pair-row risky-pair">';
-          html += '<div class="pair-info">';
-          if(mBird) html += bandDot(mBird.band_color, 12)+' ';
-          html += birdLink(p.male_id, 'Male #'+p.male_id);
-          if(mBird) html += ' <span style="font-size:.75rem;color:#888">'+formatLineages(mBird.lineages)+'</span>';
-          html += ' &times; ';
-          if(fBird) html += bandDot(fBird.band_color, 12)+' ';
-          html += birdLink(p.female_id, 'Female #'+p.female_id);
-          if(fBird) html += ' <span style="font-size:.75rem;color:#888">'+formatLineages(fBird.lineages)+'</span>';
-          html += '</div>';
-          html += '<span class="coeff risky">'+p.coefficient.toFixed(3)+'</span>';
-          html += '</div>';
-        });
-      }
-
-      if(!html) html = '<div class="no-data">No pair data available</div>';
+      // Pairings, lowest risk first (the API pre-sorts). Risk pill conveys band.
+      html += '<div style="font-size:.78rem;color:#999;margin-bottom:.4rem;text-transform:uppercase;letter-spacing:.04em;font-weight:600">Pairings (lowest risk first)</div>';
+      this._suggestions.forEach(function(p){
+        var mBird = findBird(p.bird_a_id);
+        var fBird = findBird(p.bird_b_id);
+        html += '<div class="pair-row">';
+        html += '<div class="pair-info">';
+        if(mBird) html += bandDot(mBird.band_color, 12)+' ';
+        html += birdLink(p.bird_a_id, 'Male #'+p.bird_a_id);
+        if(mBird) html += ' <span style="font-size:.75rem;color:#888">'+formatLineages(mBird.lineages)+'</span>';
+        html += ' &times; ';
+        if(fBird) html += bandDot(fBird.band_color, 12)+' ';
+        html += birdLink(p.bird_b_id, 'Female #'+p.bird_b_id);
+        if(fBird) html += ' <span style="font-size:.75rem;color:#888">'+formatLineages(fBird.lineages)+'</span>';
+        html += '</div>';
+        html += riskPill(p.risk_level, p.risk_percent);
+        html += '</div>';
+      });
       el.innerHTML = html;
     }
   };

@@ -189,6 +189,16 @@ pub fn pair_overlap(a: &GeneticProfile, b: &GeneticProfile) -> (f64, f64) {
     )
 }
 
+/// Normalize negative zero to positive zero so `-0.0` never reaches JSON (where
+/// it would serialize as the surprising `-0.0`). Non-zero values pass through.
+pub fn norm_zero(x: f64) -> f64 {
+    if x == 0.0 {
+        0.0
+    } else {
+        x
+    }
+}
+
 /// Risk band for an overlap value: `"safe"` (< `safe`), `"caution"`
 /// (`safe`..=`avoid`), `"avoid"` (> `avoid`). `safe`/`avoid` are fractions
 /// (e.g. `0.15`/`0.35`), read from settings per request in Phase 5.
@@ -510,6 +520,14 @@ mod tests {
         assert_eq!(risk_level(0.35, safe, avoid), "caution");
         assert_eq!(risk_level(0.3501, safe, avoid), "avoid");
         assert_eq!(risk_level(1.0, safe, avoid), "avoid");
+    }
+
+    #[test]
+    fn norm_zero_flips_negative_zero() {
+        assert!(norm_zero(-0.0).is_sign_positive());
+        assert!(norm_zero(0.0).is_sign_positive());
+        assert_eq!(norm_zero(0.302), 0.302);
+        assert_eq!(norm_zero(-0.302), -0.302);
     }
 
     #[test]

@@ -870,6 +870,15 @@ fun BirdCard(bird: Bird, lineageName: String?, modifier: Modifier = Modifier, on
                     if (bird.hatchDate != null) Text("Hatched ${bird.hatchDate}", style = MaterialTheme.typography.bodyMedium)
                     if (bird.latestWeight != null) Text("%.0fg".format(bird.latestWeight), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = SageGreen)
                 }
+                // Compact genetics indicators (Phase 6): gen badge + confidence.
+                // Full profile lives on the detail dialog.
+                Spacer(Modifier.height(6.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    GenBadge(bird.generation)
+                    if (bird.confidence != null) {
+                        ConfidenceMeter(bird.confidence, Modifier.weight(1f))
+                    }
+                }
             }
         }
     }
@@ -907,6 +916,10 @@ fun BirdDetailDialog(
     var fullScreenPhotoUrl by remember { mutableStateOf<String?>(null) }
     // Server base URL for turning the photos' relative `url` into absolute ones.
     val photoBaseUrl = remember { ServerConfig.getServerUrl(context).trimEnd('/') }
+    // Genetics display cap (top-N lineages) from settings; defaults to 4.
+    val geneticsApi = remember { QuailSyncApi.create(ServerConfig.getServerUrl(context)) }
+    var displayCap by remember { mutableIntStateOf(4) }
+    androidx.compose.runtime.LaunchedEffect(Unit) { displayCap = fetchDisplayCap(geneticsApi) }
 
     val photoLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview(),
@@ -994,6 +1007,45 @@ fun BirdDetailDialog(
                 if (bird.sireId != null) { item { DetailRow("Sire", "Bird #${bird.sireId}") } }
                 if (bird.damId != null) { item { DetailRow("Dam", "Bird #${bird.damId}") } }
                 if (bird.brooderId != null) { item { DetailRow("Brooder", "#${bird.brooderId}") } }
+
+                // Genetic profile (Phase 6): stacked paternal/maternal bars +
+                // confidence meter + generation badge.
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Genetic Profile", style = MaterialTheme.typography.titleMedium)
+                        GenBadge(bird.generation)
+                    }
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        if (bird.generation == 0) "Source bird — lineage certain"
+                        else "Mother unknown — derived from group composition at collection",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (bird.confidence != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("Confidence", style = MaterialTheme.typography.labelMedium)
+                        Spacer(Modifier.height(3.dp))
+                        ConfidenceMeter(bird.confidence)
+                    }
+                    bird.geneticProfile?.let { gp ->
+                        Spacer(Modifier.height(10.dp))
+                        Text("Paternal side", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(3.dp))
+                        DistributionBar(gp.paternal, cap = displayCap)
+                        Spacer(Modifier.height(3.dp))
+                        DistributionLegend(gp.paternal, cap = displayCap)
+                        Spacer(Modifier.height(10.dp))
+                        Text("Maternal side", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(3.dp))
+                        DistributionBar(gp.maternal, cap = displayCap)
+                        Spacer(Modifier.height(3.dp))
+                        DistributionLegend(gp.maternal, cap = displayCap)
+                    }
+                }
 
                 if (bird.notes != null) {
                     item {

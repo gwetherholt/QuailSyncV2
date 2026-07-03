@@ -77,8 +77,9 @@ import com.quailsync.app.data.Bird
 import com.quailsync.app.data.BreedingGroupDto
 import com.quailsync.app.data.CreateBreedingGroupRequest
 import com.quailsync.app.data.CullBatchRequest
+import com.quailsync.app.data.FlockDiversity
 import com.quailsync.app.data.InbreedingCheckResult
-import com.quailsync.app.data.InbreedingCoefficient
+import com.quailsync.app.data.PairingSuggestion
 import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.ServerConfig
 import com.quailsync.app.data.UpdateBreedingGroupRequest
@@ -115,11 +116,21 @@ class BreedingViewModel(application: Application) : AndroidViewModel(application
     private val _settings = MutableStateFlow(AppSettings(desiredMalesPerGroup = 1, maxFemalesPerMale = 5))
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
-    // Relatedness coefficient per (maleId, femaleId), reusing the server's
-    // compute_relatedness via /api/breeding/suggest. Powers the soft inbreeding
-    // warning in the create/edit dialog. Looked up locally — no per-pair calls.
+    // Pairing overlap risk per (maleId, femaleId) from /api/breeding/suggest
+    // (Phase 4). Stored as a fraction (riskPercent / 100); powers the soft
+    // lineage-overlap warning in the create/edit dialog. No per-pair calls.
     private val _relatedness = MutableStateFlow<Map<Pair<Int, Int>, Double>>(emptyMap())
     val relatedness: StateFlow<Map<Pair<Int, Int>, Double>> = _relatedness.asStateFlow()
+
+    // Full pairing list (lowest risk first) + flock diversity snapshot (Phase 6).
+    private val _suggestions = MutableStateFlow<List<PairingSuggestion>>(emptyList())
+    val suggestions: StateFlow<List<PairingSuggestion>> = _suggestions.asStateFlow()
+
+    private val _diversity = MutableStateFlow(FlockDiversity())
+    val diversity: StateFlow<FlockDiversity> = _diversity.asStateFlow()
+
+    private val _avoidThreshold = MutableStateFlow(0.35)
+    val avoidThreshold: StateFlow<Double> = _avoidThreshold.asStateFlow()
 
     init { loadAll() }
 
@@ -131,9 +142,11 @@ class BreedingViewModel(application: Application) : AndroidViewModel(application
             _birds.value = try { api.getBirds() } catch (_: Exception) { emptyList() }
             _groups.value = try { api.getBreedingGroups() } catch (_: Exception) { emptyList() }
             try { _settings.value = api.getSettings() } catch (_: Exception) { /* keep defaults */ }
-            _relatedness.value = try {
-                api.getBreedingSuggestions().associate { (it.maleId to it.femaleId) to it.coefficient }
-            } catch (_: Exception) { emptyMap() }
+            val suggestions = try { api.getBreedingSuggestions() } catch (_: Exception) { emptyList() }
+            _suggestions.value = suggestions
+            _relatedness.value = suggestions.associate { (it.birdAId to it.birdBId) to (it.riskPercent / 100.0) }
+            _diversity.value = try { api.getBreedingDiversity() } catch (_: Exception) { FlockDiversity() }
+            _avoidThreshold.value = try { fetchAvoidThreshold(api) } catch (_: Exception) { 0.35 }
             _isLoading.value = false
         }
     }
@@ -234,6 +247,9 @@ private fun BreedingGroupsTab(viewModel: BreedingViewModel, onReconcileGroup: (I
     val birds by viewModel.birds.collectAsState()
     val settings by viewModel.settings.collectAsState()
     val relatedness by viewModel.relatedness.collectAsState()
+    val diversity by viewModel.diversity.collectAsState()
+    val suggestions by viewModel.suggestions.collectAsState()
+    val avoidThreshold by viewModel.avoidThreshold.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -262,6 +278,27 @@ private fun BreedingGroupsTab(viewModel: BreedingViewModel, onReconcileGroup: (I
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.weight(1f),
         ) {
+            // Phase 6: flock-wide new-blood alert + diversity summary.
+            if (diversity.needsNewBlood) {
+                item { NewBloodBanner(diversity, avoidThreshold) }
+            }
+            item { DiversitySummaryCard(diversity) }
+
+            // Suggested pairings (lowest risk first — the API pre-sorts).
+            if (suggestions.isNotEmpty()) {
+                item {
+                    Text(
+                        "Suggested pairings",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+                items(suggestions.take(12), key = { "${it.birdAId}-${it.birdBId}" }) { p ->
+                    PairingSuggestionRow(p, birdMap)
+                }
+                item { Spacer(Modifier.height(4.dp)) }
+            }
+
             if (groups.isEmpty()) {
                 item {
                     Box(Modifier.fillParentMaxSize(), contentAlignment = Alignment.Center) {
@@ -503,6 +540,20 @@ private fun BreedingGroupDialog(
         else -> null
     }
 
+    // Same-lineage warning (Phase 6): if every selected bird carries exactly the
+    // same single lineage, the group's chicks will be 100% that lineage.
+    val sameLineageWarning: String? = run {
+        val selected = (selectedMaleIds + selectedFemaleIds).mapNotNull { allMales.find { m -> m.id == it } ?: allFemales.find { f -> f.id == it } }
+        if (selected.size < 2 || selected.any { it.lineages.isEmpty() }) return@run null
+        val lineageIds = selected.flatMap { it.lineages.map { l -> l.id } }.toSet()
+        if (lineageIds.size == 1) {
+            val name = selected.first().lineages.first().name
+            "Same-lineage group — chicks will have 100% overlap with other $name birds."
+        } else {
+            null
+        }
+    }
+
     // Soft inbreeding check — relatedness comes from the server's
     // compute_relatedness (via /api/breeding/suggest); we only look it up.
     val maleById = allMales.associateBy { it.id }
@@ -547,6 +598,22 @@ private fun BreedingGroupDialog(
                             Text("⚠️", style = MaterialTheme.typography.titleMedium)
                             Spacer(Modifier.width(8.dp))
                             Text(ratioWarning, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                }
+
+                // Same-lineage advisory (Phase 6). Never blocks Create/Save.
+                if (sameLineageWarning != null) {
+                    Card(
+                        Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = CardDefaults.cardColors(containerColor = AlertYellow.copy(alpha = 0.15f)),
+                        elevation = CardDefaults.cardElevation(0.dp),
+                    ) {
+                        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("🧬", style = MaterialTheme.typography.titleMedium)
+                            Spacer(Modifier.width(8.dp))
+                            Text(sameLineageWarning, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
                         }
                     }
                 }
@@ -762,16 +829,16 @@ private fun FemaleSelectRow(
 }
 
 // ---------------------------------------------------------------------
-// Relatedness tiers — shared by the inline %, the table, and the summary.
-// Coefficient is on compute_relatedness's ~0.5 scale (full sib /
-// parent-offspring = 0.5, half-sib = 0.25, cousin-ish ≈ 0.125).
+// Overlap-risk tiers — shared by the inline %, the table, and the summary.
+// `c` is the probability-weighted lineage overlap as a fraction (Phase 4):
+// caution at/above the safe threshold (15%), strong above the avoid one (35%).
 // ---------------------------------------------------------------------
 
 private enum class RelTier { NONE, CAUTION, STRONG }
 
 private fun relTier(c: Double): RelTier = when {
-    c >= 0.25 -> RelTier.STRONG    // half-sib / sib / parent-offspring
-    c >= 0.125 -> RelTier.CAUTION  // cousin-ish
+    c > 0.35 -> RelTier.STRONG     // avoid: high lineage overlap
+    c >= 0.15 -> RelTier.CAUTION   // caution zone
     else -> RelTier.NONE
 }
 
@@ -779,9 +846,8 @@ private fun relPercent(c: Double): String = "${(c * 100).roundToInt()}%"
 
 /** Plain-language band, or null below the caution threshold. */
 private fun relLabel(c: Double): String? = when {
-    c >= 0.5 -> "siblings / parent–offspring"
-    c >= 0.25 -> "likely siblings"
-    c >= 0.125 -> "cousins"
+    c > 0.35 -> "high lineage overlap"
+    c >= 0.15 -> "some lineage overlap"
     else -> null
 }
 
@@ -790,6 +856,71 @@ private fun relColor(tier: RelTier): Color = when (tier) {
     RelTier.STRONG -> AlertRed
     RelTier.CAUTION -> AlertYellow
     RelTier.NONE -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+// ---------------------------------------------------------------------
+// Phase 6: flock diversity summary + suggested-pairing rows.
+// ---------------------------------------------------------------------
+
+@Composable
+private fun StatCell(label: String, value: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun DiversitySummaryCard(d: FlockDiversity) {
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(1.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 8.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            StatCell("Flock conf.", "${(d.flockConfidence * 100).roundToInt()}%")
+            StatCell("Lineages", "${d.activeLineageCount}")
+            StatCell("Best risk", "${(d.bestPairingRisk * 100).roundToInt()}%")
+            StatCell("New blood", if (d.needsNewBlood) "Needed" else "OK")
+        }
+    }
+}
+
+@Composable
+private fun PairingSuggestionRow(p: PairingSuggestion, birdMap: Map<Int, Bird>) {
+    val m = birdMap[p.birdAId]
+    val f = birdMap[p.birdBId]
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(1.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "${m?.bandColor ?: "Male"} #${p.birdAId}  ×  ${f?.bandColor ?: "Female"} #${p.birdBId}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                val ml = m?.let { com.quailsync.app.data.formatLineages(it.lineages, emptyText = "") } ?: ""
+                val fl = f?.let { com.quailsync.app.data.formatLineages(it.lineages, emptyText = "") } ?: ""
+                if (ml.isNotBlank() || fl.isNotBlank()) {
+                    Text("$ml / $fl", style = MaterialTheme.typography.labelSmall, color = SageGreen)
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            RiskPill(p.riskLevel, p.riskPercent)
+        }
+    }
 }
 
 // =====================================================================

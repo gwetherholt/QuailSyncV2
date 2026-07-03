@@ -513,8 +513,8 @@ pub(crate) async fn breeding_suggest(
             results.push(PairingSuggestion {
                 bird_a_id: *mid,
                 bird_b_id: *fid,
-                paternal_overlap,
-                maternal_overlap,
+                paternal_overlap: crate::genetics::norm_zero(paternal_overlap),
+                maternal_overlap: crate::genetics::norm_zero(maternal_overlap),
                 risk_percent: (risk * 100.0).round() as i64,
                 risk_level: crate::genetics::risk_level(risk, safe, avoid).to_string(),
             });
@@ -588,9 +588,9 @@ pub(crate) async fn breeding_diversity(State(state): State<AppState>) -> Json<Fl
     }
 
     Json(FlockDiversity {
-        flock_confidence,
-        min_confidence,
-        best_pairing_risk,
+        flock_confidence: crate::genetics::norm_zero(flock_confidence),
+        min_confidence: crate::genetics::norm_zero(min_confidence),
+        best_pairing_risk: crate::genetics::norm_zero(best_pairing_risk),
         needs_new_blood,
         active_lineage_count: lineages.len() as i64,
     })

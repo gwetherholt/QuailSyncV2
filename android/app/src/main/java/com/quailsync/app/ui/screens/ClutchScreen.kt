@@ -83,7 +83,9 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.quailsync.app.data.Bird
 import com.quailsync.app.data.Lineage
+import com.quailsync.app.data.LineageProbability
 import com.quailsync.app.data.Brooder
 import com.quailsync.app.data.ChickGroupDto
 import com.quailsync.app.data.Clutch
@@ -134,10 +136,19 @@ class ClutchViewModel(application: Application) : AndroidViewModel(application) 
     val chickGroups: StateFlow<List<ChickGroupDto>> = _chickGroups.asStateFlow()
     private val _brooders = MutableStateFlow<List<Brooder>>(emptyList())
     val brooders: StateFlow<List<Brooder>> = _brooders.asStateFlow()
+    // Birds (with lineages) — powers the same-lineage clutch-creation warning.
+    private val _birds = MutableStateFlow<List<Bird>>(emptyList())
+    val birds: StateFlow<List<Bird>> = _birds.asStateFlow()
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+    // Phase 6: per-clutch maternal lineage distribution (from each grouped
+    // clutch's frozen snapshot) + the genetics display cap.
+    private val _snapshots = MutableStateFlow<Map<Int, List<LineageProbability>>>(emptyMap())
+    val snapshots: StateFlow<Map<Int, List<LineageProbability>>> = _snapshots.asStateFlow()
+    private val _displayCap = MutableStateFlow(4)
+    val displayCap: StateFlow<Int> = _displayCap.asStateFlow()
 
     init { loadData() }
 
@@ -151,6 +162,18 @@ class ClutchViewModel(application: Application) : AndroidViewModel(application) 
             _breedingGroups.value = try { api.getBreedingGroups() } catch (_: Exception) { emptyList() }
             _chickGroups.value = try { api.getChickGroups() } catch (_: Exception) { emptyList() }
             _brooders.value = try { api.getBrooders() } catch (_: Exception) { emptyList() }
+            _birds.value = try { api.getBirds() } catch (_: Exception) { emptyList() }
+            _displayCap.value = fetchDisplayCap(api)
+            // Fetch the maternal distribution for group-linked clutches so cards
+            // can show the lineage bar. Best-effort per clutch.
+            val snaps = mutableMapOf<Int, List<LineageProbability>>()
+            _clutches.value.filter { it.breedingGroupId != null }.forEach { c ->
+                try {
+                    val mat = api.getClutchDetail(c.id).snapshot?.maternalDistribution
+                    if (!mat.isNullOrEmpty()) snaps[c.id] = mat
+                } catch (_: Exception) { /* skip */ }
+            }
+            _snapshots.value = snaps
         } catch (e: Exception) { Log.e("QuailSync", "Failed to load hatchery data", e) }
         finally { _isLoading.value = false }
     }
@@ -214,6 +237,8 @@ fun ClutchScreen(
     val broodersList by viewModel.brooders.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val snapshots by viewModel.snapshots.collectAsState()
+    val displayCap by viewModel.displayCap.collectAsState()
 
     val lineageMap = remember(lineages) { lineages.associateBy { it.id } }
     val brooderMap = remember(broodersList) { broodersList.associateBy { it.id } }
@@ -325,6 +350,7 @@ fun ClutchScreen(
                                 onRecordHatch = { hatchClutch = clutch },
                                 onEdit = { editClutch = clutch },
                                 onDelete = { deleteClutch = clutch },
+                                maternalDist = snapshots[clutch.id], displayCap = displayCap,
                                 modifier = Modifier.testTag("hatchery_clutch_card_${clutch.id}"))
                         }
                     }
@@ -357,6 +383,7 @@ fun ClutchScreen(
                                     onRecordHatch = { hatchClutch = clutch },
                                     onEdit = { editClutch = clutch },
                                     onDelete = { deleteClutch = clutch },
+                                    maternalDist = snapshots[clutch.id], displayCap = displayCap,
                                     modifier = Modifier.testTag("hatchery_clutch_card_${clutch.id}"))
                             }
                         }
@@ -575,6 +602,7 @@ fun AddClutchDialog(viewModel: ClutchViewModel, onDismiss: () -> Unit, onSuccess
     // Use live lineages + breeding groups from the ViewModel.
     val liveLineages by viewModel.lineages.collectAsState()
     val breedingGroups by viewModel.breedingGroups.collectAsState()
+    val birds by viewModel.birds.collectAsState()
 
     var selectedGroupId by remember { mutableStateOf<Int?>(null) }
     var groupExpanded by remember { mutableStateOf(false) }
@@ -617,6 +645,28 @@ fun AddClutchDialog(viewModel: ClutchViewModel, onDismiss: () -> Unit, onSuccess
                             DropdownMenuItem(text = { Text(g.name) }, onClick = { selectedGroupId = g.id; groupExpanded = false })
                         }
                     }
+                }
+
+                // Same-lineage warning (Phase 6): if the chosen group's birds all
+                // share one lineage, the chicks will be 100% that lineage.
+                val birdById = remember(birds) { birds.associateBy { it.id } }
+                val sameLineageWarning: String? = selectedGroupId?.let { gid ->
+                    val g = breedingGroups.find { it.id == gid } ?: return@let null
+                    val members = (g.males + g.femaleIds).mapNotNull { birdById[it] }
+                    if (members.size < 2 || members.any { it.lineages.isEmpty() }) return@let null
+                    val lineageIds = members.flatMap { it.lineages.map { l -> l.id } }.toSet()
+                    if (lineageIds.size == 1) {
+                        "Same-lineage group — chicks will have 100% overlap with other ${members.first().lineages.first().name} birds."
+                    } else {
+                        null
+                    }
+                }
+                if (sameLineageWarning != null) {
+                    Text(
+                        "🧬 $sameLineageWarning",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AlertYellow,
+                    )
                 }
 
                 // Lineage dropdown
@@ -915,7 +965,7 @@ fun CreateChickGroupDialog(
 // =====================================================================
 
 @Composable
-fun ClutchCard(clutch: Clutch, lineageName: String?, brooderName: String? = null, onCandle: () -> Unit = {}, onRecordHatch: () -> Unit = {}, onEdit: () -> Unit = {}, onDelete: () -> Unit = {}, modifier: Modifier = Modifier) {
+fun ClutchCard(clutch: Clutch, lineageName: String?, brooderName: String? = null, onCandle: () -> Unit = {}, onRecordHatch: () -> Unit = {}, onEdit: () -> Unit = {}, onDelete: () -> Unit = {}, maternalDist: List<LineageProbability>? = null, displayCap: Int = 4, modifier: Modifier = Modifier) {
     val today = remember { LocalDate.now() }
     val setDate = remember(clutch.setDate) { parseDate(clutch.setDate) }
     val daysElapsed = remember(setDate, today) { setDate?.let { ChronoUnit.DAYS.between(it, today).toInt() } }
@@ -941,6 +991,14 @@ fun ClutchCard(clutch: Clutch, lineageName: String?, brooderName: String? = null
                     IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.Edit, "Edit", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) }
                     IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.Delete, "Delete", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
+            }
+
+            // Maternal lineage distribution from the frozen group snapshot (Phase 6).
+            if (!maternalDist.isNullOrEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Text("Maternal lineage", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(3.dp))
+                DistributionBar(maternalDist, cap = displayCap, height = 16)
             }
 
             Spacer(Modifier.height(12.dp))

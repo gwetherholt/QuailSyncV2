@@ -86,6 +86,11 @@ data class Bird(
     @SerializedName("chick_group_id") val chickGroupId: Int? = null,
     /** Many-to-many lineages, populated by the server from the junction table. */
     @SerializedName("lineages") val lineages: List<Lineage> = emptyList(),
+    /** Generation number (0 = source bird). */
+    @SerializedName("generation") val generation: Int? = null,
+    /** Probabilistic lineage distribution + confidence (Phase 3/6). */
+    @SerializedName("genetic_profile") val geneticProfile: GeneticProfile? = null,
+    @SerializedName("confidence") val confidence: Double? = null,
 ) {
     // The two shims below are deliberately kept around for any out-of-tree
     // callers that might still read them. `@Suppress("unused")` silences the
@@ -125,6 +130,19 @@ data class Lineage(
     @SerializedName("name") val name: String,
     @SerializedName("source") val source: String? = null,
     @SerializedName("notes") val notes: String? = null,
+)
+
+/** One lineage's probability within a genetic profile side or clutch snapshot. */
+data class LineageProbability(
+    @SerializedName("lineage_id") val lineageId: Int,
+    @SerializedName("lineage_name") val lineageName: String = "",
+    @SerializedName("probability") val probability: Double = 0.0,
+)
+
+/** A bird's probabilistic lineage, split by inherited side (Phase 3/6). */
+data class GeneticProfile(
+    @SerializedName("paternal") val paternal: List<LineageProbability> = emptyList(),
+    @SerializedName("maternal") val maternal: List<LineageProbability> = emptyList(),
 )
 
 /**
@@ -634,6 +652,37 @@ data class InbreedingCoefficient(
     @SerializedName("safe") val safe: Boolean,
 )
 
+/** A suggested pairing scored by probability-weighted lineage overlap (Phase 4).
+ *  `birdAId` is the male, `birdBId` the female; `riskLevel` is safe/caution/avoid. */
+data class PairingSuggestion(
+    @SerializedName("bird_a_id") val birdAId: Int,
+    @SerializedName("bird_b_id") val birdBId: Int,
+    @SerializedName("paternal_overlap") val paternalOverlap: Double = 0.0,
+    @SerializedName("maternal_overlap") val maternalOverlap: Double = 0.0,
+    @SerializedName("risk_percent") val riskPercent: Int = 0,
+    @SerializedName("risk_level") val riskLevel: String = "safe",
+)
+
+/** Flock-wide genetic-diversity snapshot (Phase 4) powering the new-blood alert. */
+data class FlockDiversity(
+    @SerializedName("flock_confidence") val flockConfidence: Double = 0.0,
+    @SerializedName("min_confidence") val minConfidence: Double = 0.0,
+    @SerializedName("best_pairing_risk") val bestPairingRisk: Double = 0.0,
+    @SerializedName("needs_new_blood") val needsNewBlood: Boolean = false,
+    @SerializedName("active_lineage_count") val activeLineageCount: Int = 0,
+)
+
+/** Frozen group-composition snapshot for a clutch (`GET /api/clutches/{id}`). */
+data class ClutchSnapshot(
+    @SerializedName("maternal_distribution") val maternalDistribution: List<LineageProbability> = emptyList(),
+    @SerializedName("paternal_distribution") val paternalDistribution: List<LineageProbability> = emptyList(),
+)
+
+/** Clutch detail: clutch fields (ignored here) plus the optional snapshot. */
+data class ClutchDetail(
+    @SerializedName("snapshot") val snapshot: ClutchSnapshot? = null,
+)
+
 data class MortalityRequest(
     @SerializedName("count") val count: Int,
     @SerializedName("reason") val reason: String,
@@ -944,7 +993,15 @@ interface QuailSyncApi {
      *  `compute_relatedness`. Fetched once to power the create-group inbreeding
      *  warning without a round-trip per pair. */
     @GET("api/breeding/suggest")
-    suspend fun getBreedingSuggestions(): List<InbreedingCoefficient>
+    suspend fun getBreedingSuggestions(): List<PairingSuggestion>
+
+    /** Flock-wide genetic-diversity snapshot (Phase 4/6). */
+    @GET("api/breeding/diversity")
+    suspend fun getBreedingDiversity(): FlockDiversity
+
+    /** A clutch with its frozen group snapshot (for the maternal lineage bar). */
+    @GET("api/clutches/{id}")
+    suspend fun getClutchDetail(@Path("id") id: Int): ClutchDetail
 
     // App settings (breeding ratio config).
     @GET("api/settings")
