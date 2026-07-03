@@ -268,16 +268,23 @@ fun DashboardScreen(
     // replaces the DIY ESP32 sensors, so this drives the tile temp/humidity —
     // including hutches, which never had a Pi sensor. Picks the most recent
     // reading when a unit has more than one sensor.
+    // Build (brooderId → latest reading) without force-unwraps: `mapNotNull`
+    // drops any sensor whose assignment/brooderId/reading is absent, so a partial
+    // nested object (or a future predicate edit) degrades to "not shown" instead
+    // of an NPE. Happy path (assigned sensor with a reading) is unchanged.
     val goveeReadingByBrooder = remember(sensors) {
-        sensors.asSequence()
-            .filter { it.assignment != null && it.latestReading != null }
-            .groupBy { it.assignment!!.brooderId }
-            .mapValues { (_, list) -> list.maxByOrNull { it.latestReading!!.recordedAt ?: "" }!!.latestReading!! }
+        sensors
+            .mapNotNull { s -> s.assignment?.brooderId?.let { bid -> s.latestReading?.let { r -> bid to r } } }
+            .groupBy({ it.first }, { it.second })
+            .mapNotNull { (bid, readings) -> readings.maxByOrNull { it.recordedAt ?: "" }?.let { bid to it } }
+            .toMap()
     }
 
     // Trail cameras assigned to each housing unit, for the tile chip.
     val camerasByBrooder = remember(cameras) {
-        cameras.filter { it.assignment != null }.groupBy { it.assignment!!.brooderId }
+        cameras
+            .mapNotNull { c -> c.assignment?.brooderId?.let { it to c } }
+            .groupBy({ it.first }, { it.second })
     }
 
     // Device data comes from our DB (the pollers write it), not the live
@@ -901,7 +908,7 @@ private fun CompactBrooderCard(
                 Spacer(Modifier.height(4.dp))
                 assignedCameras.forEach { c ->
                     Text(
-                        "📷 " + (c.name ?: c.spypointCameraId),
+                        "📷 " + (c.name ?: c.spypointCameraId ?: "—"),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,

@@ -1111,7 +1111,7 @@ fun ChickGroupCard(group: ChickGroupDto, brooderName: String?, onEdit: () -> Uni
     val today = remember { LocalDate.now() }
     val hatchDate = remember(group.hatchDate) { parseDate(group.hatchDate) }
     val ageDays = remember(hatchDate, today) { hatchDate?.let { ChronoUnit.DAYS.between(it, today).toInt() } ?: 0 }
-    val mortalityPct = if (group.initialCount > 0) ((group.initialCount - group.currentCount).toFloat() / group.initialCount * 100) else 0f
+    val mortalityPct = group.initialCount?.takeIf { it > 0 }?.let { ((it - group.currentCount).toFloat() / it * 100) } ?: 0f
     val readyToTransition = group.isReadyToTransition
 
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(2.dp)) {
@@ -1151,7 +1151,7 @@ fun ChickGroupCard(group: ChickGroupDto, brooderName: String?, onEdit: () -> Uni
             }
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceEvenly) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) { Text("${group.currentCount}", fontSize = 22.sp, fontWeight = FontWeight.Bold); Text("Alive", style = MaterialTheme.typography.bodyMedium); Text("of ${group.initialCount}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) { Text("${group.currentCount}", fontSize = 22.sp, fontWeight = FontWeight.Bold); Text("Alive", style = MaterialTheme.typography.bodyMedium); Text("of ${group.initialCount ?: "?"}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) { Text("%.0f%%".format(mortalityPct), fontSize = 22.sp, fontWeight = FontWeight.Bold, color = if (mortalityPct > 20) AlertRed else if (mortalityPct > 10) AlertYellow else AlertGreen); Text("Mortality", style = MaterialTheme.typography.bodyMedium) }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) { Text("${ageDays / 7 + 1}", fontSize = 22.sp, fontWeight = FontWeight.Bold); Text("Week", style = MaterialTheme.typography.bodyMedium) }
             }
@@ -1187,7 +1187,7 @@ fun ChickGroupCard(group: ChickGroupDto, brooderName: String?, onEdit: () -> Uni
 
 @Composable
 fun GraduatedGroupCard(group: ChickGroupDto, hutchName: String? = null) {
-    val mortalityPct = if (group.initialCount > 0) ((group.initialCount - group.currentCount).toFloat() / group.initialCount * 100) else 0f
+    val mortalityPct = group.initialCount?.takeIf { it > 0 }?.let { ((it - group.currentCount).toFloat() / it * 100) } ?: 0f
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)), elevation = CardDefaults.cardElevation(0.dp)) {
         Row(Modifier.fillMaxWidth().padding(14.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -1197,7 +1197,7 @@ fun GraduatedGroupCard(group: ChickGroupDto, hutchName: String? = null) {
                     "Group #${group.id}"
                 }
                 Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("${group.currentCount}/${group.initialCount} chicks · ${group.status} · Hatched ${group.hatchDate}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("${group.currentCount}/${group.initialCount ?: "?"} chicks · ${group.status} · Hatched ${group.hatchDate}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 val destination = hutchName ?: group.housingId?.let { "Hutch #$it" }
                 if (destination != null) {
                     Text("Graduated to: $destination", style = MaterialTheme.typography.labelMedium, color = SageGreen)

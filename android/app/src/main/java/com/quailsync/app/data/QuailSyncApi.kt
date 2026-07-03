@@ -357,15 +357,20 @@ data class GoveeSensorDto(
     @SerializedName("latest_reading") val latestReading: GoveeLatestReadingDto? = null,
 )
 
+// Gson populates these via reflection, bypassing Kotlin null-safety — a
+// non-null-no-default field the server omits/renames writes null into a non-null
+// property and NPEs downstream. Foreign IDs + measurements → nullable (a missing
+// value renders as "—"/absent, not an invented 0). `brooderName` → nullable
+// (a blank name is a validation-guaranteed anomaly; surface it, don't hide as "").
 data class GoveeAssignmentDto(
-    @SerializedName("brooder_id") val brooderId: Int,
-    @SerializedName("brooder_name") val brooderName: String,
+    @SerializedName("brooder_id") val brooderId: Int? = null,
+    @SerializedName("brooder_name") val brooderName: String? = null,
     @SerializedName("assigned_at") val assignedAt: String? = null,
 )
 
 data class GoveeLatestReadingDto(
-    @SerializedName("temperature_f") val temperatureF: Double,
-    @SerializedName("humidity") val humidity: Double,
+    @SerializedName("temperature_f") val temperatureF: Double? = null,
+    @SerializedName("humidity") val humidity: Double? = null,
     @SerializedName("recorded_at") val recordedAt: String? = null,
 )
 
@@ -377,8 +382,12 @@ data class AssignSensorRequest(
 /** A registered SPYPOINT trail camera with its current assignment
  *  (GET /api/trail-cameras). `assignment` is null when unassigned. */
 data class TrailCameraDto(
+    // `id` (record PK / list key) left non-null — see report; a record whose PK
+    // the server omits is fundamentally broken and has no meaningful placeholder.
     @SerializedName("id") val id: Int,
-    @SerializedName("spypoint_camera_id") val spypointCameraId: String,
+    // `spypointCameraId` → nullable: a semantically-meaningful identifier used as
+    // the display fallback; render "—" rather than invent an empty id (FLAGGED).
+    @SerializedName("spypoint_camera_id") val spypointCameraId: String? = null,
     @SerializedName("name") val name: String? = null,
     @SerializedName("model") val model: String? = null,
     @SerializedName("first_seen") val firstSeen: String? = null,
@@ -387,8 +396,8 @@ data class TrailCameraDto(
 )
 
 data class CameraAssignmentDto(
-    @SerializedName("brooder_id") val brooderId: Int,
-    @SerializedName("brooder_name") val brooderName: String,
+    @SerializedName("brooder_id") val brooderId: Int? = null,
+    @SerializedName("brooder_name") val brooderName: String? = null,
     @SerializedName("assigned_at") val assignedAt: String? = null,
 )
 
@@ -430,8 +439,8 @@ data class IndoorCamera(
 /** Current assignment of an indoor camera. `housingType` is "brooder" or
  *  "incubator" (never "hutch" — the server rejects that). */
 data class IndoorCameraAssignment(
-    @SerializedName("brooder_id") val brooderId: Int,
-    @SerializedName("brooder_name") val brooderName: String,
+    @SerializedName("brooder_id") val brooderId: Int? = null,
+    @SerializedName("brooder_name") val brooderName: String? = null,
     @SerializedName("housing_type") val housingType: String? = null,
     @SerializedName("assigned_at") val assignedAt: String? = null,
 )
@@ -442,15 +451,18 @@ data class AssignIndoorCameraRequest(
 )
 
 data class TargetTempResponse(
-    @SerializedName("brooder_id") val brooderId: Int,
-    @SerializedName("target_temp_f") val targetTempF: Double,
-    @SerializedName("min_temp_f") val minTempF: Double,
-    @SerializedName("max_temp_f") val maxTempF: Double,
-    @SerializedName("week") val week: Int,
-    @SerializedName("age_days") val ageDays: Int?,
-    @SerializedName("chick_group_id") val chickGroupId: Int?,
-    @SerializedName("schedule_label") val scheduleLabel: String,
-    @SerializedName("status") val status: String,
+    // Foreign id + all temps/week → nullable (a missing temperature must render
+    // as unknown, never a misleading 0°F). `scheduleLabel`/`status` are computed
+    // display strings → default to "" so a missing one degrades to empty text.
+    @SerializedName("brooder_id") val brooderId: Int? = null,
+    @SerializedName("target_temp_f") val targetTempF: Double? = null,
+    @SerializedName("min_temp_f") val minTempF: Double? = null,
+    @SerializedName("max_temp_f") val maxTempF: Double? = null,
+    @SerializedName("week") val week: Int? = null,
+    @SerializedName("age_days") val ageDays: Int? = null,
+    @SerializedName("chick_group_id") val chickGroupId: Int? = null,
+    @SerializedName("schedule_label") val scheduleLabel: String = "",
+    @SerializedName("status") val status: String = "",
 )
 
 data class HeadcountResponse(
@@ -463,10 +475,14 @@ data class ChickGroupDto(
     @SerializedName("id") val id: Int,
     @SerializedName("clutch_id") val clutchId: Int? = null,
     @SerializedName("brooder_id") val brooderId: Int? = null,
-    @SerializedName("initial_count") val initialCount: Int,
+    // `initialCount` (a count) → nullable so a missing value shows "?" not a
+    // misleading 0. `status` (a lifecycle enum/display string) → default "".
+    // `currentCount`/`hatchDate` left as-is — out of this pass's target list
+    // (same class of risk; FLAGGED in the report).
+    @SerializedName("initial_count") val initialCount: Int? = null,
     @SerializedName("current_count") val currentCount: Int,
     @SerializedName("hatch_date") val hatchDate: String,
-    @SerializedName("status") val status: String,
+    @SerializedName("status") val status: String = "",
     @SerializedName("notes") val notes: String? = null,
     /** Issue #14: which hutch the graduated group lives in. Null for Active
      *  groups (still in nursery `brooderId`) and graduated groups that
@@ -598,10 +614,11 @@ data class ReconcileCandidate(
 
 /** Server snapshot powering the Flock-screen cull-mode guardrail. */
 data class FlockBreedingStats(
-    @SerializedName("total_males") val totalMales: Int,
-    @SerializedName("total_females") val totalFemales: Int,
-    @SerializedName("minimum_males_needed") val minimumMalesNeeded: Int,
-    @SerializedName("safe_to_cull") val safeToCull: Int,
+    // Counts → nullable: a missing count must read as unknown, not "0 to cull".
+    @SerializedName("total_males") val totalMales: Int? = null,
+    @SerializedName("total_females") val totalFemales: Int? = null,
+    @SerializedName("minimum_males_needed") val minimumMalesNeeded: Int? = null,
+    @SerializedName("safe_to_cull") val safeToCull: Int? = null,
     @SerializedName("per_male_safe_pairings") val perMaleSafePairings: List<PerMaleSafePairings> = emptyList(),
     /** Echoed from /api/settings so the client can recompute the required-males
      *  line as the user toggles cull selections (e.g. selecting females
@@ -706,13 +723,16 @@ data class CullBatchResponse(
 // =====================================================================
 
 data class SystemAlertDto(
+    // `id` (record PK / list key) left non-null — see report. The content strings
+    // are display fields → default "" so a partial alert degrades to blank text
+    // (severity "" falls through to the default color) rather than NPE-ing.
     @SerializedName("id") val id: Long,
-    @SerializedName("alert_key") val alertKey: String,
-    @SerializedName("severity") val severity: String,
-    @SerializedName("title") val title: String,
-    @SerializedName("message") val message: String,
-    @SerializedName("source") val source: String,
-    @SerializedName("created_at") val createdAt: String,
+    @SerializedName("alert_key") val alertKey: String = "",
+    @SerializedName("severity") val severity: String = "",
+    @SerializedName("title") val title: String = "",
+    @SerializedName("message") val message: String = "",
+    @SerializedName("source") val source: String = "",
+    @SerializedName("created_at") val createdAt: String = "",
     @SerializedName("resolved_at") val resolvedAt: String? = null,
     @SerializedName("dismissed_at") val dismissedAt: String? = null,
     @SerializedName("metadata_json") val metadataJson: String? = null,

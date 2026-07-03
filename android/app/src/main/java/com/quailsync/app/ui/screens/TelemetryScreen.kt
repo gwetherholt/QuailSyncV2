@@ -576,7 +576,8 @@ fun DetailedBrooderCard(
             if (state.targetTemp != null) {
                 Spacer(Modifier.height(10.dp))
                 val tt = state.targetTemp
-                val tempInRange = currentTemp != null && currentTemp in tt.minTempF..tt.maxTempF
+                val tempInRange = currentTemp != null && tt.minTempF != null && tt.maxTempF != null &&
+                    currentTemp in tt.minTempF..tt.maxTempF
                 val tempColor = when {
                     currentTemp == null -> MaterialTheme.colorScheme.onSurfaceVariant
                     tempInRange -> AlertGreen
@@ -591,7 +592,7 @@ fun DetailedBrooderCard(
                 ) {
                     Column {
                         Text(
-                            "Target: %.0f°F".format(tt.targetTempF),
+                            tt.targetTempF?.let { "Target: %.0f°F".format(it) } ?: "Target: —",
                             style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = tempColor,
                         )
                         if (tt.ageDays != null) {
@@ -622,7 +623,7 @@ fun DetailedBrooderCard(
                 Spacer(Modifier.height(10.dp))
                 assignedSensors.forEach { s ->
                     val r = s.latestReading
-                    val reading = if (r != null) "%.1f°F · %.0f%%".format(r.temperatureF, r.humidity) else "no data"
+                    val reading = if (r?.temperatureF != null && r.humidity != null) "%.1f°F · %.0f%%".format(r.temperatureF, r.humidity) else "no data"
                     val stale = sensorIsStale(s.lastSeen)
                     Row(
                         Modifier.fillMaxWidth().padding(vertical = 2.dp),
@@ -658,7 +659,7 @@ fun DetailedBrooderCard(
                     ) {
                         Text("📷 ", style = MaterialTheme.typography.bodyMedium)
                         Text(
-                            c.name ?: c.spypointCameraId,
+                            c.name ?: c.spypointCameraId ?: "—",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -725,14 +726,14 @@ fun SensorCard(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Temperature", style = MaterialTheme.typography.bodySmall)
                     Text(
-                        r?.let { "%.1f°F".format(it.temperatureF) } ?: "--",
+                        r?.temperatureF?.let { "%.1f°F".format(it) } ?: "--",
                         fontSize = 22.sp, fontWeight = FontWeight.Bold,
                     )
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Humidity", style = MaterialTheme.typography.bodySmall)
                     Text(
-                        r?.let { "%.0f%%".format(it.humidity) } ?: "--",
+                        r?.humidity?.let { "%.0f%%".format(it) } ?: "--",
                         fontSize = 22.sp, fontWeight = FontWeight.Bold,
                     )
                 }
@@ -745,7 +746,7 @@ fun SensorCard(
             if (assignment != null) {
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                     Text(
-                        "Assigned to ${assignment.brooderName}",
+                        "Assigned to ${assignment.brooderName ?: "(unnamed)"}",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
                         color = SageGreen,
@@ -814,7 +815,7 @@ fun CameraCard(
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        camera.name ?: camera.spypointCameraId,
+                        camera.name ?: camera.spypointCameraId ?: "—",
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Text(
@@ -833,7 +834,7 @@ fun CameraCard(
             if (assignment != null) {
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                     Text(
-                        "Assigned to ${assignment.brooderName}",
+                        "Assigned to ${assignment.brooderName ?: "(unnamed)"}",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
                         color = SageGreen,

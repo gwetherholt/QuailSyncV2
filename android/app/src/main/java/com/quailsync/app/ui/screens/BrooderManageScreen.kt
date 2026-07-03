@@ -230,11 +230,14 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
                         Text("Target", style = MaterialTheme.typography.bodyMedium)
-                        Text("%.0f°F".format(tt.targetTempF), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                        Text(tt.targetTempF?.let { "%.0f°F".format(it) } ?: "—", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                     }
                     Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
                         Text("Range", style = MaterialTheme.typography.bodyMedium)
-                        Text("%.0f–%.0f°F".format(tt.minTempF, tt.maxTempF), style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (tt.minTempF != null && tt.maxTempF != null) "%.0f–%.0f°F".format(tt.minTempF, tt.maxTempF) else "—",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
                     }
                     if (tt.ageDays != null) {
                         Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
@@ -246,7 +249,8 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
                     Text(tt.scheduleLabel, style = MaterialTheme.typography.labelMedium, color = SageGreen)
 
                     Spacer(Modifier.height(12.dp))
-                    val currentWeek = tt.week.coerceIn(1, 6)
+                    // Nullable week → no week highlighted (Int == Int? never matches null).
+                    val currentWeek = tt.week?.coerceIn(1, 6)
                     Row(Modifier.fillMaxWidth(), Arrangement.SpaceEvenly) {
                         listOf("W1\n97°" to 1, "W2\n92°" to 2, "W3\n87°" to 3, "W4\n82°" to 4, "W5\n77°" to 5, "W6+\n72°" to 6).forEach { (label, week) ->
                             val isCurrent = week == currentWeek && tt.ageDays != null
@@ -492,7 +496,7 @@ fun BrooderManageScreen(brooderId: Int, onBack: () -> Unit) {
                         Column(Modifier.weight(1f)) {
                             val role = if (g.status == "Graduated") "Graduated" else "Chick"
                             Text("$role Group #${g.id}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                            Text("${g.currentCount} of ${g.initialCount} birds, hatched ${g.hatchDate}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("${g.currentCount} of ${g.initialCount ?: "?"} birds, hatched ${g.hatchDate}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         // Issue #14 — detach a graduated group from this hutch.
                         // Only shown on the hutch path (Graduated status); for
