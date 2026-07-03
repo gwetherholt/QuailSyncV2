@@ -562,6 +562,17 @@ pub fn init_db(conn: &Connection) {
         [],
     )
     .ok();
+    // Phase 5: configurable genetics thresholds live in the same table under
+    // dotted keys. Seed each default (INSERT OR IGNORE keeps user edits). Runs
+    // before the bird_genetic_profile migration below so the tracking floor is
+    // already available to it.
+    for (key, default, _min, _max) in quailsync_common::GeneticsSettings::SPEC {
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?1, ?2)",
+            params![key, default.to_string()],
+        )
+        .ok();
+    }
 
     // --- System settings (server-owned lifecycle + alert thresholds) ---
     // Key/value rows; the typed view + parsing live in quailsync_common::Settings.

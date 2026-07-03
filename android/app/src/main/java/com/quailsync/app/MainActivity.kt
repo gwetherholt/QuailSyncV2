@@ -34,6 +34,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -48,6 +49,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -512,6 +514,12 @@ fun SettingsScreen() {
 
         Spacer(Modifier.height(16.dp))
 
+        // Genetics thresholds (Phase 5) — drive breeding-risk banding and the
+        // new-blood alert. Read fresh by the server on each breeding request.
+        GeneticsSettingsCard()
+
+        Spacer(Modifier.height(16.dp))
+
         // Indoor-camera image handling (server system-settings toggles).
         IndoorCameraSettingsCard()
 
@@ -666,6 +674,142 @@ fun BreedingConfigCard() {
                 enabled = loaded && valid && !saving,
                 colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
             ) { Text(if (saving) "Saving..." else "Save") }
+        }
+    }
+}
+
+/**
+ * Genetics thresholds (Phase 5). Reads the flat `{ key: value }` map from
+ * `GET /api/settings/genetics` on first composition; Save PUTs the edited map
+ * (the server validates ranges + rejects unknown keys). "Reset to defaults"
+ * PUTs the default set. Values are whole integers; ranges mirror the server.
+ */
+@Composable
+fun GeneticsSettingsCard() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val api = remember { QuailSyncApi.create(ServerConfig.getServerUrl(context)) }
+
+    data class GField(val key: String, val label: String, val desc: String, val min: Int, val max: Int)
+    val fields = remember {
+        listOf(
+            GField("genetics.threshold.safe", "Safe threshold (%)", "Pairings below this overlap % are shown as safe.", 0, 100),
+            GField("genetics.threshold.avoid", "Avoid threshold (%)", "Pairings above this overlap % should be avoided; between safe and avoid is caution.", 0, 100),
+            GField("genetics.tracking_floor", "Tracking floor (%)", "Lineage components below this % are dropped from a bird's profile.", 1, 50),
+            GField("genetics.display_cap", "Display cap", "Show at most this many lineages; the rest group as a \"trace\" segment.", 1, 10),
+            GField("genetics.new_blood_confidence", "New-blood confidence (%)", "Alert when flock confidence drops below this %.", 0, 100),
+        )
+    }
+    val defaults = remember {
+        mapOf(
+            "genetics.threshold.safe" to "15",
+            "genetics.threshold.avoid" to "35",
+            "genetics.tracking_floor" to "1",
+            "genetics.display_cap" to "4",
+            "genetics.new_blood_confidence" to "50",
+        )
+    }
+
+    val values = remember { mutableStateMapOf<String, String>() }
+    var loaded by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        try {
+            val s = api.getGeneticsSettings()
+            fields.forEach { f -> values[f.key] = s[f.key] ?: defaults[f.key] ?: "" }
+        } catch (e: Exception) {
+            loadError = "Couldn't load settings — using local defaults"
+            fields.forEach { f -> values[f.key] = defaults[f.key] ?: "" }
+        } finally {
+            loaded = true
+        }
+    }
+
+    fun applyResult(resp: Map<String, String>) {
+        fields.forEach { f -> values[f.key] = resp[f.key] ?: values[f.key] ?: "" }
+    }
+
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(2.dp),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Genetics", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Thresholds for inbreeding risk and the genetic-diversity (new blood) alert.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            loadError?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+            }
+            Spacer(Modifier.height(12.dp))
+
+            fields.forEach { f ->
+                OutlinedTextField(
+                    value = values[f.key] ?: "",
+                    onValueChange = { values[f.key] = it.filter { c -> c.isDigit() }.take(3) },
+                    label = { Text(f.label) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    enabled = loaded,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    f.desc,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+
+            val valid = fields.all { f ->
+                val v = values[f.key]?.toIntOrNull()
+                v != null && v in f.min..f.max
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button(
+                    onClick = {
+                        if (!valid) return@Button
+                        saving = true
+                        scope.launch {
+                            try {
+                                val body = fields.associate { it.key to (values[it.key] ?: "") }
+                                applyResult(api.updateGeneticsSettings(body))
+                                Toast.makeText(context, "Genetics settings saved", Toast.LENGTH_SHORT).show()
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Save failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                            } finally {
+                                saving = false
+                            }
+                        }
+                    },
+                    enabled = loaded && valid && !saving,
+                    colors = ButtonDefaults.buttonColors(containerColor = SageGreen),
+                ) { Text(if (saving) "Saving..." else "Save") }
+                OutlinedButton(
+                    onClick = {
+                        saving = true
+                        scope.launch {
+                            try {
+                                applyResult(api.updateGeneticsSettings(defaults))
+                                Toast.makeText(context, "Reset to defaults", Toast.LENGTH_SHORT).show()
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Reset failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                            } finally {
+                                saving = false
+                            }
+                        }
+                    },
+                    enabled = loaded && !saving,
+                ) { Text("Reset to defaults") }
+            }
         }
     }
 }

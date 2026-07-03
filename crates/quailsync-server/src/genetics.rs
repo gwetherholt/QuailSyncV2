@@ -54,20 +54,17 @@ fn sort_desc(dist: &mut Dist) {
     });
 }
 
-/// Apply the tracking floor: drop components below [`TRACKING_FLOOR`], then
-/// renormalize the survivors to sum to 1.0. Renormalization only scales the
-/// kept components *up*, so nothing can fall back below the floor — one pass
-/// suffices. If everything is below the floor (degenerate input), the single
-/// largest component is kept at 1.0 so a bird always has a profile.
-pub fn apply_floor(dist: Dist) -> Dist {
+/// Apply the tracking floor: drop components below `floor`, then renormalize the
+/// survivors to sum to 1.0. Renormalization only scales the kept components *up*,
+/// so nothing can fall back below the floor — one pass suffices. If everything is
+/// below the floor (degenerate input), the single largest component is kept at
+/// 1.0 so a bird always has a profile. `floor` is a fraction (e.g. `0.01` = 1%);
+/// callers pass the configured [`tracking_floor`].
+pub fn apply_floor(dist: Dist, floor: f64) -> Dist {
     if dist.is_empty() {
         return dist;
     }
-    let mut kept: Dist = dist
-        .iter()
-        .copied()
-        .filter(|&(_, p)| p >= TRACKING_FLOOR)
-        .collect();
+    let mut kept: Dist = dist.iter().copied().filter(|&(_, p)| p >= floor).collect();
     if kept.is_empty() {
         if let Some(&max) = dist
             .iter()
@@ -163,9 +160,11 @@ pub fn confidence(profile: &GeneticProfile) -> f64 {
 // Phase 4: weighted inbreeding scoring
 // ---------------------------------------------------------------------------
 
-/// An overlap at or above this is "caution"; below it is "safe".
+/// Default overlap at/above which a pairing is "caution" (below it, "safe").
+/// Overridden per request by `genetics.threshold.safe` (Phase 5).
 pub const RISK_CAUTION_THRESHOLD: f64 = 0.15;
-/// An overlap strictly above this is "avoid".
+/// Default overlap strictly above which a pairing is "avoid". Overridden per
+/// request by `genetics.threshold.avoid` (Phase 5).
 pub const RISK_AVOID_THRESHOLD: f64 = 0.35;
 
 /// Probability-weighted overlap between two lineage distributions:
@@ -190,16 +189,31 @@ pub fn pair_overlap(a: &GeneticProfile, b: &GeneticProfile) -> (f64, f64) {
     )
 }
 
-/// Risk band for an overlap value: `"safe"` (<15%), `"caution"` (15–35%),
-/// `"avoid"` (>35%). Thresholds become user-configurable in Phase 5.
-pub fn risk_level(overlap: f64) -> &'static str {
-    if overlap < RISK_CAUTION_THRESHOLD {
+/// Risk band for an overlap value: `"safe"` (< `safe`), `"caution"`
+/// (`safe`..=`avoid`), `"avoid"` (> `avoid`). `safe`/`avoid` are fractions
+/// (e.g. `0.15`/`0.35`), read from settings per request in Phase 5.
+pub fn risk_level(overlap: f64, safe: f64, avoid: f64) -> &'static str {
+    if overlap < safe {
         "safe"
-    } else if overlap > RISK_AVOID_THRESHOLD {
+    } else if overlap > avoid {
         "avoid"
     } else {
         "caution"
     }
+}
+
+/// The configured tracking floor as a fraction (percent / 100), falling back to
+/// [`TRACKING_FLOOR`] when `genetics.tracking_floor` is absent or unparseable.
+pub fn tracking_floor(conn: &Connection) -> f64 {
+    conn.query_row(
+        "SELECT value FROM settings WHERE key = ?1",
+        params![quailsync_common::GeneticsSettings::KEY_TRACKING_FLOOR],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+    .and_then(|v| v.parse::<f64>().ok())
+    .map(|pct| pct / 100.0)
+    .unwrap_or(TRACKING_FLOOR)
 }
 
 fn lineage_name_map(conn: &Connection) -> HashMap<i64, String> {
@@ -283,8 +297,9 @@ pub fn populate_bird_profile(
     clutch_id: Option<i64>,
     fallback_lineages: &[i64],
 ) {
+    let floor = tracking_floor(conn);
     let derived = clutch_id.and_then(|cid| match snapshot_side_distributions(conn, cid) {
-        Some((pat, mat)) => Some((apply_floor(pat), apply_floor(mat))),
+        Some((pat, mat)) => Some((apply_floor(pat, floor), apply_floor(mat, floor))),
         None => clutch_lineage(conn, cid).map(|lid| {
             let d = vec![(lid, 1.0)];
             (d.clone(), d)
@@ -297,7 +312,7 @@ pub fn populate_bird_profile(
                 return;
             }
             let p = 1.0 / fallback_lineages.len() as f64;
-            let d = apply_floor(fallback_lineages.iter().map(|&l| (l, p)).collect());
+            let d = apply_floor(fallback_lineages.iter().map(|&l| (l, p)).collect(), floor);
             (d.clone(), d)
         }
     };
@@ -325,6 +340,7 @@ pub fn migrate_bird_lineages(conn: &Connection) {
         })
         .unwrap_or_default();
 
+    let floor = tracking_floor(conn);
     for bird_id in bird_ids {
         let lineages: Vec<i64> = conn
             .prepare("SELECT lineage_id FROM bird_lineages WHERE bird_id = ?1")
@@ -337,7 +353,7 @@ pub fn migrate_bird_lineages(conn: &Connection) {
             continue;
         }
         let p = 1.0 / lineages.len() as f64;
-        let dist = apply_floor(lineages.iter().map(|&l| (l, p)).collect());
+        let dist = apply_floor(lineages.iter().map(|&l| (l, p)).collect(), floor);
         write_profile_side(conn, bird_id, "paternal", &dist);
         write_profile_side(conn, bird_id, "maternal", &dist);
     }
@@ -408,7 +424,7 @@ mod tests {
 
     #[test]
     fn apply_floor_drops_below_1pct_and_renormalizes() {
-        let floored = apply_floor(vec![(1, 0.98), (2, 0.015), (3, 0.005)]);
+        let floored = apply_floor(vec![(1, 0.98), (2, 0.015), (3, 0.005)], TRACKING_FLOOR);
         // The 0.5% component is dropped; the rest renormalize to sum 1.0.
         assert_eq!(floored.len(), 2);
         let total: f64 = floored.iter().map(|&(_, p)| p).sum();
@@ -486,13 +502,14 @@ mod tests {
 
     #[test]
     fn risk_levels_follow_thresholds() {
-        assert_eq!(risk_level(0.0), "safe");
-        assert_eq!(risk_level(0.1499), "safe");
-        assert_eq!(risk_level(0.15), "caution");
-        assert_eq!(risk_level(0.302), "caution");
-        assert_eq!(risk_level(0.35), "caution");
-        assert_eq!(risk_level(0.3501), "avoid");
-        assert_eq!(risk_level(1.0), "avoid");
+        let (safe, avoid) = (RISK_CAUTION_THRESHOLD, RISK_AVOID_THRESHOLD);
+        assert_eq!(risk_level(0.0, safe, avoid), "safe");
+        assert_eq!(risk_level(0.1499, safe, avoid), "safe");
+        assert_eq!(risk_level(0.15, safe, avoid), "caution");
+        assert_eq!(risk_level(0.302, safe, avoid), "caution");
+        assert_eq!(risk_level(0.35, safe, avoid), "caution");
+        assert_eq!(risk_level(0.3501, safe, avoid), "avoid");
+        assert_eq!(risk_level(1.0, safe, avoid), "avoid");
     }
 
     #[test]

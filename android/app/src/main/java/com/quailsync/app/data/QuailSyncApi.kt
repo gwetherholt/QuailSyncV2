@@ -953,6 +953,15 @@ interface QuailSyncApi {
     @PUT("api/settings")
     suspend fun updateSettings(@Body body: UpdateAppSettings): AppSettings
 
+    // Genetics settings (Phase 5) — a flat { dotted-key: string-value } map, e.g.
+    // {"genetics.threshold.safe":"15", …}. PUT accepts a partial map and returns
+    // the full updated set.
+    @GET("api/settings/genetics")
+    suspend fun getGeneticsSettings(): Map<String, String>
+
+    @PUT("api/settings/genetics")
+    suspend fun updateGeneticsSettings(@Body body: Map<String, String>): Map<String, String>
+
     // System settings (server-owned). The app only surfaces the indoor-cam
     // image toggles; PUT is a partial update keyed by setting name.
     @GET("api/system-settings")

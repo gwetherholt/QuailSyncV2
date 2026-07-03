@@ -489,6 +489,12 @@ pub(crate) async fn breeding_suggest(
     State(state): State<AppState>,
 ) -> Json<Vec<PairingSuggestion>> {
     let conn = acquire_db(&state);
+    // Thresholds are read fresh each request (Phase 5); percents → fractions.
+    let gs = crate::routes::settings::load_genetics_settings(&conn);
+    let (safe, avoid) = (
+        gs.threshold_safe as f64 / 100.0,
+        gs.threshold_avoid as f64 / 100.0,
+    );
     let profiles = load_active_profiles(&conn);
     let males: Vec<&(i64, Sex, GeneticProfile)> = profiles
         .iter()
@@ -510,7 +516,7 @@ pub(crate) async fn breeding_suggest(
                 paternal_overlap,
                 maternal_overlap,
                 risk_percent: (risk * 100.0).round() as i64,
-                risk_level: crate::genetics::risk_level(risk).to_string(),
+                risk_level: crate::genetics::risk_level(risk, safe, avoid).to_string(),
             });
         }
     }
@@ -568,8 +574,10 @@ pub(crate) async fn breeding_diversity(State(state): State<AppState>) -> Json<Fl
     }
     let best_pairing_risk = if best.is_finite() { best } else { 1.0 };
 
-    let needs_new_blood =
-        best_pairing_risk > crate::genetics::RISK_AVOID_THRESHOLD || min_confidence < 0.50;
+    // Configurable thresholds (Phase 5): avoid overlap % and new-blood confidence %.
+    let gs = crate::routes::settings::load_genetics_settings(&conn);
+    let needs_new_blood = best_pairing_risk > gs.threshold_avoid as f64 / 100.0
+        || min_confidence < gs.new_blood_confidence as f64 / 100.0;
 
     // Distinct lineages appearing across all active profiles (both sides).
     let mut lineages = std::collections::HashSet::new();

@@ -629,6 +629,103 @@ pub struct UpdateAppSettings {
     pub max_females_per_male: Option<u32>,
 }
 
+/// User-configurable genetics thresholds (Phase 5). All values are whole
+/// percents except `display_cap` (a count). Persisted as string rows in the
+/// `settings` table under the dotted keys below; the wire format on
+/// `GET/PUT /api/settings/genetics` is a flat `{ "genetics.threshold.safe":
+/// "15", … }` map. This is the parsed, typed view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GeneticsSettings {
+    /// Overlap % below which a pairing is "safe"; at/above it is "caution".
+    pub threshold_safe: u32,
+    /// Overlap % above which a pairing should be "avoided".
+    pub threshold_avoid: u32,
+    /// Lineage components below this % are dropped from a bird's profile.
+    pub tracking_floor: u32,
+    /// Show at most this many lineages per side; the rest group as "trace".
+    pub display_cap: u32,
+    /// Flag new blood when a bird's / the flock's confidence drops below this %.
+    pub new_blood_confidence: u32,
+}
+
+impl Default for GeneticsSettings {
+    fn default() -> Self {
+        Self {
+            threshold_safe: 15,
+            threshold_avoid: 35,
+            tracking_floor: 1,
+            display_cap: 4,
+            new_blood_confidence: 50,
+        }
+    }
+}
+
+impl GeneticsSettings {
+    pub const KEY_THRESHOLD_SAFE: &'static str = "genetics.threshold.safe";
+    pub const KEY_THRESHOLD_AVOID: &'static str = "genetics.threshold.avoid";
+    pub const KEY_TRACKING_FLOOR: &'static str = "genetics.tracking_floor";
+    pub const KEY_DISPLAY_CAP: &'static str = "genetics.display_cap";
+    pub const KEY_NEW_BLOOD_CONFIDENCE: &'static str = "genetics.new_blood_confidence";
+
+    /// `(key, default, min, max)` for every genetics setting — the single source
+    /// of truth driving DB seeding, GET serialization, and PUT validation. The
+    /// `(min, max)` bounds are inclusive.
+    pub const SPEC: [(&'static str, u32, u32, u32); 5] = [
+        (Self::KEY_THRESHOLD_SAFE, 15, 0, 100),
+        (Self::KEY_THRESHOLD_AVOID, 35, 0, 100),
+        (Self::KEY_TRACKING_FLOOR, 1, 1, 50),
+        (Self::KEY_DISPLAY_CAP, 4, 1, 10),
+        (Self::KEY_NEW_BLOOD_CONFIDENCE, 50, 0, 100),
+    ];
+
+    /// Inclusive `(min, max)` valid range for a key, or `None` if unknown.
+    pub fn valid_range(key: &str) -> Option<(u32, u32)> {
+        Self::SPEC
+            .iter()
+            .find(|(k, _, _, _)| *k == key)
+            .map(|(_, _, lo, hi)| (*lo, *hi))
+    }
+
+    /// Set a value by its dotted key. Returns `false` for an unknown key.
+    pub fn set(&mut self, key: &str, value: u32) -> bool {
+        match key {
+            Self::KEY_THRESHOLD_SAFE => self.threshold_safe = value,
+            Self::KEY_THRESHOLD_AVOID => self.threshold_avoid = value,
+            Self::KEY_TRACKING_FLOOR => self.tracking_floor = value,
+            Self::KEY_DISPLAY_CAP => self.display_cap = value,
+            Self::KEY_NEW_BLOOD_CONFIDENCE => self.new_blood_confidence = value,
+            _ => return false,
+        }
+        true
+    }
+
+    /// The flat `{ dotted-key: string-value }` map used on the wire.
+    pub fn to_map(&self) -> std::collections::BTreeMap<String, String> {
+        std::collections::BTreeMap::from([
+            (
+                Self::KEY_THRESHOLD_SAFE.to_string(),
+                self.threshold_safe.to_string(),
+            ),
+            (
+                Self::KEY_THRESHOLD_AVOID.to_string(),
+                self.threshold_avoid.to_string(),
+            ),
+            (
+                Self::KEY_TRACKING_FLOOR.to_string(),
+                self.tracking_floor.to_string(),
+            ),
+            (
+                Self::KEY_DISPLAY_CAP.to_string(),
+                self.display_cap.to_string(),
+            ),
+            (
+                Self::KEY_NEW_BLOOD_CONFIDENCE.to_string(),
+                self.new_blood_confidence.to_string(),
+            ),
+        ])
+    }
+}
+
 // =========================================================================
 // System settings — server-owned lifecycle + alert thresholds.
 //
@@ -1392,6 +1489,27 @@ pub struct AssignIndoorCameraRequest {
 mod tests {
     use super::*;
     use chrono::Utc;
+
+    // --- GeneticsSettings (Phase 5) ---
+
+    #[test]
+    fn genetics_settings_default_matches_spec() {
+        // The DB seeds from SPEC while load-fallback uses Default — they must agree.
+        let map = GeneticsSettings::default().to_map();
+        for (key, default, _lo, _hi) in GeneticsSettings::SPEC {
+            assert_eq!(
+                map.get(key),
+                Some(&default.to_string()),
+                "default drift for {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn genetics_settings_rejects_unknown_key() {
+        assert!(GeneticsSettings::valid_range("genetics.bogus").is_none());
+        assert!(!GeneticsSettings::default().set("genetics.bogus", 1));
+    }
 
     // --- TelemetryPayload serde roundtrips ---
 

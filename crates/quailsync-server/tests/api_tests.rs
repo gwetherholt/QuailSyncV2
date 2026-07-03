@@ -588,6 +588,158 @@ async fn gen0_flock_different_lineages_no_new_blood() {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 5: configurable genetics settings
+// ---------------------------------------------------------------------------
+
+type StrMap = std::collections::HashMap<String, String>;
+
+async fn get_genetics(base: &str) -> StrMap {
+    reqwest::get(format!("{base}/api/settings/genetics"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn genetics_settings_crud_and_reset() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    // Defaults are seeded at init.
+    let d = get_genetics(&base).await;
+    assert_eq!(d["genetics.threshold.safe"], "15");
+    assert_eq!(d["genetics.threshold.avoid"], "35");
+    assert_eq!(d["genetics.tracking_floor"], "1");
+    assert_eq!(d["genetics.display_cap"], "4");
+    assert_eq!(d["genetics.new_blood_confidence"], "50");
+
+    // Update one value; others stay put; response echoes the full set.
+    let resp = client
+        .put(format!("{base}/api/settings/genetics"))
+        .json(&serde_json::json!({ "genetics.threshold.safe": "20" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let after: StrMap = resp.json().await.unwrap();
+    assert_eq!(after["genetics.threshold.safe"], "20");
+    assert_eq!(after["genetics.threshold.avoid"], "35");
+
+    // Persists across a fresh GET.
+    assert_eq!(get_genetics(&base).await["genetics.threshold.safe"], "20");
+
+    // "Reset to defaults" = PUT every default value back.
+    client
+        .put(format!("{base}/api/settings/genetics"))
+        .json(&serde_json::json!({
+            "genetics.threshold.safe": "15",
+            "genetics.threshold.avoid": "35",
+            "genetics.tracking_floor": "1",
+            "genetics.display_cap": "4",
+            "genetics.new_blood_confidence": "50",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(get_genetics(&base).await["genetics.threshold.safe"], "15");
+}
+
+#[tokio::test]
+async fn genetics_settings_validation_rejects_bad_input() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+    let put = |body: serde_json::Value| {
+        let client = client.clone();
+        let base = base.clone();
+        async move {
+            client
+                .put(format!("{base}/api/settings/genetics"))
+                .json(&body)
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .as_u16()
+        }
+    };
+
+    // display_cap max is 10; tracking_floor min is 1; thresholds are 0..=100.
+    assert_eq!(
+        put(serde_json::json!({ "genetics.display_cap": "11" })).await,
+        400
+    );
+    assert_eq!(
+        put(serde_json::json!({ "genetics.tracking_floor": "0" })).await,
+        400
+    );
+    assert_eq!(
+        put(serde_json::json!({ "genetics.threshold.safe": "101" })).await,
+        400
+    );
+    // Non-integer value.
+    assert_eq!(
+        put(serde_json::json!({ "genetics.threshold.safe": "abc" })).await,
+        400
+    );
+    // Unknown key.
+    assert_eq!(put(serde_json::json!({ "genetics.bogus": "5" })).await, 400);
+
+    // A bad key in a batch rejects the whole request — no partial write.
+    assert_eq!(
+        put(serde_json::json!({ "genetics.threshold.safe": "22", "genetics.display_cap": "99" }))
+            .await,
+        400
+    );
+    assert_eq!(get_genetics(&base).await["genetics.threshold.safe"], "15");
+}
+
+#[tokio::test]
+async fn breeding_suggest_respects_configured_safe_threshold() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    // Ten lineages. Male = 100% L0; female = 10% each across L0..L9.
+    // Shared L0 → overlap = 1.0 × 0.1 = 0.10 (10%).
+    let mut lineages = Vec::new();
+    for i in 0..10 {
+        lineages.push(p4_lineage(&client, &base, &format!("L{i}")).await);
+    }
+    p4_bird(&client, &base, Sex::Male, vec![lineages[0]]).await;
+    p4_bird(&client, &base, Sex::Female, lineages.clone()).await;
+
+    // Default safe = 15%, so a 10% overlap reads as safe.
+    let pairs: Vec<PairingSuggestion> = reqwest::get(format!("{base}/api/breeding/suggest"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs[0].risk_percent, 10);
+    assert_eq!(pairs[0].risk_level, "safe");
+
+    // Tighten safe to 5% → the same 10% pairing now reads as caution.
+    let r = client
+        .put(format!("{base}/api/settings/genetics"))
+        .json(&serde_json::json!({ "genetics.threshold.safe": "5" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+
+    let pairs: Vec<PairingSuggestion> = reqwest::get(format!("{base}/api/breeding/suggest"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(pairs[0].risk_percent, 10);
+    assert_eq!(pairs[0].risk_level, "caution");
+}
+
+// ---------------------------------------------------------------------------
 // Chick groups: GET /api/chick-groups returns is_ready_to_transition correctly
 // ---------------------------------------------------------------------------
 

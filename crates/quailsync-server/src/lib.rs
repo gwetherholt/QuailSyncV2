@@ -230,6 +230,10 @@ pub fn build_app(state: AppState) -> Router {
             "/api/settings",
             get(settings::get_settings).put(settings::update_settings),
         )
+        .route(
+            "/api/settings/genetics",
+            get(settings::get_genetics_settings).put(settings::update_genetics_settings),
+        )
         // Server-owned lifecycle + alert-threshold settings (distinct from the
         // cull-guardrail `/api/settings` above). See routes/system_settings.rs.
         .route(

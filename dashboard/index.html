@@ -4253,6 +4253,17 @@
     _backups: [],
     _breedingConfig: null,
     _systemSettings: null,
+    _geneticsSettings: null,
+    // Field config shared by the genetics render + save. Keys match the flat
+    // map from GET /api/settings/genetics; ranges mirror the server's validation.
+    _geneticsFields: [
+      {key:'genetics.threshold.safe', label:'Safe threshold (%)', desc:'Pairings below this overlap % are shown as safe.', min:0, max:100},
+      {key:'genetics.threshold.avoid', label:'Avoid threshold (%)', desc:'Pairings above this overlap % should be avoided; between safe and avoid is caution.', min:0, max:100},
+      {key:'genetics.tracking_floor', label:'Tracking floor (%)', desc:'Lineage components below this % are dropped from a bird\'s profile.', min:1, max:50},
+      {key:'genetics.display_cap', label:'Display cap', desc:'Show at most this many lineages; the rest group as a "trace" segment.', min:1, max:10},
+      {key:'genetics.new_blood_confidence', label:'New-blood confidence (%)', desc:'Alert when flock confidence drops below this %.', min:0, max:100},
+    ],
+    _geneticsDefaults: {'genetics.threshold.safe':15,'genetics.threshold.avoid':35,'genetics.tracking_floor':1,'genetics.display_cap':4,'genetics.new_blood_confidence':50},
     render: function(app){
       app.innerHTML = '<div class="page-top-bar"><h2>Settings</h2></div>' +
         // Breeding Configuration. Drives the Flock-screen cull-mode guardrail
@@ -4260,6 +4271,12 @@
         '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F423; Breeding Configuration</span></div><div class="panel-body">' +
         '<p style="margin-top:0;color:#666;font-size:.9rem">Used to compute the minimum males the flock needs. Minimum&nbsp;=&nbsp;ceil(females&nbsp;&divide;&nbsp;max-per-male)&nbsp;&times;&nbsp;males-per-group.</p>' +
         '<div id="breeding-config">'+loadingHTML()+'</div>' +
+        '</div></div>' +
+        // Genetics thresholds (Phase 5). Drive breeding-risk banding + the
+        // new-blood alert; read fresh by the server on each request.
+        '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F9EC; Genetics</span></div><div class="panel-body">' +
+        '<p style="margin-top:0;color:#666;font-size:.9rem">Thresholds for inbreeding risk and the genetic-diversity (new blood) alert.</p>' +
+        '<div id="genetics-config">'+loadingHTML()+'</div>' +
         '</div></div>' +
         // Indoor-camera image handling toggles (server system-settings). The
         // detection JSON is always recorded; these only gate the images.
@@ -4277,6 +4294,8 @@
     _load: async function(){
       this._breedingConfig = await API.get('/api/settings');
       this._renderBreedingConfig();
+      this._geneticsSettings = await API.get('/api/settings/genetics');
+      this._renderGeneticsConfig();
       this._systemSettings = await API.get('/api/system-settings');
       this._renderIndoorCamConfig();
       this._backups = await API.get('/api/backups') || [];
@@ -4343,6 +4362,61 @@
         toast('Breeding settings saved');
       } else {
         toast('Save failed','error');
+      }
+    },
+    _renderGeneticsConfig: function(){
+      var el = document.getElementById('genetics-config');
+      if(!el) return;
+      var s = this._geneticsSettings;
+      if(!s){
+        el.innerHTML = '<div class="no-data">Couldn\'t load settings.</div>';
+        return;
+      }
+      var html = '<div style="display:flex;flex-direction:column;gap:.9rem;max-width:32rem">';
+      this._geneticsFields.forEach(function(f){
+        var val = s[f.key] != null ? s[f.key] : '';
+        html +=
+          '<label style="display:flex;flex-direction:column;gap:.2rem;font-size:.85rem">' +
+          '<span style="font-weight:600">'+f.label+'</span>' +
+          '<input id="gen-'+f.key+'" type="number" min="'+f.min+'" max="'+f.max+'" value="'+escapeHtml(String(val))+'" style="padding:.4rem;width:6rem">' +
+          '<span style="color:#666;font-size:.78rem">'+f.desc+'</span>' +
+          '</label>';
+      });
+      html +=
+        '<div style="display:flex;gap:.6rem;margin-top:.3rem">' +
+        '<button class="btn-primary" onclick="Page.Settings.saveGeneticsConfig()">Save</button>' +
+        '<button class="btn-cancel" onclick="Page.Settings.resetGeneticsConfig()">Reset to defaults</button>' +
+        '</div></div>';
+      el.innerHTML = html;
+    },
+    saveGeneticsConfig: async function(){
+      var body = {};
+      for(var i=0;i<this._geneticsFields.length;i++){
+        var f = this._geneticsFields[i];
+        var v = parseInt(document.getElementById('gen-'+f.key).value, 10);
+        if(isNaN(v) || v < f.min || v > f.max){
+          toast(f.label+' must be between '+f.min+' and '+f.max,'error');
+          return;
+        }
+        body[f.key] = v;
+      }
+      var resp = await API.put('/api/settings/genetics', body);
+      if(resp){
+        this._geneticsSettings = resp;
+        this._renderGeneticsConfig();
+        toast('Genetics settings saved');
+      } else {
+        toast('Save failed','error');
+      }
+    },
+    resetGeneticsConfig: async function(){
+      var resp = await API.put('/api/settings/genetics', this._geneticsDefaults);
+      if(resp){
+        this._geneticsSettings = resp;
+        this._renderGeneticsConfig();
+        toast('Reset to defaults');
+      } else {
+        toast('Reset failed','error');
       }
     },
     _renderList: function(){

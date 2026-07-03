@@ -2,8 +2,9 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
-use quailsync_common::{AppSettings, UpdateAppSettings};
+use quailsync_common::{AppSettings, GeneticsSettings, UpdateAppSettings};
 use rusqlite::{params, Connection};
+use std::collections::{BTreeMap, HashMap};
 
 use crate::state::{acquire_db, AppState};
 
@@ -88,4 +89,77 @@ pub(crate) async fn update_settings(
         .ok();
     }
     Json(load_settings(&conn)).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5: configurable genetics thresholds (GET/PUT /api/settings/genetics)
+// ---------------------------------------------------------------------------
+
+/// Loads the genetics thresholds, falling back to [`GeneticsSettings::default`]
+/// for any key missing or unparseable in the `settings` table.
+pub fn load_genetics_settings(conn: &Connection) -> GeneticsSettings {
+    let mut s = GeneticsSettings::default();
+    for (key, ..) in GeneticsSettings::SPEC {
+        if let Some(v) = read_u32(conn, key) {
+            s.set(key, v);
+        }
+    }
+    s
+}
+
+/// `GET /api/settings/genetics` — the genetics settings as a flat
+/// `{ "genetics.threshold.safe": "15", … }` string map.
+pub(crate) async fn get_genetics_settings(
+    State(state): State<AppState>,
+) -> Json<BTreeMap<String, String>> {
+    let conn = acquire_db(&state);
+    Json(load_genetics_settings(&conn).to_map())
+}
+
+/// `PUT /api/settings/genetics` — apply a partial `{ key: value }` update. Every
+/// key must be a known genetics key whose value is an integer within its range;
+/// otherwise the whole request is rejected (400) with no writes. Values may be
+/// JSON numbers or numeric strings. Returns the full updated settings map.
+pub(crate) async fn update_genetics_settings(
+    State(state): State<AppState>,
+    Json(body): Json<HashMap<String, serde_json::Value>>,
+) -> impl IntoResponse {
+    let bad = |msg: String| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response()
+    };
+
+    // Validate every entry up front (all-or-nothing).
+    let mut parsed: Vec<(String, u32)> = Vec::new();
+    for (key, raw) in &body {
+        let Some((lo, hi)) = GeneticsSettings::valid_range(key) else {
+            return bad(format!("unknown settings key: {key}"));
+        };
+        let value: Option<i64> = match raw {
+            serde_json::Value::Number(n) => n.as_i64(),
+            serde_json::Value::String(s) => s.trim().parse::<i64>().ok(),
+            _ => None,
+        };
+        let Some(v) = value else {
+            return bad(format!("{key} must be an integer"));
+        };
+        if v < lo as i64 || v > hi as i64 {
+            return bad(format!("{key} must be between {lo} and {hi}"));
+        }
+        parsed.push((key.clone(), v as u32));
+    }
+
+    let conn = acquire_db(&state);
+    for (key, v) in &parsed {
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, v.to_string()],
+        )
+        .ok();
+    }
+    Json(load_genetics_settings(&conn).to_map()).into_response()
 }
