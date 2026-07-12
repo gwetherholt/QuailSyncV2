@@ -450,6 +450,23 @@ data class AssignIndoorCameraRequest(
     @SerializedName("brooder_id") val brooderId: Int,
 )
 
+/** A camera's incubator|brooder mode assignment plus the DERIVED, read-only
+ *  model it selects (GET/PUT /api/cameras/{camera_id}/assignment). Distinct from
+ *  [IndoorCameraAssignment] (housing-unit attachment) — this is a flat mode
+ *  field for the single indoor camera. `activeModel` is computed server-side
+ *  from `assignment` (incubator → "incubation", brooder → "chick"). */
+data class CameraAssignment(
+    @SerializedName("camera_id") val cameraId: String,
+    @SerializedName("assignment") val assignment: String, // "incubator" | "brooder"
+    @SerializedName("active_model") val activeModel: String,
+    @SerializedName("updated_at") val updatedAt: String? = null,
+)
+
+/** Body of PUT /api/cameras/{camera_id}/assignment. */
+data class SetCameraAssignmentRequest(
+    @SerializedName("assignment") val assignment: String, // "incubator" | "brooder"
+)
+
 data class TargetTempResponse(
     // Foreign id + all temps/week → nullable (a missing temperature must render
     // as unknown, never a misleading 0°F). `scheduleLabel`/`status` are computed
@@ -893,6 +910,15 @@ interface QuailSyncApi {
 
     @retrofit2.http.HTTP(method = "DELETE", path = "api/indoor-cameras/{id}/assign", hasBody = false)
     suspend fun unassignIndoorCamera(@Path("id") id: Int): retrofit2.Response<Unit>
+
+    @GET("api/cameras/{camera_id}/assignment")
+    suspend fun getCameraAssignment(@Path("camera_id") cameraId: String): CameraAssignment
+
+    @PUT("api/cameras/{camera_id}/assignment")
+    suspend fun setCameraAssignment(
+        @Path("camera_id") cameraId: String,
+        @Body body: SetCameraAssignmentRequest,
+    ): CameraAssignment
 
     @GET("api/lineages")
     suspend fun getLineages(): List<Lineage>

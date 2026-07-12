@@ -1181,6 +1181,8 @@
         '<div id="d-newblood" style="grid-column:1/-1"></div>' +
         '<div class="panel" style="grid-column:1/-1"><div class="panel-body" id="d-brooder">'+loadingHTML()+'</div></div>' +
         '<div class="panel" style="grid-column:1/-1"><div class="panel-header"><span class="panel-header-left">&#x1F4F7; Indoor Camera</span></div><div class="panel-body" id="d-indoorcam">'+loadingHTML()+'</div></div>' +
+        '<div class="panel" style="grid-column:1/-1"><div class="panel-header"><span class="panel-header-left">&#x2699;&#xFE0F; Indoor Camera Mode</span></div><div class="panel-body" id="d-camassign">'+loadingHTML()+'</div></div>' +
+        '<div class="panel" style="grid-column:1/-1"><div class="panel-header"><span class="panel-header-left">&#x1F423; Hatch Activity</span></div><div class="panel-body" id="d-hatch">'+loadingHTML()+'</div></div>' +
         '<div class="panel" style="grid-column:1/-1"><div class="panel-header"><span class="panel-header-left">&#x1F4F8; Trail Cam Analytics</span><span style="font-size:.7rem;color:#999">last 7 days</span></div><div class="panel-body" id="d-trailcam">'+loadingHTML()+'</div></div>' +
         '<div class="dash-row-2">' +
           '<div class="panel"><div class="panel-header"><span class="panel-header-left">&#x1F6A8; Alerts</span><a class="view-all-link" id="d-alerts-viewall" style="display:none">View all</a></div><div class="panel-body"><div class="alerts-scroll" id="d-alerts">'+loadingHTML()+'</div></div></div>' +
@@ -1213,6 +1215,12 @@
       // Indoor camera: live chick count + latest saved image + assignment.
       this._pollIndoorCam();
       addInterval(function(){ self._pollIndoorCam(); }, 30000);
+      // Indoor camera mode (incubator|brooder) + derived active model. Changes
+      // only via this control, so poll once (re-render happens on set).
+      this._pollCamAssignment();
+      // Hatch activity: incubation-event summary (read-only).
+      this._pollHatch();
+      addInterval(function(){ self._pollHatch(); }, 60000);
       addInterval(this._pollStats, 60000);
       addInterval(this._pollFlock, 60000);
     },
@@ -1780,6 +1788,104 @@
         toast('Indoor camera unassigned');
         this._pollIndoorCam();
       } catch(e){ toast('Unassign failed','error'); }
+    },
+
+    /* ---------- Indoor Camera Mode (incubator|brooder assignment) ---------- */
+
+    // The single indoor Tapo camera. Its assignment selects which vision model
+    // stage 3 will run; the model shown here is DERIVED server-side and read-only.
+    _camModeId: 'indoor_tapo',
+
+    _pollCamAssignment: async function(){
+      var el = document.getElementById('d-camassign');
+      if(!el) return;
+      var a = await API.get('/api/cameras/' + encodeURIComponent(this._camModeId) + '/assignment');
+      if(!a){ el.innerHTML = emptyState('&#x1F4F7;','Could not load camera assignment','',''); return; }
+      el.innerHTML = this._renderCamAssignment(a);
+    },
+
+    _renderCamAssignment: function(a){
+      // Two-segment toggle; the selected side is filled with the sage accent.
+      function seg(value, label){
+        var active = a.assignment === value;
+        var base = 'padding:.4rem 1rem;border:1px solid var(--sage);cursor:pointer;font-size:.85rem;';
+        var style = active
+          ? base + 'background:var(--sage);color:#fff;font-weight:600;'
+          : base + 'background:#fff;color:var(--sage-dark);';
+        return '<button onclick="Page.Dashboard.setCamAssignment(\''+value+'\')" style="'+style+'">'+label+'</button>';
+      }
+      return '<div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">'
+        + '<div style="display:inline-flex;border-radius:8px;overflow:hidden">'
+        +   seg('incubator','Incubator') + seg('brooder','Brooder')
+        + '</div>'
+        + '<div style="color:#888;font-size:.85rem">Model: '
+        +   '<span style="font-weight:600;color:var(--sage-dark)">'+escapeHtml(a.active_model)+'</span>'
+        +   ' <span style="color:#aaa">&middot; follows the assignment automatically</span>'
+        + '</div>'
+        + '</div>';
+    },
+
+    setCamAssignment: async function(value){
+      var updated = await API.put('/api/cameras/' + encodeURIComponent(this._camModeId) + '/assignment', { assignment: value });
+      if(!updated){ toast('Could not update camera assignment','error'); return; }
+      toast('Camera set to ' + value + ' → ' + updated.active_model + ' model');
+      var el = document.getElementById('d-camassign');
+      if(el) el.innerHTML = this._renderCamAssignment(updated);
+    },
+
+    /* ---------- Hatch Activity (incubation-event summary, read-only) ------- */
+
+    _pollHatch: async function(){
+      var el = document.getElementById('d-hatch');
+      if(!el) return;
+      var s = await API.get('/api/incubation/summary');
+      if(!s){ el.innerHTML = emptyState('&#x1F423;','Could not load hatch activity','',''); return; }
+      el.innerHTML = this._renderHatch(s);
+    },
+
+    _renderHatch: function(s){
+      var win = s.window_hours != null ? s.window_hours : 24;
+      var total = s.total_events || 0;
+      var html = '<div style="display:flex;align-items:baseline;gap:.5rem;margin-bottom:.7rem">'
+        + '<span style="font-size:1.6rem;font-weight:700;color:var(--sage-dark)">' + total + '</span>'
+        + '<span style="color:#888">change event' + (total === 1 ? '' : 's') + ' in the last ' + win + 'h</span>'
+        + '</div>';
+
+      if(!s.slots || !s.slots.length){
+        html += '<div style="color:#999">No slot activity in this window.</div>';
+        return html;
+      }
+
+      html += '<div class="table-wrap"><table class="data-table"><thead><tr>'
+        + '<th>Slot</th><th>Events</th><th>Last change</th><th>Last score</th>'
+        + '</tr></thead><tbody>';
+      s.slots.forEach(function(sl){
+        html += '<tr>'
+          + '<td>' + escapeHtml(sl.slot_id) + '</td>'
+          + '<td>' + sl.event_count + '</td>'
+          + '<td>' + relativeTime(sl.last_event_at) + '</td>'
+          + '<td>' + (sl.last_diff_score != null ? sl.last_diff_score.toFixed(1) : '&mdash;') + '</td>'
+          + '</tr>';
+      });
+      html += '</tbody></table></div>';
+
+      // Per-clutch breakdown only when at least one event carries a clutch id;
+      // omit the section entirely otherwise (don't render an empty block).
+      if(s.clutches && s.clutches.length){
+        html += '<div style="margin-top:.9rem;font-weight:600;color:var(--sage-dark)">By clutch</div>';
+        html += '<div class="table-wrap"><table class="data-table"><thead><tr>'
+          + '<th>Clutch</th><th>Events</th><th>Last change</th>'
+          + '</tr></thead><tbody>';
+        s.clutches.forEach(function(c){
+          html += '<tr>'
+            + '<td>#' + c.clutch_id + '</td>'
+            + '<td>' + c.event_count + '</td>'
+            + '<td>' + relativeTime(c.last_event_at) + '</td>'
+            + '</tr>';
+        });
+        html += '</tbody></table></div>';
+      }
+      return html;
     },
 
     /* ---------- Trail Cam Analytics (7-day bird-count trends) ---------- */

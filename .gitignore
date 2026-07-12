@@ -20,6 +20,14 @@ pi-agent/core.*
 # (the .example template is intentionally NOT ignored).
 .trailcam-secrets
 .indoor-cam-secrets
+.incubator-secrets
+
+# Incubator pipeline runtime artifacts: the reference frame(s) captured by
+# define_rois.py and any locally-configured captures dir. The .example secrets
+# template and config.json are intentionally NOT ignored.
+incubator/reference.jpg
+incubator/reference_annotated.jpg
+incubator/captures/
 
 # Indoor-cam YOLO model binaries live here on the Pi but must not bloat the repo
 # (nor be wiped by an rsync deploy). Ignore the contents but keep the directory

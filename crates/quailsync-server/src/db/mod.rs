@@ -824,6 +824,54 @@ pub fn init_db(conn: &Connection) {
     .expect("failed to create bird_genetic_profile table");
     crate::genetics::migrate_bird_lineages(conn);
 
+    // --- Incubation events (stage-1 incubator capture pipeline) --------------
+    // Written by the Python incubator sidecar (see `incubator/`): one
+    // `change_detected` row per per-slot frame-difference event. The backend now
+    // OWNS this schema — the sidecar assumes the table exists and is the only
+    // writer. This DDL is byte-for-byte the columns/types the sidecar has used,
+    // so a DB the sidecar already created is a no-op here. `clutch_id` is
+    // nullable and static-null today — it's the hook for later per-clutch
+    // attribution. Read-only aggregates are exposed at /api/incubation/*.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS incubation_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            slot_id TEXT NOT NULL,
+            event_type TEXT NOT NULL DEFAULT 'change_detected',
+            diff_score REAL NOT NULL,
+            high_threshold REAL NOT NULL,
+            clutch_id INTEGER,
+            frame_path TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_incubation_events_slot ON incubation_events(slot_id);
+        CREATE INDEX IF NOT EXISTS idx_incubation_events_created ON incubation_events(created_at);",
+    )
+    .expect("failed to create incubation_events table");
+
+    // --- Indoor-camera mode assignment (flat mode field per camera) ----------
+    // The single indoor Tapo camera is assigned to an "incubator" or a "brooder";
+    // that selects which vision model stage 3 will eventually run. Storage + API
+    // + UI only for now — the vision pipeline does NOT consume it yet. The valid
+    // values ('incubator' | 'brooder') are enforced in the handler, not the
+    // schema.
+    //
+    // NB: named `camera_mode_assignments`, NOT `camera_assignments` — the latter
+    // already exists above as the trail-camera→housing junction. This is a flat
+    // mode field for the single indoor camera, distinct from both that junction
+    // and `indoor_camera_assignments` (housing-unit attachment); it is not a
+    // location system. The single camera is seeded to 'incubator'; INSERT OR
+    // IGNORE makes re-runs (and an existing, possibly-switched value) a no-op.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS camera_mode_assignments (
+            camera_id TEXT PRIMARY KEY,
+            assignment TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        INSERT OR IGNORE INTO camera_mode_assignments (camera_id, assignment)
+            VALUES ('indoor_tapo', 'incubator');",
+    )
+    .expect("failed to create camera_mode_assignments table");
+
     // --- Performance indexes ---
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_readings_brooder_received ON brooder_readings(brooder_id, received_at);

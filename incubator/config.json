@@ -1,0 +1,29 @@
+{
+  "camera": {
+    "source_env": "INCUBATOR_RTSP_URL",
+    "capture_interval_seconds": 10,
+    "warmup_frames": 3
+  },
+  "storage": {
+    "db_path": "~/QuailSyncV2/data/quailsync.db",
+    "captures_dir": "~/QuailSyncV2/incubator/captures",
+    "save_crops_on_event": true,
+    "sqlite_busy_timeout_ms": 5000
+  },
+  "detection": {
+    "baseline_alpha": 0.02,
+    "high_threshold": 18.0,
+    "low_threshold": 8.0,
+    "cooldown_seconds": 120,
+    "min_frames_before_detect": 5,
+    "freeze_baseline_while_active": true,
+    "blur_kernel": 5
+  },
+  "tray": {
+    "reference_image": "incubator/reference.jpg",
+    "slots": [
+      { "id": "A1", "bbox": [120, 80, 60, 60], "clutch_id": null },
+      { "id": "A2", "bbox": [188, 80, 60, 60], "clutch_id": null }
+    ]
+  }
+}

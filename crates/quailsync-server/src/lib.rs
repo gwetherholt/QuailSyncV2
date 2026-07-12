@@ -174,6 +174,12 @@ pub fn build_app(state: AppState) -> Router {
             "/api/indoorcam/image/{camera_id}/{filename}",
             get(indoorcam::indoorcam_image),
         )
+        // Incubation events (stage-1 incubator capture pipeline; see
+        // `incubator/`). The Python sidecar is the only writer of
+        // `incubation_events`; these are read-only aggregates over it. See
+        // routes/incubation.rs.
+        .route("/api/incubation/events", get(incubation::list_events))
+        .route("/api/incubation/summary", get(incubation::summary))
         .route(
             "/api/birds/{id}/weights/{wid}",
             axum::routing::delete(birds::delete_weight),
@@ -355,6 +361,13 @@ pub fn build_app(state: AppState) -> Router {
         .route(
             "/api/cameras/{id}/detections/summary",
             get(cameras::camera_detection_summary),
+        )
+        // Indoor-camera assignment (incubator|brooder mode field; selects the
+        // vision model stage 3 will run). Read + set only; the pipeline doesn't
+        // consume it yet. See routes/camera_assignment.rs.
+        .route(
+            "/api/cameras/{id}/assignment",
+            get(camera_assignment::get_assignment).put(camera_assignment::set_assignment),
         )
         .route(
             "/api/frames",

@@ -1,0 +1,7 @@
+# Stage-1 incubator capture pipeline — frame grab + ROI frame-diff only.
+# No YOLO / ultralytics / torch here; that's stage 2.
+#
+# opencv-python-headless (not -python): the Pi runs this as a headless service
+# with no GUI, so we don't want the GTK/Qt highgui dependencies.
+opencv-python-headless
+numpy

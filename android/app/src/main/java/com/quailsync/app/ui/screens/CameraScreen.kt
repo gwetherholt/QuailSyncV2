@@ -44,6 +44,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
@@ -91,6 +93,7 @@ import com.quailsync.app.data.QuailSyncApi
 import com.quailsync.app.data.ServerConfig
 import com.quailsync.app.data.UpdateBrooderRequest
 import com.quailsync.app.ui.theme.SageGreen
+import androidx.compose.ui.platform.testTag
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -112,8 +115,10 @@ import coil.compose.AsyncImage
 import com.quailsync.app.data.TrailcamCamera
 import com.quailsync.app.data.TrailcamLatest
 import com.quailsync.app.data.AssignIndoorCameraRequest
+import com.quailsync.app.data.CameraAssignment
 import com.quailsync.app.data.IndoorCamera
 import com.quailsync.app.data.IndoorcamLatest
+import com.quailsync.app.data.SetCameraAssignmentRequest
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.ZoneId
@@ -836,6 +841,10 @@ fun IndoorCamsList(onRefresh: () -> Unit) {
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
+                    // Incubator|brooder MODE for the single indoor camera. Self-
+                    // contained (loads its own state) and independent of the
+                    // per-camera housing assignment below.
+                    item { CameraModeCard() }
                     items(cameras, key = { it.id }) { cam ->
                         IndoorCamCard(
                             camera = cam,
@@ -869,6 +878,133 @@ fun IndoorCamsList(onRefresh: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+/** The single indoor camera's incubator|brooder MODE assignment. Reads the
+ *  current assignment, lets the user switch it, and shows the DERIVED, read-only
+ *  active model (computed server-side). Distinct from the per-camera housing
+ *  attachment on [IndoorCamCard] below — this is a flat mode field that selects
+ *  which vision model stage 3 will eventually run. Self-contained: loads its own
+ *  state and performs its own write, like the other list-level composables. */
+@Composable
+fun CameraModeCard(cameraId: String = "indoor_tapo") {
+    val context = LocalContext.current
+    val api = remember { QuailSyncApi.create(ServerConfig.getServerUrl(context)) }
+    val scope = rememberCoroutineScope()
+
+    var assignment by remember { mutableStateOf<CameraAssignment?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var saving by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(cameraId) {
+        assignment = try {
+            withContext(Dispatchers.IO) { api.getCameraAssignment(cameraId) }
+        } catch (e: Exception) {
+            Log.e("QuailSync", "Failed to load camera assignment", e)
+            error = e.message ?: "Couldn't reach the server"
+            null
+        }
+        loading = false
+    }
+
+    // PUT the new value and reflect the server's derived model on success.
+    fun select(value: String) {
+        val current = assignment
+        if (saving || (current != null && current.assignment == value)) return
+        scope.launch {
+            saving = true
+            try {
+                val updated = withContext(Dispatchers.IO) {
+                    api.setCameraAssignment(cameraId, SetCameraAssignmentRequest(value))
+                }
+                assignment = updated
+                error = null
+            } catch (e: Exception) {
+                Log.e("QuailSync", "Failed to set camera assignment", e)
+                error = e.message ?: "Couldn't update assignment"
+            } finally {
+                saving = false
+            }
+        }
+    }
+
+    Card(
+        Modifier.fillMaxWidth().testTag("camera_mode_card"),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(2.dp),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Indoor Camera Mode", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Assign the camera to an incubator or a brooder. The vision model follows automatically.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            val current = assignment
+            when {
+                loading -> CircularProgressIndicator(color = SageGreen, modifier = Modifier.size(24.dp))
+                current == null -> Text(
+                    error ?: "Couldn't load the assignment.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                else -> CameraModeControl(
+                    assignment = current.assignment,
+                    activeModel = current.activeModel,
+                    enabled = !saving,
+                    onSelect = { select(it) },
+                )
+            }
+        }
+    }
+}
+
+/** Stateless incubator|brooder toggle + derived-model label. Split out from
+ *  [CameraModeCard] so the toggle's reflect/update behaviour is unit-testable
+ *  without a live server: the parent owns the state and the network I/O. */
+@Composable
+fun CameraModeControl(
+    assignment: String,
+    activeModel: String,
+    enabled: Boolean,
+    onSelect: (String) -> Unit,
+) {
+    val chipColors = FilterChipDefaults.filterChipColors(
+        selectedContainerColor = SageGreen,
+        selectedLabelColor = Color.White,
+    )
+    Column {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = assignment == "incubator",
+                onClick = { onSelect("incubator") },
+                label = { Text("Incubator") },
+                enabled = enabled,
+                colors = chipColors,
+                modifier = Modifier.testTag("camera_mode_incubator"),
+            )
+            FilterChip(
+                selected = assignment == "brooder",
+                onClick = { onSelect("brooder") },
+                label = { Text("Brooder") },
+                enabled = enabled,
+                colors = chipColors,
+                modifier = Modifier.testTag("camera_mode_brooder"),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        // Derived, read-only — mirrors the server's active_model for this mode.
+        Text(
+            "Model: $activeModel",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("camera_mode_active_model"),
+        )
     }
 }
 

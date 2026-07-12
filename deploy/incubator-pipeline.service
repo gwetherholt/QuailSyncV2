@@ -1,0 +1,49 @@
+# QuailSync incubator capture pipeline (stage 1) — systemd service
+# Grabs frames from the incubator-tray camera, runs per-slot frame-difference
+# detection, and logs change events (+ saved crops) to SQLite. Data-capture only
+# — no YOLO / classifier / upload (those are later stages). Runs OUTSIDE Docker,
+# directly on the Pi, alongside the trail-cam / indoor-cam pipelines.
+#
+# Install:
+#   sudo cp deploy/incubator-pipeline.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now incubator-pipeline    # <- enable only when ready
+#
+# Logs:
+#   journalctl -u incubator-pipeline -f
+
+[Unit]
+Description=QuailSync incubator capture pipeline (frame-diff ROI event logging)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gwetherholt
+# systemd does not expand '~'; this is $HOME/QuailSyncV2/incubator for gwetherholt.
+WorkingDirectory=/home/gwetherholt/QuailSyncV2/incubator
+
+# --- Secrets ---------------------------------------------------------------
+# The camera URL (INCUBATOR_RTSP_URL — may embed credentials) lives OUTSIDE the
+# repo in a root-owned, chmod 600 file so it's never committed or readable by
+# other users. Create it from incubator/.incubator-secrets.example, e.g.:
+#   install -m 600 /dev/null /home/gwetherholt/.incubator-secrets
+#   editor /home/gwetherholt/.incubator-secrets   # set INCUBATOR_RTSP_URL
+EnvironmentFile=/home/gwetherholt/.incubator-secrets
+
+# --- Non-secret configuration ----------------------------------------------
+# Tray geometry, thresholds, and paths all live in config.json. Point at an
+# alternate file here if needed (default: incubator/config.json).
+Environment=INCUBATOR_CONFIG=/home/gwetherholt/QuailSyncV2/incubator/config.json
+Environment=PYTHONUNBUFFERED=1
+
+# Use the project's virtualenv interpreter (opencv-python-headless + numpy):
+#   python3 -m venv /home/gwetherholt/QuailSyncV2/incubator/venv
+#   /home/gwetherholt/QuailSyncV2/incubator/venv/bin/pip install -r requirements.txt
+ExecStart=/home/gwetherholt/QuailSyncV2/incubator/venv/bin/python /home/gwetherholt/QuailSyncV2/incubator/main.py --loop --log-level INFO
+
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -1485,10 +1485,145 @@ pub struct AssignIndoorCameraRequest {
     pub brooder_id: i64,
 }
 
+// ---------------------------------------------------------------------------
+// Incubation events (stage-1 incubator capture pipeline; see `incubator/`).
+// A Python sidecar watches per-slot ROIs over the incubator tray, runs
+// frame-difference detection, and writes one `change_detected` row per event to
+// the `incubation_events` table (the sidecar is the only writer). The backend
+// owns the schema and exposes read-only aggregates over it. `clutch_id` is
+// nullable and static-null today; the per-clutch breakdown populates for free
+// once slots carry clutch ids — no code change needed then.
+//
+// Null-safety: `clutch_id` and `frame_path` are nullable in the schema, so they
+// are `Option`; every NOT NULL column is non-optional.
+// ---------------------------------------------------------------------------
+
+/// One change-detection event for an incubator-tray slot. Returned by
+/// `GET /api/incubation/events`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IncubationEventDto {
+    pub id: i64,
+    pub slot_id: String,
+    pub event_type: String,
+    pub diff_score: f64,
+    pub high_threshold: f64,
+    /// Nullable per schema — populated later once slots carry a clutch id.
+    pub clutch_id: Option<i64>,
+    /// Saved ROI crop path (the stage-2 labeling dataset); absent when the
+    /// sidecar didn't save a crop for the event.
+    pub frame_path: Option<String>,
+    pub created_at: String,
+}
+
+/// Per-slot activity within the summary window. Nested in
+/// [`IncubationSummaryDto`], one entry per `slot_id` seen, ordered by
+/// `last_event_at` descending.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlotActivityDto {
+    pub slot_id: String,
+    pub event_count: i64,
+    pub last_event_at: String,
+    pub last_diff_score: f64,
+}
+
+/// Per-clutch activity within the summary window, derived purely from rows with
+/// a non-null `clutch_id`. Empty today (config leaves `clutch_id` null); it
+/// populates automatically once slots get clutch ids.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClutchActivityDto {
+    pub clutch_id: i64,
+    pub event_count: i64,
+    pub last_event_at: String,
+}
+
+/// Aggregate incubation activity over a rolling window. Returned by
+/// `GET /api/incubation/summary`. Reflects `change_detected` events only — a
+/// slot's active/quiet state lives in the sidecar detector, not this table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IncubationSummaryDto {
+    pub window_hours: u32,
+    pub total_events: i64,
+    /// One per `slot_id` seen in the window, ordered by `last_event_at` desc.
+    pub slots: Vec<SlotActivityDto>,
+    /// One per DISTINCT non-null `clutch_id` in the window; empty when none.
+    pub clutches: Vec<ClutchActivityDto>,
+}
+
+// ---------------------------------------------------------------------------
+// Indoor-camera assignment (storage + API + UIs). The single indoor Tapo camera
+// is assigned to an "incubator" or a "brooder"; that assignment selects which
+// vision model stage 3 will eventually run. The vision pipeline does NOT consume
+// it yet. `active_model` is DERIVED from `assignment` via [`active_model_for`]
+// (never stored) so there's a single source of truth for the mapping that
+// stage 3 will reuse.
+//
+// This is a flat mode field for the one indoor camera — NOT a general location
+// system, and distinct from the housing-unit attachment in `IndoorCamera`.
+// ---------------------------------------------------------------------------
+
+/// The two valid camera assignments. Kept as `&str` (not an enum) because the
+/// column is a flat TEXT field the value round-trips through JSON as-is.
+pub const CAMERA_ASSIGNMENT_INCUBATOR: &str = "incubator";
+pub const CAMERA_ASSIGNMENT_BROODER: &str = "brooder";
+
+/// Map an assignment to its derived vision-model name — the single source of
+/// truth stage 3 will reuse. Returns `None` for anything that isn't a valid
+/// assignment, so callers validate and derive in one step.
+///
+/// * `incubator` → `"incubation"`
+/// * `brooder`   → `"chick"`
+pub fn active_model_for(assignment: &str) -> Option<&'static str> {
+    match assignment {
+        CAMERA_ASSIGNMENT_INCUBATOR => Some("incubation"),
+        CAMERA_ASSIGNMENT_BROODER => Some("chick"),
+        _ => None,
+    }
+}
+
+/// A camera's current assignment plus the derived, read-only model it selects.
+/// Returned by `GET`/`PUT /api/cameras/{camera_id}/assignment`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CameraAssignmentDto {
+    pub camera_id: String,
+    /// `"incubator"` | `"brooder"`.
+    pub assignment: String,
+    /// DERIVED, read-only: `incubator` → `"incubation"`, `brooder` → `"chick"`.
+    /// Computed from `assignment` via [`active_model_for`]; never stored.
+    pub active_model: String,
+    pub updated_at: String,
+}
+
+/// Body of `PUT /api/cameras/{camera_id}/assignment`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetCameraAssignmentRequest {
+    /// `"incubator"` | `"brooder"`; anything else is rejected with 400.
+    pub assignment: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::Utc;
+
+    // --- Camera assignment → model mapping (single source of truth) ---
+
+    #[test]
+    fn active_model_for_maps_valid_assignments() {
+        assert_eq!(
+            active_model_for(CAMERA_ASSIGNMENT_INCUBATOR),
+            Some("incubation")
+        );
+        assert_eq!(active_model_for(CAMERA_ASSIGNMENT_BROODER), Some("chick"));
+        assert_eq!(active_model_for("incubator"), Some("incubation"));
+        assert_eq!(active_model_for("brooder"), Some("chick"));
+    }
+
+    #[test]
+    fn active_model_for_rejects_unknown_assignments() {
+        assert_eq!(active_model_for("hutch"), None);
+        assert_eq!(active_model_for(""), None);
+        assert_eq!(active_model_for("Incubator"), None); // case-sensitive
+    }
 
     // --- GeneticsSettings (Phase 5) ---
 
