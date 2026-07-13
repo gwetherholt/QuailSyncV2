@@ -25,5 +25,13 @@
       { "id": "A1", "bbox": [120, 80, 60, 60], "clutch_id": null },
       { "id": "A2", "bbox": [188, 80, 60, 60], "clutch_id": null }
     ]
+  },
+  "roboflow": {
+    "enabled": true,
+    "project": "incubation-stages",
+    "workspace": "quail",
+    "upload_interval_seconds": 1800,
+    "upload_on_event": true,
+    "api_key_env": "ROBOFLOW_API_KEY"
   }
 }

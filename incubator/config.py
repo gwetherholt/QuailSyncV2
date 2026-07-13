@@ -88,11 +88,28 @@ class TrayConfig:
 
 
 @dataclass(frozen=True)
+class RoboflowConfig:
+    # Auto-upload raw frames to Roboflow to build a labeling dataset. Best-effort
+    # and opt-in: with ``enabled`` false, or the API key unset, uploads are
+    # skipped silently and never break the pipeline (mirrors trail-cam/indoor-cam).
+    enabled: bool
+    project: str
+    workspace: str
+    upload_interval_seconds: float
+    upload_on_event: bool
+    api_key_env: str
+    # Resolved from ``os.environ[api_key_env]`` at load time (like camera.source).
+    # ``None`` when unset — the uploader is then a no-op.
+    api_key: str | None = None
+
+
+@dataclass(frozen=True)
 class Config:
     camera: CameraConfig
     storage: StorageConfig
     detection: DetectionConfig
     tray: TrayConfig
+    roboflow: RoboflowConfig
     # Absolute path the config was loaded from (handy for logging / define_rois).
     source_path: Path | None = None
 
@@ -253,6 +270,44 @@ def _parse_tray(raw: Mapping[str, Any]) -> TrayConfig:
     return TrayConfig(reference_image=reference_image, slots=slots)
 
 
+def _parse_roboflow(raw: Any, env: Mapping[str, str]) -> RoboflowConfig:
+    """Parse the optional ``roboflow`` section (defaults to disabled if absent).
+
+    The API key is never in the file — it's resolved from the environment
+    variable named by ``api_key_env`` (default ``ROBOFLOW_API_KEY``), which the
+    systemd unit loads from ``~/.incubator-secrets``.
+    """
+    where = "roboflow"
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, Mapping):
+        raise ConfigError(f"{where} must be an object, got {raw!r}")
+    enabled = _as_bool(raw.get("enabled", False), f"{where}.enabled")
+    project = str(raw.get("project", "incubation-stages"))
+    workspace = str(raw.get("workspace", "quail"))
+    interval = _as_number(
+        raw.get("upload_interval_seconds", 1800), f"{where}.upload_interval_seconds"
+    )
+    if interval <= 0:
+        raise ConfigError(f"{where}.upload_interval_seconds must be > 0, got {interval}")
+    upload_on_event = _as_bool(raw.get("upload_on_event", True), f"{where}.upload_on_event")
+    api_key_env = str(raw.get("api_key_env", "ROBOFLOW_API_KEY"))
+    if not api_key_env.strip():
+        raise ConfigError(f"{where}.api_key_env must be a non-empty string")
+    api_key = env.get(api_key_env)
+    if api_key is not None:
+        api_key = api_key.strip() or None
+    return RoboflowConfig(
+        enabled=enabled,
+        project=project,
+        workspace=workspace,
+        upload_interval_seconds=interval,
+        upload_on_event=upload_on_event,
+        api_key_env=api_key_env,
+        api_key=api_key,
+    )
+
+
 def load_config(
     path: str | os.PathLike[str] | None = None,
     *,
@@ -287,6 +342,7 @@ def load_config(
         storage=_parse_storage(_require(data, "storage", "config")),
         detection=_parse_detection(_require(data, "detection", "config")),
         tray=_parse_tray(_require(data, "tray", "config")),
+        roboflow=_parse_roboflow(data.get("roboflow"), env),
         source_path=path,
     )
 
@@ -319,3 +375,7 @@ if __name__ == "__main__":
     print(f"freeze_active    = {conf.detection.freeze_baseline_while_active}")
     print(f"blur_kernel      = {conf.detection.blur_kernel}")
     print(f"slots            = {len(conf.tray.slots)}: {[s.id for s in conf.tray.slots]}")
+    rf = conf.roboflow
+    print(f"roboflow         = {'enabled' if rf.enabled else 'disabled'} -> {rf.workspace}/{rf.project}")
+    print(f"  api_key ({rf.api_key_env}) = {'<set>' if rf.api_key else '<unset>'}")
+    print(f"  upload_interval  = {rf.upload_interval_seconds}s, on_event={rf.upload_on_event}")

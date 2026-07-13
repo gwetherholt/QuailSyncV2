@@ -65,7 +65,10 @@ slot id, `low > high`, even blur kernel, …) and fails loudly at startup.
                  "cooldown_seconds": 120, "min_frames_before_detect": 5,
                  "freeze_baseline_while_active": true, "blur_kernel": 5 },
   "tray":      { "reference_image": "incubator/reference.jpg",
-                 "slots": [ { "id": "A1", "bbox": [120, 80, 60, 60], "clutch_id": null } ] }
+                 "slots": [ { "id": "A1", "bbox": [120, 80, 60, 60], "clutch_id": null } ] },
+  "roboflow":  { "enabled": true, "project": "incubation-stages", "workspace": "quail",
+                 "upload_interval_seconds": 1800, "upload_on_event": true,
+                 "api_key_env": "ROBOFLOW_API_KEY" }
 }
 ```
 
@@ -73,6 +76,24 @@ slot id, `low > high`, even blur kernel, …) and fails loudly at startup.
 - `clutch_id` is optional and static for now — `null` is fine. A populated value
   is how per-slot identity gets attached to the live clutches in a later stage.
 - Point `$INCUBATOR_CONFIG` at an alternate file to override the default.
+
+## Roboflow auto-upload
+
+To build the stage-2 labeling dataset, the pipeline auto-uploads **raw**
+(unannotated — no model exists yet) frames to Roboflow, mirroring the trail-cam /
+indoor-cam pipelines but via the **REST upload API** (not the SDK):
+
+- One **full frame every `upload_interval_seconds`** (default 1800 = 30 min),
+  independent of detection — this captures variety across lighting, turner
+  positions, and time of day.
+- The **full frame on every change-detection event** (the interesting frames:
+  pipping, hatching).
+
+Uploads go to `workspace/project` (`quail/incubation-stages`) under the batch
+`incubator-auto` so they're distinguishable from manual uploads. It's opt-in and
+best-effort: with `roboflow.enabled` false, or `ROBOFLOW_API_KEY` unset, uploads
+are skipped **silently** and never break capture. See
+[`.incubator-secrets.example`](.incubator-secrets.example) for the key.
 
 ## Database
 
@@ -130,9 +151,10 @@ with the slot boxes drawn on for eyeballing alignment. (Both are git-ignored.)
 
 ```bash
 python3 -m venv venv
-venv/bin/pip install -r requirements.txt   # opencv-python-headless + numpy
+venv/bin/pip install -r requirements.txt   # opencv-python-headless + numpy + requests
 
 export INCUBATOR_RTSP_URL='rtsp://user:pass@camera-ip:554/stream1'
+export ROBOFLOW_API_KEY='...'   # optional — enables raw-frame auto-upload
 python main.py --once     # one capture cycle, then exit
 python main.py --loop     # run continuously (what systemd runs)
 ```
@@ -145,9 +167,12 @@ runs `main.py --loop` as `gwetherholt`, `WorkingDirectory` in the incubator dir,
 Create the secrets file from
 [`.incubator-secrets.example`](.incubator-secrets.example):
 
+The secrets file holds `INCUBATOR_RTSP_URL` and — for the raw-frame auto-upload —
+`ROBOFLOW_API_KEY` (omit it to skip uploads silently).
+
 ```bash
 install -m 600 /dev/null /home/gwetherholt/.incubator-secrets
-editor /home/gwetherholt/.incubator-secrets      # set INCUBATOR_RTSP_URL
+editor /home/gwetherholt/.incubator-secrets      # set INCUBATOR_RTSP_URL (+ ROBOFLOW_API_KEY)
 sudo cp ../deploy/incubator-pipeline.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now incubator-pipeline   # enable only when ready

@@ -5,3 +5,8 @@
 # with no GUI, so we don't want the GTK/Qt highgui dependencies.
 opencv-python-headless
 numpy
+
+# Roboflow raw-frame auto-upload uses the REST upload API directly (not the
+# roboflow SDK). Only needed when roboflow.enabled=true AND ROBOFLOW_API_KEY is
+# set; the import is lazy so the pipeline runs without it when uploads are off.
+requests
