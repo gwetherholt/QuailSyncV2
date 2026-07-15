@@ -1,0 +1,38 @@
+{
+  "camera": {
+    "source_env": "INDOOR_RTSP_URL",
+    "capture_interval_seconds": 10
+  },
+  "assignment": {
+    "backend_url": "http://localhost:3000",
+    "camera_id": "indoor_tapo",
+    "poll_seconds": 60,
+    "default_mode": "incubator"
+  },
+  "models": {
+    "incubation": {
+      "weights": "/home/gwetherholt/QuailSyncV2/incubator/models/incubation-best.pt",
+      "confidence": 0.5,
+      "roboflow_project": "incubation-stages",
+      "log_events": true
+    },
+    "chick": {
+      "weights": "/home/gwetherholt/QuailSyncV2/indoor-cam/models/chick-best.pt",
+      "confidence": 0.5,
+      "roboflow_project": "find-chicks-5",
+      "log_events": false
+    }
+  },
+  "roboflow": {
+    "enabled": true,
+    "workspace": "quail",
+    "upload_interval_seconds": 1800,
+    "upload_on_detection": true,
+    "api_key_env": "ROBOFLOW_API_KEY",
+    "batch_name": "indoor-auto"
+  },
+  "storage": {
+    "db_path": "/home/gwetherholt/QuailSyncV2/data/quailsync.db",
+    "sqlite_busy_timeout_ms": 5000
+  }
+}

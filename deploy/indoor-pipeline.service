@@ -1,0 +1,54 @@
+# QuailSync indoor pipeline (stage 3) — systemd service
+# One assignment-aware service that SUPERSEDES both incubator-pipeline.service and
+# indoor-cam-pipeline.service. It polls the backend for the indoor camera's
+# assignment and runs the matching YOLO model (incubation-stage vs chick),
+# hot-swapping in-process on a reassignment — no restart. Runs OUTSIDE Docker,
+# directly on the Pi.
+#
+# Migration from the two old units (do NOT run these until this unit is ready):
+#   sudo systemctl stop incubator-pipeline indoor-cam-pipeline
+#   sudo systemctl disable incubator-pipeline indoor-cam-pipeline
+#   sudo cp deploy/indoor-pipeline.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now indoor-pipeline
+#
+# Logs:
+#   journalctl -u indoor-pipeline -f
+
+[Unit]
+Description=QuailSync indoor pipeline (assignment-aware YOLO: incubation | chick)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gwetherholt
+# systemd does not expand '~'; this is $HOME/QuailSyncV2/indoor-pipeline for gwetherholt.
+WorkingDirectory=/home/gwetherholt/QuailSyncV2/indoor-pipeline
+
+# --- Secrets ---------------------------------------------------------------
+# The camera URL (INDOOR_RTSP_URL — embeds credentials) AND the Roboflow API key
+# live OUTSIDE the repo in a root-owned, chmod 600 file so they're never
+# committed or readable by other users. Create it from
+# indoor-pipeline/.indoor-pipeline-secrets.example, e.g.:
+#   install -m 600 /dev/null /home/gwetherholt/.indoor-pipeline-secrets
+#   editor /home/gwetherholt/.indoor-pipeline-secrets   # set INDOOR_RTSP_URL + ROBOFLOW_API_KEY
+EnvironmentFile=/home/gwetherholt/.indoor-pipeline-secrets
+
+# --- Non-secret configuration ----------------------------------------------
+# Camera cadence, assignment polling, model paths, and Roboflow settings all live
+# in config.json. Point at an alternate file here if needed.
+Environment=INDOOR_PIPELINE_CONFIG=/home/gwetherholt/QuailSyncV2/indoor-pipeline/config.json
+Environment=PYTHONUNBUFFERED=1
+
+# Use the project's virtualenv interpreter (ultralytics/torch + opencv are heavy
+# — they belong in a venv):
+#   python3 -m venv /home/gwetherholt/QuailSyncV2/indoor-pipeline/venv
+#   /home/gwetherholt/QuailSyncV2/indoor-pipeline/venv/bin/pip install -r requirements.txt
+ExecStart=/home/gwetherholt/QuailSyncV2/indoor-pipeline/venv/bin/python /home/gwetherholt/QuailSyncV2/indoor-pipeline/main.py --loop --log-level INFO
+
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

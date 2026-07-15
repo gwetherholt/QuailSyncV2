@@ -21,6 +21,7 @@ pi-agent/core.*
 .trailcam-secrets
 .indoor-cam-secrets
 .incubator-secrets
+.indoor-pipeline-secrets
 
 # Incubator pipeline runtime artifacts: the reference frame(s) captured by
 # define_rois.py and any locally-configured captures dir. The .example secrets

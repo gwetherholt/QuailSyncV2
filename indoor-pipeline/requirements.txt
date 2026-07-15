@@ -1,0 +1,16 @@
+# Assignment-aware indoor pipeline (stage 3) — YOLO inference + Roboflow upload.
+#
+# opencv-python-headless (not -python): the Pi runs this as a headless service
+# with no GUI, so we skip the GTK/Qt highgui deps. It drives the RTSP capture
+# (cv2.VideoCapture) and JPEG encoding for uploads.
+opencv-python-headless
+numpy
+
+# Backend assignment polling + Roboflow REST upload use requests directly (no
+# roboflow SDK). Imports are lazy so the pure logic imports without them.
+requests
+
+# YOLO inference (ultralytics.YOLO). Pulls in torch; heavy, so it's only imported
+# when a model is actually loaded. The incubation and chick .pt weights live
+# outside this repo (see config.json model paths).
+ultralytics
