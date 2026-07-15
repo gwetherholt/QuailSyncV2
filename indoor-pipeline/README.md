@@ -54,6 +54,7 @@ On startup and every `assignment.poll_seconds` (default 60), the loop does
 | `roboflow_uploader.py` | REST upload of the full frame **+ YOLO pre-annotations** (with `annotation_labelmap`); project per mode |
 | `storage.py`           | `incubation_events` logging (incubation mode only); WAL + `busy_timeout`; backend owns the schema |
 | `snapshots.py`         | rolling `latest.jpg` (raw) + `latest_annotated.jpg` (YOLO boxes), written atomically each cycle |
+| `observations.py`      | POST one observation per cycle to the backend (mirrors the old indoor-cam bridge) so the dashboard/app show live data |
 | `main.py`              | the service loop tying it all together                                     |
 
 The heavy imports (`cv2`, `ultralytics`, `requests`) are all lazy — importing any
@@ -109,9 +110,33 @@ Both are written **atomically** (encode → sibling `.tmp` → `os.replace`), so
 backend never serves a half-written JPEG. Configure the paths under `snapshots`
 in `config.json` — they must match where the backend reads indoor-cam images:
 `{INDOORCAM_PROCESSED_DIR}/{camera_id}/latest.jpg` (and `…_annotated.jpg`). With
-the default deploy that's `~/indoor-cam/processed/indoor_tapo/` on the host,
+the default deploy that's `~/indoor-cam/processed/indoor-1/` on the host,
 bind-mounted into the server container at `/indoor-cam/processed`. Omit the
 `snapshots` section to disable snapshot writing.
+
+### Observation POSTing (live dashboard/app data)
+
+The dashboard and app show the indoor camera's live count + image by reading
+`GET /api/indoorcam/latest/{camera_id}`, which only has data once the pipeline
+**POSTs observations**. Each cycle the pipeline POSTs one observation to
+`{backend_url}/api/indoorcam/observation` (the exact endpoint + payload the old
+`indoor-cam` bridge used), carrying `camera_id`, `detection_count`, the
+`detections` array (each box's real `class_name` — `egg`/`chick`, never
+hardcoded), a timestamp, and the rolling-snapshot image basenames. Configure it
+under `observations` in `config.json`; a failed POST (backend unreachable) is
+logged and swallowed so it never breaks the loop. Omit the section (or set
+`enabled: false`) to disable.
+
+### The two camera IDs (`indoor-1` vs `indoor_tapo`)
+
+There are **two distinct camera ids**, on purpose:
+
+- `assignment.camera_id` = **`indoor_tapo`** — only drives the mode toggle
+  (`GET /api/cameras/indoor_tapo/assignment`). Do not change it.
+- `observations.camera_id` + the `snapshots` output dir = **`indoor-1`** — the
+  serving id the backend, dashboard, and app key on for the live feed. The
+  snapshot files therefore live in `…/processed/indoor-1/` and the observations
+  post `camera_id: "indoor-1"`.
 
 The backend's `GET /api/indoorcam/latest/{camera_id}` also returns a
 `class_counts` breakdown (`{"egg": 5}`) and a ready `detection_label`

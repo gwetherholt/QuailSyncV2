@@ -15,6 +15,7 @@ from camera import FakeFrameSource
 from detector import Detector
 from assignment import AssignmentPoller
 from main import IndoorPipeline
+from observations import ObservationClient
 from storage import EventStore
 
 from conftest import apply_incubation_schema
@@ -89,11 +90,13 @@ def _frames(n=6):
     return FakeFrameSource([np.full((48, 64, 3), 100, dtype=np.uint8) for _ in range(n)])
 
 
-def _build(conf, active_models, *, uploader=None, store="real"):
+def _build(conf, active_models, *, uploader=None, store="real", observation_client=None):
     """Assemble an IndoorPipeline wired to fakes.
 
     ``store="real"`` injects a temp EventStore (schema pre-applied); ``store=None``
-    forces event logging off; or pass an explicit store object.
+    forces event logging off; or pass an explicit store object. ``observation_client``
+    defaults to ``None`` (forced off, so no accidental network); pass a fake to
+    exercise the POST path.
     """
     if store == "real":
         apply_incubation_schema(conf.storage.db_path)
@@ -111,6 +114,7 @@ def _build(conf, active_models, *, uploader=None, store="real"):
         poller=poller,
         uploader=uploader if uploader is not None else _FakeUploader(),
         store=store,
+        observation_client=observation_client,
     )
 
 
@@ -250,7 +254,7 @@ def test_switch_stops_logging_when_moving_to_chick(make_config):
 # --- rolling snapshots -----------------------------------------------------
 
 
-def test_run_once_writes_rolling_snapshots(make_config):
+def test_run_once_writes_rolling_snapshots_to_indoor1_path(make_config):
     import cv2
 
     conf = make_config(snapshots=True)  # snapshots section under tmp_path
@@ -259,6 +263,10 @@ def test_run_once_writes_rolling_snapshots(make_config):
 
     raw = conf.snapshots.latest_path
     annotated = conf.snapshots.latest_annotated_path
+    # Snapshots land in the OBSERVATION/serving camera dir (indoor-1), which is
+    # what the backend reads — NOT the assignment id (indoor_tapo).
+    assert raw.parent.name == "indoor-1"
+    assert annotated.parent.name == "indoor-1"
     assert raw.is_file(), "raw latest.jpg written"
     assert annotated.is_file(), "latest_annotated.jpg written"
     # The incubation fake model returns detections, so the annotated frame has
@@ -272,6 +280,105 @@ def test_run_once_without_snapshots_config_is_a_noop(make_config):
     assert conf.snapshots is None
     pipe = _build(conf, ["chick"], store=None)
     assert pipe.run_once(now=1000.0)  # runs fine
+
+
+# --- observation POSTing ---------------------------------------------------
+
+
+class _FakeObsResp:
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"stored": 1, "id": 1}
+
+
+class _FakeObsSession:
+    """Records observation POSTs (or raises a queued error to simulate outage)."""
+
+    def __init__(self, error=None):
+        self.calls = []
+        self._error = error
+
+    def post(self, url, json=None, timeout=None):
+        self.calls.append({"url": url, "json": json})
+        if self._error is not None:
+            raise self._error
+        return _FakeObsResp()
+
+
+def _obs_client(session):
+    return ObservationClient("http://localhost:3000", "indoor-1", session=session)
+
+
+def test_run_once_posts_observation_each_cycle_with_camera_id_and_classes(make_config):
+    conf = make_config(snapshots=True)  # so image basenames are attached
+    session = _FakeObsSession()
+    pipe = _build(conf, ["incubation", "incubation"], store=None, observation_client=_obs_client(session))
+
+    pipe.run_once(now=1000.0)
+    pipe.run_once(now=1000.0 + 61)
+
+    assert len(session.calls) == 2, "one POST per cycle"
+    body = session.calls[0]["json"]
+    assert session.calls[0]["url"] == "http://localhost:3000/api/indoorcam/observation"
+    assert body["camera_id"] == "indoor-1"  # observation id, not indoor_tapo
+    assert body["detection_count"] == 2
+    # Class names come from the model output (egg/pipped), never hardcoded.
+    assert sorted(d["class_name"] for d in body["detections"]) == ["egg", "pipped"]
+    # Image fields point at the rolling snapshot basenames the backend serves.
+    assert body["image_filename"] == "latest.jpg"
+    assert body["annotated_image_filename"] == "latest_annotated.jpg"
+
+
+def test_observation_class_names_reflect_brooder_mode(make_config):
+    conf = make_config()
+    session = _FakeObsSession()
+    pipe = _build(conf, ["chick"], store=None, observation_client=_obs_client(session))
+    pipe.run_once(now=1000.0)
+
+    body = session.calls[0]["json"]
+    assert body["camera_id"] == "indoor-1"
+    assert [d["class_name"] for d in body["detections"]] == ["chick"]  # brooder mode
+
+
+def test_observation_post_graceful_when_backend_unreachable(make_config):
+    conf = make_config()
+    session = _FakeObsSession(error=ConnectionError("backend down"))
+    pipe = _build(conf, ["incubation"], store=None, observation_client=_obs_client(session))
+
+    # The POST fails, but the cycle still completes and returns detections.
+    detections = pipe.run_once(now=1000.0)
+    assert {d.class_name for d in detections} == {"egg", "pipped"}
+    assert len(session.calls) == 1  # it did attempt the POST
+
+
+def test_no_observation_client_means_no_posts(make_config):
+    # Default _build forces the observation client off -> no POSTs, no crash.
+    conf = make_config()
+    pipe = _build(conf, ["chick"], store=None)
+    assert pipe.observation_client is None
+    assert pipe.run_once(now=1000.0)
+
+
+def test_observations_built_from_config_when_enabled(make_config):
+    # With an observations section, the pipeline builds a client from config.
+    conf = make_config(observations=True)
+    poller = AssignmentPoller(
+        conf.assignment.backend_url, conf.assignment.camera_id,
+        conf.assignment.default_mode, session=_FakeSession(["chick"]),
+    )
+    pipe = IndoorPipeline(
+        conf,
+        frame_source=_frames(),
+        detector=Detector(yolo_factory=_yolo_factory),
+        poller=poller,
+        uploader=_FakeUploader(),
+        store=None,
+        # observation_client left as default -> built from config
+    )
+    assert isinstance(pipe.observation_client, ObservationClient)
+    assert pipe.observation_client.camera_id == "indoor-1"
 
 
 # --- model-not-found skips the cycle ---------------------------------------

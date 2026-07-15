@@ -145,6 +145,18 @@ class SnapshotsConfig:
 
 
 @dataclass(frozen=True)
+class ObservationsConfig:
+    # POST one observation per cycle to the backend so the dashboard/app show a
+    # live detection count + image (mirrors the old indoor-cam bridge). The
+    # ``camera_id`` here is the OBSERVATION/serving id the backend, dashboard, and
+    # app key on (``indoor-1``) — deliberately DIFFERENT from the assignment
+    # ``camera_id`` (``indoor_tapo``), which only drives the mode toggle.
+    enabled: bool
+    backend_url: str
+    camera_id: str
+
+
+@dataclass(frozen=True)
 class Config:
     camera: CameraConfig
     assignment: AssignmentConfig
@@ -153,6 +165,8 @@ class Config:
     storage: StorageConfig
     # Optional rolling-snapshot output. ``None`` disables snapshot writing.
     snapshots: SnapshotsConfig | None = None
+    # Optional observation POSTing. ``None`` disables it.
+    observations: ObservationsConfig | None = None
     # Absolute path the config was loaded from (handy for logging).
     source_path: Path | None = None
 
@@ -352,6 +366,26 @@ def _parse_snapshots(raw: Any) -> SnapshotsConfig | None:
     return SnapshotsConfig(latest_path=latest_path, latest_annotated_path=latest_annotated_path)
 
 
+def _parse_observations(raw: Any) -> ObservationsConfig | None:
+    """Parse the optional ``observations`` section (``None`` when absent → off).
+
+    When present, ``backend_url`` and ``camera_id`` are required. ``camera_id`` is
+    the observation/serving id (``indoor-1``) the backend/dashboard/app key on —
+    distinct from the assignment ``camera_id``.
+    """
+    where = "observations"
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise ConfigError(f"{where} must be an object, got {raw!r}")
+    enabled = _as_bool(raw.get("enabled", True), f"{where}.enabled")
+    backend_url = _as_nonempty_str(
+        _require(raw, "backend_url", where), f"{where}.backend_url"
+    ).rstrip("/")
+    camera_id = _as_nonempty_str(_require(raw, "camera_id", where), f"{where}.camera_id")
+    return ObservationsConfig(enabled=enabled, backend_url=backend_url, camera_id=camera_id)
+
+
 def load_config(
     path: str | os.PathLike[str] | None = None,
     *,
@@ -389,6 +423,7 @@ def load_config(
         roboflow=_parse_roboflow(data.get("roboflow"), env),
         storage=_parse_storage(_require(data, "storage", "config")),
         snapshots=_parse_snapshots(data.get("snapshots")),
+        observations=_parse_observations(data.get("observations")),
         source_path=path,
     )
 
@@ -431,3 +466,9 @@ if __name__ == "__main__":
         print(f"snapshot annot.   = {conf.snapshots.latest_annotated_path}")
     else:
         print("snapshots         = disabled")
+    if conf.observations is not None:
+        obs = conf.observations
+        print(f"observations      = {'enabled' if obs.enabled else 'disabled'} "
+              f"-> {obs.backend_url}/api/indoorcam/observation (camera_id={obs.camera_id})")
+    else:
+        print("observations      = disabled")

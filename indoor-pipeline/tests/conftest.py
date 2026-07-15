@@ -58,11 +58,11 @@ def apply_incubation_schema(db_path) -> None:
         conn.close()
 
 
-def _config_dict(tmp_path, *, roboflow=None, storage=None, assignment=None, snapshots=None):
+def _config_dict(tmp_path, *, roboflow=None, storage=None, assignment=None, snapshots=None, observations=None):
     """A full, valid config dict pointing at temp paths (overridable per section).
 
-    ``snapshots`` may be ``True`` (add a snapshots section under tmp_path), a
-    dict (explicit paths), or ``None``/omitted (no snapshots section).
+    ``snapshots``/``observations`` may be ``True`` (add the section, pointing
+    under tmp_path / at indoor-1), a dict (explicit values), or ``None``/omitted.
     """
     data = {
         "camera": {"source_env": "INDOOR_RTSP_URL", "capture_interval_seconds": 10},
@@ -106,13 +106,23 @@ def _config_dict(tmp_path, *, roboflow=None, storage=None, assignment=None, snap
     if assignment is not None:
         data["assignment"].update(assignment)
     if snapshots is True:
-        snap_dir = tmp_path / "processed" / "indoor_tapo"
+        # Serving/snapshot dir is keyed on the OBSERVATION id (indoor-1), not the
+        # assignment id (indoor_tapo).
+        snap_dir = tmp_path / "processed" / "indoor-1"
         data["snapshots"] = {
             "latest_path": str(snap_dir / "latest.jpg"),
             "latest_annotated_path": str(snap_dir / "latest_annotated.jpg"),
         }
     elif isinstance(snapshots, dict):
         data["snapshots"] = snapshots
+    if observations is True:
+        data["observations"] = {
+            "enabled": True,
+            "backend_url": "http://localhost:3000",
+            "camera_id": "indoor-1",
+        }
+    elif isinstance(observations, dict):
+        data["observations"] = observations
     return data
 
 
@@ -120,14 +130,16 @@ def _config_dict(tmp_path, *, roboflow=None, storage=None, assignment=None, snap
 def make_config(tmp_path):
     """Factory: write a config.json to a temp path and load it.
 
-    ``make_config(env=..., roboflow=..., storage=..., assignment=..., snapshots=...)``.
-    ``snapshots=True`` adds a snapshots section pointing under tmp_path.
+    ``make_config(env=..., roboflow=..., storage=..., assignment=..., snapshots=...,
+    observations=...)``. ``snapshots=True``/``observations=True`` add those
+    sections (pointing under tmp_path / at indoor-1).
     """
     import config as cfg
 
-    def _make(*, env=None, roboflow=None, storage=None, assignment=None, snapshots=None):
+    def _make(*, env=None, roboflow=None, storage=None, assignment=None, snapshots=None, observations=None):
         data = _config_dict(
-            tmp_path, roboflow=roboflow, storage=storage, assignment=assignment, snapshots=snapshots
+            tmp_path, roboflow=roboflow, storage=storage, assignment=assignment,
+            snapshots=snapshots, observations=observations,
         )
         path = tmp_path / "config.json"
         path.write_text(json.dumps(data), encoding="utf-8")

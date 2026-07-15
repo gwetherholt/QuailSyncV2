@@ -23,5 +23,6 @@ __all__ = [
     "roboflow_uploader",
     "storage",
     "snapshots",
+    "observations",
     "main",
 ]

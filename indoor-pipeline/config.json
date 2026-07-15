@@ -36,7 +36,12 @@
     "sqlite_busy_timeout_ms": 5000
   },
   "snapshots": {
-    "latest_path": "/home/gwetherholt/indoor-cam/processed/indoor_tapo/latest.jpg",
-    "latest_annotated_path": "/home/gwetherholt/indoor-cam/processed/indoor_tapo/latest_annotated.jpg"
+    "latest_path": "/home/gwetherholt/indoor-cam/processed/indoor-1/latest.jpg",
+    "latest_annotated_path": "/home/gwetherholt/indoor-cam/processed/indoor-1/latest_annotated.jpg"
+  },
+  "observations": {
+    "enabled": true,
+    "backend_url": "http://localhost:3000",
+    "camera_id": "indoor-1"
   }
 }

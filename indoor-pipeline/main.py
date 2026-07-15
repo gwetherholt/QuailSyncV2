@@ -42,6 +42,7 @@ try:
     from . import camera as camera_module
     from . import roboflow_uploader as roboflow_module
     from . import snapshots as snapshots_module
+    from . import observations as observations_module
     from .assignment import AssignmentPoller
     from .detector import Detector
     from .storage import EventStore
@@ -50,6 +51,7 @@ except ImportError:  # plain-script / bare-name import (tests)
     import camera as camera_module
     import roboflow_uploader as roboflow_module
     import snapshots as snapshots_module
+    import observations as observations_module
     from assignment import AssignmentPoller
     from detector import Detector
     from storage import EventStore
@@ -73,6 +75,7 @@ class IndoorPipeline:
         poller=None,
         uploader=_UNSET,
         store=_UNSET,
+        observation_client=_UNSET,
         cv2_module=None,
         yolo_factory=None,
         session=None,
@@ -96,6 +99,13 @@ class IndoorPipeline:
             roboflow_module.build_uploader(conf, initial_cfg.roboflow_project)
             if uploader is _UNSET
             else uploader
+        )
+        # Observation POSTing so the dashboard/app show live data. ``None`` when
+        # disabled (or forced off via observation_client=None).
+        self.observation_client = (
+            observations_module.build_observation_client(conf, session=session)
+            if observation_client is _UNSET
+            else observation_client
         )
         # EventStore is opened lazily on first incubation-mode write (chick-only
         # runs never touch the DB). ``None`` sentinel via _UNSET forces it off.
@@ -233,6 +243,29 @@ class IndoorPipeline:
         except Exception:  # noqa: BLE001 — snapshot writing must not break the loop
             logger.warning("Failed to write rolling snapshot(s); continuing", exc_info=True)
 
+    # --- observation POST (live dashboard/app data) -----------------------
+
+    def _post_observation(self, detections, when) -> None:
+        """POST this cycle's observation so the dashboard/app show live data.
+
+        The image fields point at the rolling snapshot basenames (``latest.jpg`` /
+        ``latest_annotated.jpg``) written this cycle, which the backend serves
+        from ``processed/{camera_id}/``. Best-effort — the client swallows POST
+        failures so an unreachable backend never breaks the loop."""
+        if self.observation_client is None:
+            return
+        image_filename = annotated_image_filename = None
+        snap = self.conf.snapshots
+        if snap is not None:
+            image_filename = snap.latest_path.name
+            annotated_image_filename = snap.latest_annotated_path.name
+        self.observation_client.post(
+            detections,
+            timestamp=when.isoformat(),
+            image_filename=image_filename,
+            annotated_image_filename=annotated_image_filename,
+        )
+
     # --- the cycle --------------------------------------------------------
 
     def run_once(self, *, now: float | None = None):
@@ -261,8 +294,10 @@ class IndoorPipeline:
         )
 
         # Refresh the rolling live-feed snapshots first so the backend/app get a
-        # current frame even if logging/upload are slow.
+        # current frame even if logging/upload are slow, then POST the observation
+        # so the dashboard/app pick up the fresh count + image.
         self._write_snapshots(frame, detections)
+        self._post_observation(detections, when)
         self._log_events(detections, cfg)
         self._maybe_upload(frame, detections, now, when, mode)
         return detections
