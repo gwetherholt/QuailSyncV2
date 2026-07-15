@@ -1073,15 +1073,21 @@ fun IndoorCamCard(
     }
 }
 
-/** Live chick count + freshness, plus the saved frame if the observation kept
- *  one (most won't — only "notable" frames are saved, and they may be cleared
- *  after a Roboflow upload, so the image is hidden if it 404s). */
+/** Live detection count + freshness, plus the saved frame if the observation
+ *  kept one (most won't — only "notable" frames are saved, and they may be
+ *  cleared after a Roboflow upload, so the image is hidden if it 404s). */
 @Composable
 private fun IndoorObsContent(latest: IndoorcamLatest, baseUrl: String) {
     fun absolute(url: String?): String? = url?.let { if (it.startsWith("http")) it else "$baseUrl$it" }
+    // Prefer the server's class-aware label ("5 eggs detected" in incubation
+    // mode, "3 chicks detected" in brooder mode), driven by the model's actual
+    // classes rather than a hardcoded word. Fall back to a neutral count when the
+    // latest frame had no detections (no class to name).
     val count = latest.detectionCount ?: 0
+    val label = latest.detectionLabel
+        ?: "$count detection${if (count == 1) "" else "s"}"
     Text(
-        "$count chick${if (count == 1) "" else "s"} detected",
+        label,
         style = MaterialTheme.typography.headlineSmall,
         fontWeight = FontWeight.Bold,
         color = SageGreen,

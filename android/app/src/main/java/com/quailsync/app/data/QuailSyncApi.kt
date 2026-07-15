@@ -406,15 +406,20 @@ data class AssignCameraRequest(
     @SerializedName("brooder_id") val brooderId: Int,
 )
 
-// --- Indoor cameras (RTSP chick-counter) -----------------------------------
+// --- Indoor cameras (RTSP detection-counter) -------------------------------
 
 /** Latest indoor-camera observation (GET /api/indoorcam/latest/{camera_id}).
  *  `imageUrl`/`annotatedImageUrl` are server-relative — prepend the configured
  *  server base URL. Most observations carry NO image (null): only "notable"
- *  frames are saved, and those may be cleared after a Roboflow upload. */
+ *  frames are saved, and those may be cleared after a Roboflow upload.
+ *  `detectionLabel` is a server-built, class-aware string ("5 eggs detected" in
+ *  incubation mode, "3 chicks detected" in brooder mode) derived from the actual
+ *  model classes; `classCounts` is the raw {className: count} breakdown. */
 data class IndoorcamLatest(
     @SerializedName("camera_id") val cameraId: String? = null,
     @SerializedName("detection_count") val detectionCount: Int? = null,
+    @SerializedName("detection_label") val detectionLabel: String? = null,
+    @SerializedName("class_counts") val classCounts: Map<String, Int> = emptyMap(),
     @SerializedName("timestamp") val timestamp: String? = null,
     @SerializedName("confidence_avg") val confidenceAvg: Double? = null,
     @SerializedName("image_url") val imageUrl: String? = null,

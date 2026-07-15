@@ -11,9 +11,12 @@
 //! Posting an observation also auto-registers the camera in `indoor_cameras`
 //! (the same way the trail-cam ingest auto-registers in `trail_cameras`).
 //!
-//! This mirrors `routes/trailcam.rs`, but indoor models count chicks, so the
-//! detection field is `detection_count` (not `bird_count`) and there's no
-//! ambient-temperature column.
+//! This mirrors `routes/trailcam.rs`, but the indoor model counts whatever its
+//! current mode detects (chicks in a brooder, eggs in the incubator), so the
+//! detection field is the generic `detection_count` (not `bird_count`) and
+//! there's no ambient-temperature column. The read endpoints also return a
+//! `class_counts` breakdown + a ready `detection_label` derived from the actual
+//! detection class names (see [`detection_summary`]).
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -62,6 +65,57 @@ fn annotated_url_for(
 fn parse_detections(s: Option<&str>) -> Value {
     s.and_then(|s| serde_json::from_str::<Value>(s).ok())
         .unwrap_or_else(|| json!([]))
+}
+
+/// English-pluralize a class name against a count (`egg`→`eggs`, `chick`→`chicks`).
+/// Leaves count-1 and already-plural (`…s`) names alone.
+fn pluralize(name: &str, count: i64) -> String {
+    if count == 1 || name.ends_with('s') {
+        name.to_string()
+    } else {
+        format!("{name}s")
+    }
+}
+
+/// Summarize a detections array into a per-class breakdown and a display label,
+/// both driven by the actual model class names (never a hardcoded "chick").
+///
+/// Returns `(class_counts, detection_label)`:
+/// * `class_counts` — object like `{"egg": 5}` / `{"chick": 3, "egg": 1}`
+///   (empty `{}` when there are no detections);
+/// * `detection_label` — a ready string like `"5 eggs detected"` /
+///   `"3 chicks, 1 egg detected"`, or `Null` when there are no detections so the
+///   frontends fall back to the raw count.
+///
+/// The incubation model emits `egg`/`pipped`/… classes and the chick model emits
+/// `chick`, so the label reflects what the camera's current mode actually sees.
+fn detection_summary(detections: &Value) -> (Value, Value) {
+    use std::collections::BTreeMap;
+    let mut counts: BTreeMap<String, i64> = BTreeMap::new();
+    if let Some(arr) = detections.as_array() {
+        for d in arr {
+            if let Some(name) = d.get("class_name").and_then(|v| v.as_str()) {
+                let name = name.trim();
+                if !name.is_empty() {
+                    *counts.entry(name.to_string()).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    if counts.is_empty() {
+        return (json!({}), Value::Null);
+    }
+    let class_counts: serde_json::Map<String, Value> =
+        counts.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
+    // Most-common class first (ties broken alphabetically for a stable label).
+    let mut ordered: Vec<(&String, &i64)> = counts.iter().collect();
+    ordered.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+    let parts: Vec<String> = ordered
+        .iter()
+        .map(|(name, count)| format!("{count} {}", pluralize(name, **count)))
+        .collect();
+    let label = format!("{} detected", parts.join(", "));
+    (Value::Object(class_counts), json!(label))
 }
 
 // ---------------------------------------------------------------------------
@@ -238,12 +292,19 @@ pub(crate) async fn indoorcam_latest(
             }
         };
 
+    let detections = parse_detections(detections_str.as_deref());
+    let (class_counts, detection_label) = detection_summary(&detections);
     let body = json!({
         "camera_id": camera_id,
         "detection_count": detection_count,
         "timestamp": timestamp,
         "confidence_avg": avg_conf,
-        "detections": parse_detections(detections_str.as_deref()),
+        "detections": detections,
+        // Class breakdown + ready label, driven by the model's actual classes
+        // (egg/pipped in incubation mode, chick in brooder mode) — never a
+        // hardcoded "chick". Frontends prefer `detection_label`.
+        "class_counts": class_counts,
+        "detection_label": detection_label,
         "image_url": image_url_for(&camera_id, image_filename.as_deref()),
         "annotated_image_url": annotated_url_for(
             &state.indoorcam.processed_dir,
@@ -319,13 +380,17 @@ pub(crate) async fn indoorcam_history(
         .into_iter()
         .map(
             |(ts, detection_count, avg, min, det, inf, img, ann, created)| {
+                let detections = parse_detections(det.as_deref());
+                let (class_counts, detection_label) = detection_summary(&detections);
                 json!({
                     "camera_id": camera_id,
                     "timestamp": ts,
                     "detection_count": detection_count,
                     "confidence_avg": avg,
                     "min_confidence": min,
-                    "detections": parse_detections(det.as_deref()),
+                    "detections": detections,
+                    "class_counts": class_counts,
+                    "detection_label": detection_label,
                     "inference_time_ms": inf,
                     "image_url": image_url_for(&camera_id, img.as_deref()),
                     "annotated_image_url": annotated_url_for(

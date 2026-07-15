@@ -22,5 +22,6 @@ __all__ = [
     "assignment",
     "roboflow_uploader",
     "storage",
+    "snapshots",
     "main",
 ]

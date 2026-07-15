@@ -247,6 +247,33 @@ def test_switch_stops_logging_when_moving_to_chick(make_config):
     assert len(_rows(conf.storage.db_path)) == 2
 
 
+# --- rolling snapshots -----------------------------------------------------
+
+
+def test_run_once_writes_rolling_snapshots(make_config):
+    import cv2
+
+    conf = make_config(snapshots=True)  # snapshots section under tmp_path
+    pipe = _build(conf, ["incubation"], store=None)
+    pipe.run_once(now=1000.0)
+
+    raw = conf.snapshots.latest_path
+    annotated = conf.snapshots.latest_annotated_path
+    assert raw.is_file(), "raw latest.jpg written"
+    assert annotated.is_file(), "latest_annotated.jpg written"
+    # The incubation fake model returns detections, so the annotated frame has
+    # boxes and differs from the raw frame.
+    assert not np.array_equal(cv2.imread(str(raw)), cv2.imread(str(annotated)))
+
+
+def test_run_once_without_snapshots_config_is_a_noop(make_config):
+    # No snapshots section -> conf.snapshots is None -> no files, no crash.
+    conf = make_config()  # no snapshots
+    assert conf.snapshots is None
+    pipe = _build(conf, ["chick"], store=None)
+    assert pipe.run_once(now=1000.0)  # runs fine
+
+
 # --- model-not-found skips the cycle ---------------------------------------
 
 

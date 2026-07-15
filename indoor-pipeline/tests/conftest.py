@@ -58,8 +58,12 @@ def apply_incubation_schema(db_path) -> None:
         conn.close()
 
 
-def _config_dict(tmp_path, *, roboflow=None, storage=None, assignment=None):
-    """A full, valid config dict pointing at temp paths (overridable per section)."""
+def _config_dict(tmp_path, *, roboflow=None, storage=None, assignment=None, snapshots=None):
+    """A full, valid config dict pointing at temp paths (overridable per section).
+
+    ``snapshots`` may be ``True`` (add a snapshots section under tmp_path), a
+    dict (explicit paths), or ``None``/omitted (no snapshots section).
+    """
     data = {
         "camera": {"source_env": "INDOOR_RTSP_URL", "capture_interval_seconds": 10},
         "assignment": {
@@ -101,6 +105,14 @@ def _config_dict(tmp_path, *, roboflow=None, storage=None, assignment=None):
         data["storage"].update(storage)
     if assignment is not None:
         data["assignment"].update(assignment)
+    if snapshots is True:
+        snap_dir = tmp_path / "processed" / "indoor_tapo"
+        data["snapshots"] = {
+            "latest_path": str(snap_dir / "latest.jpg"),
+            "latest_annotated_path": str(snap_dir / "latest_annotated.jpg"),
+        }
+    elif isinstance(snapshots, dict):
+        data["snapshots"] = snapshots
     return data
 
 
@@ -108,12 +120,15 @@ def _config_dict(tmp_path, *, roboflow=None, storage=None, assignment=None):
 def make_config(tmp_path):
     """Factory: write a config.json to a temp path and load it.
 
-    ``make_config(env=..., roboflow=..., storage=..., assignment=...)``.
+    ``make_config(env=..., roboflow=..., storage=..., assignment=..., snapshots=...)``.
+    ``snapshots=True`` adds a snapshots section pointing under tmp_path.
     """
     import config as cfg
 
-    def _make(*, env=None, roboflow=None, storage=None, assignment=None):
-        data = _config_dict(tmp_path, roboflow=roboflow, storage=storage, assignment=assignment)
+    def _make(*, env=None, roboflow=None, storage=None, assignment=None, snapshots=None):
+        data = _config_dict(
+            tmp_path, roboflow=roboflow, storage=storage, assignment=assignment, snapshots=snapshots
+        )
         path = tmp_path / "config.json"
         path.write_text(json.dumps(data), encoding="utf-8")
         return cfg.load_config(path, env=env if env is not None else {"INDOOR_RTSP_URL": "rtsp://x"})

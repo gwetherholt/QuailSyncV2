@@ -41,6 +41,7 @@ try:
     from . import config as config_module
     from . import camera as camera_module
     from . import roboflow_uploader as roboflow_module
+    from . import snapshots as snapshots_module
     from .assignment import AssignmentPoller
     from .detector import Detector
     from .storage import EventStore
@@ -48,6 +49,7 @@ except ImportError:  # plain-script / bare-name import (tests)
     import config as config_module
     import camera as camera_module
     import roboflow_uploader as roboflow_module
+    import snapshots as snapshots_module
     from assignment import AssignmentPoller
     from detector import Detector
     from storage import EventStore
@@ -209,6 +211,28 @@ class IndoorPipeline:
         if timer_due:
             self._last_upload_time = now
 
+    # --- rolling snapshots (live feed) ------------------------------------
+
+    def _write_snapshots(self, frame, detections) -> None:
+        """Write latest.jpg (raw) + latest_annotated.jpg (YOLO boxes) atomically.
+
+        The backend/app serve these as the live feed. Best-effort — a write
+        failure is logged but never breaks the cycle. Skipped when no snapshot
+        paths are configured."""
+        snap = self.conf.snapshots
+        if snap is None:
+            return
+        try:
+            snapshots_module.write_snapshots(
+                frame,
+                detections,
+                snap.latest_path,
+                snap.latest_annotated_path,
+                cv2_module=self.cv2_module,
+            )
+        except Exception:  # noqa: BLE001 — snapshot writing must not break the loop
+            logger.warning("Failed to write rolling snapshot(s); continuing", exc_info=True)
+
     # --- the cycle --------------------------------------------------------
 
     def run_once(self, *, now: float | None = None):
@@ -236,6 +260,9 @@ class IndoorPipeline:
             ", ".join(f"{d.class_name}:{d.confidence:.2f}" for d in detections) or "none",
         )
 
+        # Refresh the rolling live-feed snapshots first so the backend/app get a
+        # current frame even if logging/upload are slow.
+        self._write_snapshots(frame, detections)
         self._log_events(detections, cfg)
         self._maybe_upload(frame, detections, now, when, mode)
         return detections

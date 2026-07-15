@@ -34,5 +34,9 @@
   "storage": {
     "db_path": "/home/gwetherholt/QuailSyncV2/data/quailsync.db",
     "sqlite_busy_timeout_ms": 5000
+  },
+  "snapshots": {
+    "latest_path": "/home/gwetherholt/indoor-cam/processed/indoor_tapo/latest.jpg",
+    "latest_annotated_path": "/home/gwetherholt/indoor-cam/processed/indoor_tapo/latest_annotated.jpg"
   }
 }

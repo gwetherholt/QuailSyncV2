@@ -53,6 +53,7 @@ On startup and every `assignment.poll_seconds` (default 60), the loop does
 | `assignment.py`        | polls the backend assignment endpoint; tracks current vs previous mode; resilient to outages |
 | `roboflow_uploader.py` | REST upload of the full frame **+ YOLO pre-annotations** (with `annotation_labelmap`); project per mode |
 | `storage.py`           | `incubation_events` logging (incubation mode only); WAL + `busy_timeout`; backend owns the schema |
+| `snapshots.py`         | rolling `latest.jpg` (raw) + `latest_annotated.jpg` (YOLO boxes), written atomically each cycle |
 | `main.py`              | the service loop tying it all together                                     |
 
 The heavy imports (`cv2`, `ultralytics`, `requests`) are all lazy — importing any
@@ -93,6 +94,30 @@ over the REST API (upload the image, then POST a YOLO `.txt` annotation with an
 `annotation_labelmap` mapping the model's class indices → names). Uploads fire on
 the timer (`upload_interval_seconds`) and on any detection
 (`upload_on_detection`). The target **project follows the active mode**.
+
+### Rolling live-feed snapshots
+
+Each cycle overwrites two flat files the backend/app serve as the live feed:
+
+- `latest.jpg` — the raw frame
+- `latest_annotated.jpg` — a copy with each detection's box + class label +
+  confidence drawn on it (e.g. `egg 91%` / `chick 80%`); when there are no
+  detections it's a plain copy of the raw frame, so the file always exists and
+  stays fresh.
+
+Both are written **atomically** (encode → sibling `.tmp` → `os.replace`), so the
+backend never serves a half-written JPEG. Configure the paths under `snapshots`
+in `config.json` — they must match where the backend reads indoor-cam images:
+`{INDOORCAM_PROCESSED_DIR}/{camera_id}/latest.jpg` (and `…_annotated.jpg`). With
+the default deploy that's `~/indoor-cam/processed/indoor_tapo/` on the host,
+bind-mounted into the server container at `/indoor-cam/processed`. Omit the
+`snapshots` section to disable snapshot writing.
+
+The backend's `GET /api/indoorcam/latest/{camera_id}` also returns a
+`class_counts` breakdown (`{"egg": 5}`) and a ready `detection_label`
+(`"5 eggs detected"`) derived from the model's actual classes — so the web
+dashboard and Android app label the count by what the camera's mode really
+detects instead of hardcoding "chicks".
 
 ## Running
 

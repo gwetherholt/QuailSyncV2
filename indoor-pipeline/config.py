@@ -134,12 +134,25 @@ class StorageConfig:
 
 
 @dataclass(frozen=True)
+class SnapshotsConfig:
+    # Rolling "latest" frames the backend/app serve as the live feed. The raw
+    # frame and its YOLO-annotated copy are overwritten every cycle (atomically)
+    # so a reader never sees a half-written image. These paths must match where
+    # the backend reads indoor-cam images: {INDOORCAM_PROCESSED_DIR}/{camera_id}/
+    # latest.jpg and latest_annotated.jpg.
+    latest_path: Path
+    latest_annotated_path: Path
+
+
+@dataclass(frozen=True)
 class Config:
     camera: CameraConfig
     assignment: AssignmentConfig
     models: dict[str, ModelConfig]
     roboflow: RoboflowConfig
     storage: StorageConfig
+    # Optional rolling-snapshot output. ``None`` disables snapshot writing.
+    snapshots: SnapshotsConfig | None = None
     # Absolute path the config was loaded from (handy for logging).
     source_path: Path | None = None
 
@@ -319,6 +332,26 @@ def _parse_storage(raw: Mapping[str, Any]) -> StorageConfig:
     return StorageConfig(db_path=db_path, sqlite_busy_timeout_ms=busy_timeout)
 
 
+def _parse_snapshots(raw: Any) -> SnapshotsConfig | None:
+    """Parse the optional ``snapshots`` section (``None`` when absent → disabled).
+
+    When present, both paths are required. They should match the backend's
+    indoor-cam serving path so the live feed works without backend changes.
+    """
+    where = "snapshots"
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise ConfigError(f"{where} must be an object, got {raw!r}")
+    latest_path = Path(
+        _as_nonempty_str(_require(raw, "latest_path", where), f"{where}.latest_path")
+    ).expanduser()
+    latest_annotated_path = Path(
+        _as_nonempty_str(_require(raw, "latest_annotated_path", where), f"{where}.latest_annotated_path")
+    ).expanduser()
+    return SnapshotsConfig(latest_path=latest_path, latest_annotated_path=latest_annotated_path)
+
+
 def load_config(
     path: str | os.PathLike[str] | None = None,
     *,
@@ -355,14 +388,18 @@ def load_config(
         models=_parse_models(_require(data, "models", "config")),
         roboflow=_parse_roboflow(data.get("roboflow"), env),
         storage=_parse_storage(_require(data, "storage", "config")),
+        snapshots=_parse_snapshots(data.get("snapshots")),
         source_path=path,
     )
 
 
 def ensure_dirs(conf: Config) -> None:
-    """Create the directories the pipeline writes into (the DB's parent).
-    Idempotent — safe to call on every startup."""
+    """Create the directories the pipeline writes into (the DB's parent, and the
+    snapshot dirs). Idempotent — safe to call on every startup."""
     conf.storage.db_path.parent.mkdir(parents=True, exist_ok=True)
+    if conf.snapshots is not None:
+        conf.snapshots.latest_path.parent.mkdir(parents=True, exist_ok=True)
+        conf.snapshots.latest_annotated_path.parent.mkdir(parents=True, exist_ok=True)
 
 
 if __name__ == "__main__":
@@ -389,3 +426,8 @@ if __name__ == "__main__":
     print(f"  upload_interval   = {rf.upload_interval_seconds}s, on_detection={rf.upload_on_detection}")
     print(f"db_path           = {conf.storage.db_path}")
     print(f"busy_timeout_ms   = {conf.storage.sqlite_busy_timeout_ms}")
+    if conf.snapshots is not None:
+        print(f"snapshot latest   = {conf.snapshots.latest_path}")
+        print(f"snapshot annot.   = {conf.snapshots.latest_annotated_path}")
+    else:
+        print("snapshots         = disabled")

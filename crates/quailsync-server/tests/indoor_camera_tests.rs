@@ -192,6 +192,189 @@ async fn latest_returns_most_recent_for_camera() {
     assert_eq!(body["image_url"], "/api/indoorcam/image/camA/c.jpg");
 }
 
+/// POST an observation with an explicit detections array (class breakdown).
+async fn post_observation_with_detections(
+    base: &str,
+    client: &reqwest::Client,
+    camera_id: &str,
+    timestamp: &str,
+    detection_count: i64,
+    detections: Value,
+) {
+    let body = json!({
+        "camera_id": camera_id,
+        "timestamp": timestamp,
+        "detection_count": detection_count,
+        "average_confidence": 0.8,
+        "min_confidence": 0.7,
+        "detections": detections,
+        "inference_time_ms": 5.0,
+        "image_filename": "f.jpg",
+    });
+    let resp = client
+        .post(format!("{base}/api/indoorcam/observation"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::CREATED,
+        "observation POST failed"
+    );
+}
+
+/// A detections array of `count` boxes all of one class.
+fn boxes_of(class_name: &str, count: usize) -> Value {
+    Value::Array(
+        (0..count)
+            .map(|_| json!({"class_name": class_name, "confidence": 0.8, "bbox": [1.0, 2.0, 3.0, 4.0]}))
+            .collect(),
+    )
+}
+
+#[tokio::test]
+async fn latest_reports_class_breakdown_and_label_from_detections() {
+    let processed = unique_processed_dir();
+    let base = spawn_app(&processed).await;
+    let c = client();
+
+    // Brooder mode: the chick model detects 3 chicks.
+    post_observation_with_detections(
+        &base,
+        &c,
+        "brooder-cam",
+        "2026-06-15T07:30:00",
+        3,
+        boxes_of("chick", 3),
+    )
+    .await;
+    let body: Value = c
+        .get(format!("{base}/api/indoorcam/latest/brooder-cam"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["class_counts"]["chick"].as_i64(), Some(3));
+    assert_eq!(body["detection_label"], "3 chicks detected");
+
+    // Incubation mode: the incubation model detects 5 eggs -> "5 eggs detected".
+    post_observation_with_detections(
+        &base,
+        &c,
+        "incubator-cam",
+        "2026-06-15T07:31:00",
+        5,
+        boxes_of("egg", 5),
+    )
+    .await;
+    let body: Value = c
+        .get(format!("{base}/api/indoorcam/latest/incubator-cam"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["class_counts"]["egg"].as_i64(), Some(5));
+    assert_eq!(body["detection_label"], "5 eggs detected");
+}
+
+#[tokio::test]
+async fn latest_label_singular_and_multiclass() {
+    let processed = unique_processed_dir();
+    let base = spawn_app(&processed).await;
+    let c = client();
+
+    // Single detection -> singular noun ("1 egg detected", not "1 eggs").
+    post_observation_with_detections(
+        &base,
+        &c,
+        "camA",
+        "2026-06-15T07:30:00",
+        1,
+        boxes_of("egg", 1),
+    )
+    .await;
+    let one: Value = c
+        .get(format!("{base}/api/indoorcam/latest/camA"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(one["detection_label"], "1 egg detected");
+
+    // Multi-class: 3 chicks + 1 egg -> most-common first, both pluralized right.
+    let mut mixed = boxes_of("chick", 3);
+    mixed
+        .as_array_mut()
+        .unwrap()
+        .extend(boxes_of("egg", 1).as_array().unwrap().iter().cloned());
+    post_observation_with_detections(&base, &c, "camB", "2026-06-15T07:31:00", 4, mixed).await;
+    let multi: Value = c
+        .get(format!("{base}/api/indoorcam/latest/camB"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(multi["class_counts"]["chick"].as_i64(), Some(3));
+    assert_eq!(multi["class_counts"]["egg"].as_i64(), Some(1));
+    assert_eq!(multi["detection_label"], "3 chicks, 1 egg detected");
+}
+
+#[tokio::test]
+async fn latest_no_detections_gives_empty_breakdown_and_null_label() {
+    let processed = unique_processed_dir();
+    let base = spawn_app(&processed).await;
+    let c = client();
+
+    post_observation_with_detections(&base, &c, "camA", "2026-06-15T07:30:00", 0, json!([])).await;
+    let body: Value = c
+        .get(format!("{base}/api/indoorcam/latest/camA"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(body["detection_label"].is_null());
+    assert_eq!(body["class_counts"], json!({}));
+}
+
+#[tokio::test]
+async fn history_includes_class_breakdown_and_label() {
+    let processed = unique_processed_dir();
+    let base = spawn_app(&processed).await;
+    let c = client();
+    post_observation_with_detections(
+        &base,
+        &c,
+        "camA",
+        "2026-06-15T07:30:00",
+        2,
+        boxes_of("chick", 2),
+    )
+    .await;
+    let hist: Value = c
+        .get(format!("{base}/api/indoorcam/history/camA?hours=24"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let arr = hist.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["class_counts"]["chick"].as_i64(), Some(2));
+    assert_eq!(arr[0]["detection_label"], "2 chicks detected");
+}
+
 #[tokio::test]
 async fn latest_404_for_unknown_camera_and_empty_db() {
     let processed = unique_processed_dir();

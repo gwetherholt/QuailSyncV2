@@ -1676,11 +1676,12 @@
       }
     },
 
-    /* ---------- Indoor Camera (live chick count + image + assignment) ---------- */
+    /* ---------- Indoor Camera (live detection count + image + assignment) ---------- */
 
     // The indoor camera(s): GET /api/indoor-cameras for the registry + current
-    // assignment, and /api/indoorcam/latest/{id} for the live chick count and
-    // any saved image. Assignment is restricted to brooders + incubators.
+    // assignment, and /api/indoorcam/latest/{id} for the live detection count
+    // (chicks in brooder mode, eggs in incubation mode) and any saved image.
+    // Assignment is restricted to brooders + incubators.
     _pollIndoorCam: async function(){
       var el = document.getElementById('d-indoorcam');
       if(!el) return;
@@ -1717,12 +1718,18 @@
     _renderIndoorCamCard: function(cam, latest){
       var title = escapeHtml(cam.name || cam.camera_id);
 
-      // Live count + when it was captured.
+      // Live count + when it was captured. Prefer the server's class-aware
+      // detection_label (e.g. "5 eggs detected" in incubation mode, "3 chicks
+      // detected" in brooder mode) — driven by the model's actual classes, not a
+      // hardcoded word. Fall back to a neutral count when the latest frame had
+      // no detections (no class to name).
       var countHtml;
-      if(latest && latest.detection_count != null){
+      if(latest && (latest.detection_label || latest.detection_count != null)){
         var n = latest.detection_count;
+        var label = latest.detection_label
+          || (n != null ? (n + ' detection' + (n === 1 ? '' : 's')) : '');
         countHtml = '<div style="font-size:1.4rem;font-weight:700;color:var(--sage-dark)">'
-          + n + ' chick' + (n === 1 ? '' : 's') + ' detected</div>'
+          + escapeHtml(label) + '</div>'
           + '<div style="color:#888;font-size:.8rem">' + relativeTime(latest.timestamp) + '</div>';
       } else {
         countHtml = '<div style="color:#999">No detections yet</div>';
