@@ -112,6 +112,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.ColorPainter
 import coil.compose.AsyncImage
+import coil.request.CachePolicy
+import coil.request.ImageRequest
 import com.quailsync.app.data.TrailcamCamera
 import com.quailsync.app.data.TrailcamLatest
 import com.quailsync.app.data.AssignIndoorCameraRequest
@@ -1102,9 +1104,16 @@ private fun IndoorObsContent(latest: IndoorcamLatest, baseUrl: String) {
     // Prefer the annotated frame (only present when on disk); fall back to raw.
     val imageUrl = absolute(latest.annotatedImageUrl) ?: absolute(latest.imageUrl)
     if (imageUrl != null) {
-        // Cache-bust: the rolling latest.jpg reuses one URL but changes each
-        // cycle, so key Coil by the observation timestamp to force a reload.
-        val model = latest.timestamp?.let { "$imageUrl?v=${java.net.URLEncoder.encode(it, "UTF-8")}" } ?: imageUrl
+        // Cache-bust: the rolling latest.jpg reuses one URL but is overwritten
+        // every capture cycle (faster than new observations arrive), so append a
+        // fresh `?t=` on each load AND disable Coil's memory/disk cache for this
+        // request so it always fetches the current frame, never a stale copy.
+        val context = LocalContext.current
+        val model = ImageRequest.Builder(context)
+            .data("$imageUrl?t=${System.currentTimeMillis()}")
+            .memoryCachePolicy(CachePolicy.DISABLED)
+            .diskCachePolicy(CachePolicy.DISABLED)
+            .build()
         Spacer(Modifier.height(10.dp))
         AsyncImage(
             model = model,

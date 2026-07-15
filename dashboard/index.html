@@ -1741,9 +1741,10 @@
       var imgUrl = (latest && (latest.annotated_image_url || latest.image_url)) || null;
       var imgHtml = '';
       if(imgUrl){
-        // Cache-bust: the rolling latest.jpg keeps the same URL but changes each
-        // cycle, so key the <img> by the observation timestamp to force a reload.
-        var src = encodeURI(imgUrl) + (latest.timestamp ? ('?v=' + encodeURIComponent(latest.timestamp)) : '');
+        // Cache-bust: the rolling latest.jpg reuses one URL but is overwritten
+        // every capture cycle (faster than new observations arrive), so key the
+        // <img> by the current time on each poll to always fetch a fresh frame.
+        var src = encodeURI(imgUrl) + '?t=' + Date.now();
         imgHtml = '<img src="' + src + '" alt="latest indoor frame" '
           + 'style="width:100%;max-width:320px;border-radius:10px;margin-top:.6rem;display:block" '
           + 'onerror="this.style.display=\'none\'">';
