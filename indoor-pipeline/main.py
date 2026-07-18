@@ -100,6 +100,12 @@ class IndoorPipeline:
             if uploader is _UNSET
             else uploader
         )
+        # Set the annotation class map for the INITIAL mode now — not only on a
+        # later swap — so a fresh start in incubation mode uploads Pascal VOC from
+        # the very first cycle instead of transiently defaulting to the legacy
+        # YOLO path. Routed through the same setter _on_swap uses.
+        if self.uploader is not None:
+            self.uploader.class_names = self._class_names_for(self.poller.mode)
         # Observation POSTing so the dashboard/app show live data. ``None`` when
         # disabled (or forced off via observation_client=None).
         self.observation_client = (
@@ -151,6 +157,17 @@ class IndoorPipeline:
         # Load failed (e.g. missing weights): leave unloaded; retry next cycle.
         return False
 
+    @staticmethod
+    def _class_names_for(mode: str) -> "dict[int, str] | None":
+        """The Roboflow annotation class map for a mode: the canonical incubation
+        names (which select the VOC-XML upload path) for incubation, else ``None``
+        (which selects the legacy YOLO+labelmap path — the chick model)."""
+        return (
+            roboflow_module.INCUBATION_CLASS_NAMES
+            if mode == config_module.MODE_INCUBATION
+            else None
+        )
+
     def _on_swap(self, mode: str, cfg) -> None:
         """React to a completed model (re)load: retarget uploads, reset the
         upload timer, and reset any per-frame baselines (YOLO has none)."""
@@ -160,6 +177,9 @@ class IndoorPipeline:
         self._last_upload_time = None
         if self.uploader is not None:
             self.uploader.project = cfg.roboflow_project
+            # Incubation uploads use Pascal VOC XML (class names inline); the chick
+            # path keeps the legacy YOLO+labelmap upload unchanged.
+            self.uploader.class_names = self._class_names_for(mode)
         logger.info("Now running mode %r (weights=%s, project=%s)", mode, cfg.weights, cfg.roboflow_project)
 
     # --- incubation event logging (incubator mode only) -------------------

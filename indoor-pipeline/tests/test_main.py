@@ -198,6 +198,54 @@ def test_upload_project_follows_model_swap(make_config):
     assert uploader.calls[1]["name"].startswith("indoor_chick_")
 
 
+def test_fresh_start_in_incubation_mode_uploads_voc(make_config):
+    """A cold start in incubation mode must upload Pascal VOC (class names inline)
+    from the very first cycle — not the legacy YOLO path until the next swap."""
+    from roboflow_uploader import RoboflowUploader, INCUBATION_CLASS_NAMES
+
+    class _Resp:
+        status_code = 200
+        text = "ok"
+
+        def json(self):
+            return {"id": "img1"}
+
+    calls = []
+
+    def fake_post(url, **kw):
+        calls.append({"url": url, **kw})
+        return _Resp()
+
+    conf = make_config()
+    # A real uploader (default class_names=None) injected into a fresh pipeline.
+    uploader = RoboflowUploader("KEY", "quail", "incubation-stages", post=fake_post)
+    poller = AssignmentPoller(
+        conf.assignment.backend_url, conf.assignment.camera_id,
+        conf.assignment.default_mode, session=_FakeSession(["incubation"]),
+    )
+    pipe = IndoorPipeline(
+        conf,
+        frame_source=_frames(),
+        detector=Detector(yolo_factory=_yolo_factory),
+        poller=poller,
+        uploader=uploader,
+        store=None,
+        observation_client=None,
+    )
+
+    # Construction alone must have set the incubation class map (VOC path) —
+    # before any run_once / swap. This is the crux of the review question.
+    assert pipe.uploader.class_names == INCUBATION_CLASS_NAMES
+
+    pipe.run_once(now=1000.0)
+
+    annotate = [c for c in calls if "/annotate/" in c["url"]]
+    assert annotate, "an annotation was uploaded on the first cycle"
+    assert annotate[0]["params"]["name"].endswith(".xml")     # VOC, not .txt
+    assert "labelmap" not in annotate[0]["params"]            # VOC needs none
+    assert "<name>egg</name>" in annotate[0]["data"].decode("utf-8")
+
+
 def test_upload_disabled_builds_no_uploader(make_config):
     # With roboflow disabled, the config-built uploader is None and cycles run
     # fine without uploading. (Don't inject a fake uploader here — let main build
