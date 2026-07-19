@@ -185,6 +185,8 @@ def test_uploads_to_incubation_project_in_incubator_mode(make_config):
     assert len(uploader.calls) == 1
     assert uploader.calls[0]["project"] == "incubation-stages"
     assert uploader.calls[0]["name"].startswith("indoor_incubation_")
+    # Incubation uploads are image-only: no detections are handed to the uploader.
+    assert uploader.calls[0]["detections"] == []
 
 
 def test_upload_project_follows_model_swap(make_config):
@@ -198,30 +200,29 @@ def test_upload_project_follows_model_swap(make_config):
     assert uploader.calls[1]["name"].startswith("indoor_chick_")
 
 
-def test_fresh_start_in_incubation_mode_uploads_voc(make_config):
-    """A cold start in incubation mode must upload Pascal VOC (class names inline)
-    from the very first cycle — not the legacy YOLO path until the next swap."""
-    from roboflow_uploader import RoboflowUploader, INCUBATION_CLASS_NAMES
+class _RfResp:
+    status_code = 200
+    text = "ok"
 
-    class _Resp:
-        status_code = 200
-        text = "ok"
+    def json(self):
+        return {"id": "img1"}
 
-        def json(self):
-            return {"id": "img1"}
+
+def _capturing_pipeline(make_config, active_model, project):
+    """Build a pipeline with a real RoboflowUploader whose POSTs are captured."""
+    from roboflow_uploader import RoboflowUploader
 
     calls = []
 
     def fake_post(url, **kw):
         calls.append({"url": url, **kw})
-        return _Resp()
+        return _RfResp()
 
     conf = make_config()
-    # A real uploader (default class_names=None) injected into a fresh pipeline.
-    uploader = RoboflowUploader("KEY", "quail", "incubation-stages", post=fake_post)
+    uploader = RoboflowUploader("KEY", "quail", project, post=fake_post)
     poller = AssignmentPoller(
         conf.assignment.backend_url, conf.assignment.camera_id,
-        conf.assignment.default_mode, session=_FakeSession(["incubation"]),
+        conf.assignment.default_mode, session=_FakeSession([active_model]),
     )
     pipe = IndoorPipeline(
         conf,
@@ -232,18 +233,30 @@ def test_fresh_start_in_incubation_mode_uploads_voc(make_config):
         store=None,
         observation_client=None,
     )
+    return pipe, calls
 
-    # Construction alone must have set the incubation class map (VOC path) —
-    # before any run_once / swap. This is the crux of the review question.
-    assert pipe.uploader.class_names == INCUBATION_CLASS_NAMES
 
+def test_incubation_mode_uploads_image_only_no_annotation(make_config):
+    """incubation-stages must receive raw images — main passes no detections to
+    the uploader in incubation mode, so there is no /annotate call."""
+    pipe, calls = _capturing_pipeline(make_config, "incubation", "incubation-stages")
+    pipe.run_once(now=1000.0)
+
+    assert calls, "an upload happened"
+    assert any(c["url"].endswith("/upload") for c in calls)      # the image went up
+    assert all("/annotate/" not in c["url"] for c in calls)      # but NO annotation
+
+
+def test_chick_mode_still_uploads_yolo_annotation(make_config):
+    """The chick path (find-chicks-5) is untouched — it still posts a YOLO
+    annotation + labelmap."""
+    pipe, calls = _capturing_pipeline(make_config, "chick", "find-chicks-5")
     pipe.run_once(now=1000.0)
 
     annotate = [c for c in calls if "/annotate/" in c["url"]]
-    assert annotate, "an annotation was uploaded on the first cycle"
-    assert annotate[0]["params"]["name"].endswith(".xml")     # VOC, not .txt
-    assert "labelmap" not in annotate[0]["params"]            # VOC needs none
-    assert "<name>egg</name>" in annotate[0]["data"].decode("utf-8")
+    assert annotate, "chick mode posts a YOLO annotation"
+    assert annotate[0]["params"]["name"].endswith(".txt")
+    assert "labelmap" in annotate[0]["params"]
 
 
 def test_upload_disabled_builds_no_uploader(make_config):
