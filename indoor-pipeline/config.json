@@ -27,7 +27,6 @@
     "enabled": true,
     "workspace": "quail",
     "upload_interval_seconds": 1800,
-    "upload_on_detection": true,
     "api_key_env": "ROBOFLOW_API_KEY",
     "batch_name": "indoor-auto"
   },

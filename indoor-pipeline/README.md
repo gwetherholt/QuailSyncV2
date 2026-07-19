@@ -90,11 +90,22 @@ table exists, opens the shared DB in WAL mode, and sets `busy_timeout`.
 
 ### Roboflow uploads
 
-Full frames are uploaded with their YOLO detections as **reviewable pre-labels**
-over the REST API (upload the image, then POST a YOLO `.txt` annotation with an
-`annotation_labelmap` mapping the model's class indices → names). Uploads fire on
-the timer (`upload_interval_seconds`) and on any detection
-(`upload_on_detection`). The target **project follows the active mode**.
+Full frames are uploaded over the REST API to the active mode's **project**
+(incubation → `incubation-stages`, chick → `find-chicks-5`). Incubation frames go
+up **image-only** (no annotations, matching the `incubator/` pipeline); chick
+frames also POST a YOLO `.txt` pre-annotation.
+
+**Frequency / throttling:**
+
+- A periodic upload every `upload_interval_seconds` (config.json, default 1800s).
+- Optional on-detection uploads, **env-driven and OFF by default** — set
+  `ROBOFLOW_UPLOAD_ON_DETECTION=true` to enable.
+- A hard floor between *any* two uploads, `ROBOFLOW_MIN_UPLOAD_SPACING_S` (env,
+  default 1800s), enforced regardless of trigger — so even with on-detection
+  enabled the pipeline can't flood Roboflow.
+
+The effective settings are printed in the `Roboflow auto-upload enabled …`
+startup log line and by `python config.py`.
 
 ### Rolling live-feed snapshots
 

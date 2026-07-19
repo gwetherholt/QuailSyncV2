@@ -90,7 +90,6 @@ def _config_dict(tmp_path, *, roboflow=None, storage=None, assignment=None, snap
             "enabled": True,
             "workspace": "quail",
             "upload_interval_seconds": 1800,
-            "upload_on_detection": True,
             "api_key_env": "ROBOFLOW_API_KEY",
             "batch_name": "indoor-auto",
         },

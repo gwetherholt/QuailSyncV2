@@ -261,11 +261,12 @@ def build_uploader(conf, project: str, *, post=None) -> RoboflowUploader | None:
         logger.debug("%s not set — skipping Roboflow upload", rf.api_key_env)
         return None
     logger.info(
-        "Roboflow auto-upload enabled -> %s/%s (batch=%s, every %ss, on_detection=%s)",
+        "Roboflow auto-upload enabled -> %s/%s (batch=%s, interval=%ss, on_detection=%s, min_spacing=%ss)",
         rf.workspace,
         project,
         rf.batch_name,
         rf.upload_interval_seconds,
         rf.upload_on_detection,
+        rf.min_upload_spacing_s,
     )
     return RoboflowUploader.from_config(conf, project, post=post)

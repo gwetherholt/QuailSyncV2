@@ -190,7 +190,13 @@ def test_uploads_to_incubation_project_in_incubator_mode(make_config):
 
 
 def test_upload_project_follows_model_swap(make_config):
-    conf = make_config()
+    # The 2nd cycle (61s later, interval not yet due) uploads only because
+    # on-detection is enabled here with the spacing floor dropped to 0.
+    conf = make_config(env={
+        "INDOOR_RTSP_URL": "rtsp://x",
+        "ROBOFLOW_UPLOAD_ON_DETECTION": "true",
+        "ROBOFLOW_MIN_UPLOAD_SPACING_S": "0",
+    })
     uploader = _FakeUploader()
     pipe = _build(conf, ["incubation", "chick"], uploader=uploader)
     pipe.run_once(now=1000.0)
@@ -198,6 +204,67 @@ def test_upload_project_follows_model_swap(make_config):
     projects = [c["project"] for c in uploader.calls]
     assert projects == ["incubation-stages", "find-chicks-5"]
     assert uploader.calls[1]["name"].startswith("indoor_chick_")
+
+
+# --- upload throttling: on-detection default-off + spacing floor -------------
+
+
+def test_roboflow_upload_config_is_env_driven(make_config):
+    # Defaults: on-detection OFF, spacing floor 1800s.
+    conf = make_config()
+    assert conf.roboflow.upload_on_detection is False
+    assert conf.roboflow.min_upload_spacing_s == 1800
+    # Env flips the trigger and sets the floor.
+    conf2 = make_config(env={
+        "INDOOR_RTSP_URL": "rtsp://x",
+        "ROBOFLOW_UPLOAD_ON_DETECTION": "yes",
+        "ROBOFLOW_MIN_UPLOAD_SPACING_S": "600",
+    })
+    assert conf2.roboflow.upload_on_detection is True
+    assert conf2.roboflow.min_upload_spacing_s == 600
+
+
+def test_detection_event_does_not_upload_when_disabled(make_config):
+    # Default config: on-detection OFF. After the first (interval) upload, a
+    # detection-only cycle (interval not yet due) must NOT upload.
+    conf = make_config()
+    assert conf.roboflow.upload_on_detection is False
+    uploader = _FakeUploader()
+    pipe = _build(conf, ["chick"], uploader=uploader, store=None)
+    pipe.run_once(now=1000.0)          # interval upload (first cycle)
+    pipe.run_once(now=1000.0 + 10)     # 10s later: interval not due + detection off
+    assert len(uploader.calls) == 1    # only the first (interval) upload
+
+
+def test_spacing_floor_blocks_flood_when_on_detection_enabled(make_config):
+    # On-detection ENABLED but the default 1800s floor stands: rapid detections
+    # every cycle must not flood — only the first (interval) upload gets through.
+    conf = make_config(env={
+        "INDOOR_RTSP_URL": "rtsp://x",
+        "ROBOFLOW_UPLOAD_ON_DETECTION": "true",
+    })
+    assert conf.roboflow.min_upload_spacing_s == 1800
+    uploader = _FakeUploader()
+    pipe = _build(conf, ["chick"], uploader=uploader, store=None)
+    pipe.run_once(now=1000.0)          # first upload, resets spacing clock
+    pipe.run_once(now=1000.0 + 10)     # detection, 10s < 1800 floor -> blocked
+    pipe.run_once(now=1000.0 + 20)     # detection, still < 1800 -> blocked
+    assert len(uploader.calls) == 1
+
+
+def test_detection_uploads_when_enabled_and_spacing_elapsed(make_config):
+    # On-detection ENABLED with a short floor: once the floor elapses, a detection
+    # upload fires.
+    conf = make_config(env={
+        "INDOOR_RTSP_URL": "rtsp://x",
+        "ROBOFLOW_UPLOAD_ON_DETECTION": "true",
+        "ROBOFLOW_MIN_UPLOAD_SPACING_S": "5",
+    })
+    uploader = _FakeUploader()
+    pipe = _build(conf, ["chick"], uploader=uploader, store=None)
+    pipe.run_once(now=1000.0)          # first upload, spacing clock = 1000
+    pipe.run_once(now=1000.0 + 10)     # detection, 10s >= 5 floor -> uploads
+    assert len(uploader.calls) == 2
 
 
 class _RfResp:

@@ -197,8 +197,11 @@ class IndoorPipeline:
     # --- Roboflow upload --------------------------------------------------
 
     def _maybe_upload(self, frame, detections, now: float, when, mode: str) -> None:
-        """Upload the full frame (+ YOLO pre-labels) on the timer and/or on any
-        detection. At most one upload per cycle; best-effort — never raises."""
+        """Upload the full frame on the periodic interval and/or on a detection
+        (the latter env-gated, default off). A hard spacing floor
+        (``min_upload_spacing_s``) caps how close any two uploads can be —
+        regardless of trigger — so re-enabling on-detection can't flood Roboflow.
+        At most one upload per cycle; best-effort — never raises."""
         if self.uploader is None:
             return
         rf = self.conf.roboflow
@@ -208,6 +211,14 @@ class IndoorPipeline:
         )
         detection_due = rf.upload_on_detection and len(detections) > 0
         if not (timer_due or detection_due):
+            return
+
+        # Spacing floor: never upload if the previous upload was more recent than
+        # min_upload_spacing_s — a hard anti-flood cap applied to every trigger.
+        if (
+            self._last_upload_time is not None
+            and (now - self._last_upload_time) < rf.min_upload_spacing_s
+        ):
             return
 
         reason = "timer" if timer_due else "detection"
@@ -221,10 +232,9 @@ class IndoorPipeline:
             self.uploader.upload_frame(frame, name, upload_detections, cv2_module=self.cv2_module)
         except Exception:  # noqa: BLE001 — upload is best-effort, never fatal
             logger.warning("Roboflow upload raised; continuing", exc_info=True)
-        # Only a timer-driven upload advances the cadence, so detection uploads
-        # don't shift the periodic schedule.
-        if timer_due:
-            self._last_upload_time = now
+        # Every upload advances the spacing clock so the floor holds across all
+        # triggers (interval and detection alike).
+        self._last_upload_time = now
 
     # --- rolling snapshots (live feed) ------------------------------------
 

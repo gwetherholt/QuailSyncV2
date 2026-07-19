@@ -38,6 +38,13 @@ DEFAULT_CONFIG_PATH: Path = Path(__file__).resolve().parent / "config.json"
 # Env var pointing at an alternate config file (systemd unit can override).
 CONFIG_PATH_ENV = "INDOOR_PIPELINE_CONFIG"
 
+# Roboflow upload-frequency controls, resolved from the environment (non-secret;
+# typically set via the systemd unit's Environment= lines). The on-detection
+# trigger defaults OFF; the spacing floor defaults to 1800s.
+ROBOFLOW_UPLOAD_ON_DETECTION_ENV = "ROBOFLOW_UPLOAD_ON_DETECTION"
+ROBOFLOW_MIN_UPLOAD_SPACING_ENV = "ROBOFLOW_MIN_UPLOAD_SPACING_S"
+DEFAULT_MIN_UPLOAD_SPACING_S = 1800.0
+
 # --- Assignment → model mapping --------------------------------------------
 # The backend's GET /api/cameras/{id}/assignment returns ``active_model`` already
 # derived from the assignment (mirrors ``active_model_for()`` in quailsync-common:
@@ -111,15 +118,22 @@ class ModelConfig:
 
 @dataclass(frozen=True)
 class RoboflowConfig:
-    # Auto-upload frames + YOLO pre-annotations to Roboflow to grow the labeling
-    # dataset. Best-effort and opt-in: with ``enabled`` false, or the API key
-    # unset, uploads are skipped silently and never break the pipeline. The
-    # *project* is per-mode (see :class:`ModelConfig`); the workspace/key/batch
-    # are shared here.
+    # Auto-upload frames to Roboflow to grow the labeling dataset. Best-effort and
+    # opt-in: with ``enabled`` false, or the API key unset, uploads are skipped
+    # silently and never break the pipeline. The *project* is per-mode (see
+    # :class:`ModelConfig`); the workspace/key/batch are shared here.
+    #
+    # Frequency: a periodic ``upload_interval_seconds`` upload, plus optional
+    # on-detection uploads. ``upload_on_detection`` is ENV-driven (default OFF).
+    # ``min_upload_spacing_s`` is a hard floor between ANY two uploads (env-driven,
+    # default 1800s) so even if on-detection is re-enabled it can't flood Roboflow.
     enabled: bool
     workspace: str
     upload_interval_seconds: float
+    # Resolved from env ``ROBOFLOW_UPLOAD_ON_DETECTION`` at load time; default False.
     upload_on_detection: bool
+    # Resolved from env ``ROBOFLOW_MIN_UPLOAD_SPACING_S`` at load time; default 1800.
+    min_upload_spacing_s: float
     api_key_env: str
     batch_name: str
     # Resolved from ``os.environ[api_key_env]`` at load time (like camera.source).
@@ -182,6 +196,26 @@ def _require(section: Mapping[str, Any], key: str, where: str) -> Any:
     if key not in section:
         raise ConfigError(f"{where}: missing required key {key!r}")
     return section[key]
+
+
+def _env_flag(env: Mapping[str, str], name: str, *, default: bool = False) -> bool:
+    """Parse a boolean env var (``1/true/yes/on`` = True). Unset -> ``default``."""
+    raw = env.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_number(env: Mapping[str, str], name: str, default: float, where: str) -> float:
+    """Parse a numeric env var. Unset/blank -> ``default``; non-numeric ->
+    :class:`ConfigError` (fail loud at startup, like the rest of the config)."""
+    raw = env.get(name)
+    if raw is None or not raw.strip():
+        return float(default)
+    try:
+        return float(raw.strip())
+    except ValueError as exc:
+        raise ConfigError(f"{where}: {name}={raw!r} is not a number") from exc
 
 
 def _as_number(value: Any, where: str) -> float:
@@ -314,9 +348,19 @@ def _parse_roboflow(raw: Any, env: Mapping[str, str]) -> RoboflowConfig:
     )
     if interval <= 0:
         raise ConfigError(f"{where}.upload_interval_seconds must be > 0, got {interval}")
-    upload_on_detection = _as_bool(
-        raw.get("upload_on_detection", True), f"{where}.upload_on_detection"
+    # On-detection trigger is ENV-driven and OFF by default, so it can be flipped
+    # per-deploy without editing config.json.
+    upload_on_detection = _env_flag(env, ROBOFLOW_UPLOAD_ON_DETECTION_ENV, default=False)
+    # Hard floor between ANY two uploads (env-driven, default 1800s) — an anti-flood
+    # cap independent of the trigger.
+    min_upload_spacing_s = _env_number(
+        env, ROBOFLOW_MIN_UPLOAD_SPACING_ENV, DEFAULT_MIN_UPLOAD_SPACING_S,
+        f"{where}.{ROBOFLOW_MIN_UPLOAD_SPACING_ENV}",
     )
+    if min_upload_spacing_s < 0:
+        raise ConfigError(
+            f"{where}: {ROBOFLOW_MIN_UPLOAD_SPACING_ENV} must be >= 0, got {min_upload_spacing_s}"
+        )
     api_key_env = _as_nonempty_str(
         raw.get("api_key_env", "ROBOFLOW_API_KEY"), f"{where}.api_key_env"
     )
@@ -329,6 +373,7 @@ def _parse_roboflow(raw: Any, env: Mapping[str, str]) -> RoboflowConfig:
         workspace=workspace,
         upload_interval_seconds=interval,
         upload_on_detection=upload_on_detection,
+        min_upload_spacing_s=min_upload_spacing_s,
         api_key_env=api_key_env,
         batch_name=batch_name,
         api_key=api_key,
@@ -458,7 +503,8 @@ if __name__ == "__main__":
               f"project={m.roboflow_project} log_events={m.log_events}")
     print(f"roboflow          = {'enabled' if rf.enabled else 'disabled'} ws={rf.workspace}")
     print(f"  api_key ({rf.api_key_env}) = {'<set>' if rf.api_key else '<unset>'}")
-    print(f"  upload_interval   = {rf.upload_interval_seconds}s, on_detection={rf.upload_on_detection}")
+    print(f"  upload_interval   = {rf.upload_interval_seconds}s, on_detection={rf.upload_on_detection}"
+          f", min_spacing={rf.min_upload_spacing_s}s")
     print(f"db_path           = {conf.storage.db_path}")
     print(f"busy_timeout_ms   = {conf.storage.sqlite_busy_timeout_ms}")
     if conf.snapshots is not None:
