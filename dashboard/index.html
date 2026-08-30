@@ -1715,19 +1715,41 @@
       }).join('');
     },
 
+    // Build a per-class detection summary from an observation's detections, e.g.
+    // "3 eggs detected" / "2 chicks, 3 eggs detected"; "No detections" when empty.
+    // Ordered by descending count, ties alphabetical. Class names come straight
+    // from the payload (no hardcoded list — future model classes render without
+    // changes); underscores are humanized for display and a null/blank class name
+    // is grouped under "(unknown)".
+    _indoorDetectionSummary: function(detections){
+      if(!detections || !detections.length) return 'No detections';
+      var counts = {};
+      detections.forEach(function(d){
+        var raw = (d && d.class_name != null) ? String(d.class_name).trim() : '';
+        var key = raw === '' ? '(unknown)' : raw;
+        counts[key] = (counts[key] || 0) + 1;
+      });
+      return Object.keys(counts).map(function(k){ return { name: k, count: counts[k] }; })
+        .sort(function(a, b){ return b.count - a.count || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0); })
+        .map(function(p){
+          var human = p.name.replace(/_/g, ' ');
+          // Pluralize only plain words (skip singular, already-plural, and the
+          // "(unknown)" fallback which ends in ')').
+          var plural = p.count !== 1 && /[A-Za-z]$/.test(human) && !/s$/.test(human);
+          return p.count + ' ' + (plural ? human + 's' : human);
+        })
+        .join(', ') + ' detected';
+    },
+
     _renderIndoorCamCard: function(cam, latest){
       var title = escapeHtml(cam.name || cam.camera_id);
 
-      // Live count + when it was captured. Prefer the server's class-aware
-      // detection_label (e.g. "5 eggs detected" in incubation mode, "3 chicks
-      // detected" in brooder mode) — driven by the model's actual classes, not a
-      // hardcoded word. Fall back to a neutral count when the latest frame had
-      // no detections (no class to name).
+      // Per-class summary built from the observation's detections (grouped by
+      // class name), so it reflects whatever the model actually detected — e.g.
+      // "3 eggs detected" or "2 chicks, 3 eggs detected".
       var countHtml;
-      if(latest && (latest.detection_label || latest.detection_count != null)){
-        var n = latest.detection_count;
-        var label = latest.detection_label
-          || (n != null ? (n + ' detection' + (n === 1 ? '' : 's')) : '');
+      if(latest){
+        var label = this._indoorDetectionSummary(latest.detections);
         countHtml = '<div style="font-size:1.4rem;font-weight:700;color:var(--sage-dark)">'
           + escapeHtml(label) + '</div>'
           + '<div style="color:#888;font-size:.8rem">' + relativeTime(latest.timestamp) + '</div>';

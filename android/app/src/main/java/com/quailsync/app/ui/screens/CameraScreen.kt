@@ -121,6 +121,7 @@ import com.quailsync.app.data.CameraAssignment
 import com.quailsync.app.data.IndoorCamera
 import com.quailsync.app.data.IndoorcamLatest
 import com.quailsync.app.data.SetCameraAssignmentRequest
+import com.quailsync.app.data.TrailcamDetection
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.ZoneId
@@ -1075,19 +1076,45 @@ fun IndoorCamCard(
     }
 }
 
-/** Live detection count + freshness, plus the saved frame if the observation
+/**
+ * Build a per-class detection summary from an observation's detections, e.g.
+ * "3 eggs detected" or "2 chicks, 3 eggs detected"; "No detections" when there
+ * are none. Classes are ordered by descending count, ties broken alphabetically.
+ *
+ * Class names are taken as-is from the payload (no hardcoded list — future model
+ * classes render without app changes) and humanized for display (underscores ->
+ * spaces, e.g. "dry_chick" -> "1 dry chick"), with simple singular/plural. A
+ * null/blank class name is grouped under "(unknown)" rather than crashing.
+ */
+fun detectionSummary(detections: List<TrailcamDetection>): String {
+    if (detections.isEmpty()) return "No detections"
+    val counts = LinkedHashMap<String, Int>()
+    for (d in detections) {
+        val trimmed = d.className?.trim()
+        val key = if (trimmed.isNullOrEmpty()) "(unknown)" else trimmed
+        counts[key] = (counts[key] ?: 0) + 1
+    }
+    val parts = counts.entries
+        .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+        .map { (name, count) -> "$count ${pluralizeClass(name.replace('_', ' '), count)}" }
+    return parts.joinToString(", ") + " detected"
+}
+
+/** Naive English plural: append "s" unless singular, already ending in "s", or
+ *  not a plain word (e.g. the "(unknown)" fallback, which stays as-is). */
+private fun pluralizeClass(name: String, count: Int): String =
+    if (count == 1 || name.isEmpty() || !name.last().isLetter() || name.endsWith("s")) name
+    else name + "s"
+
+/** Live detection summary + freshness, plus the saved frame if the observation
  *  kept one (most won't — only "notable" frames are saved, and they may be
  *  cleared after a Roboflow upload, so the image is hidden if it 404s). */
 @Composable
 private fun IndoorObsContent(latest: IndoorcamLatest, baseUrl: String) {
     fun absolute(url: String?): String? = url?.let { if (it.startsWith("http")) it else "$baseUrl$it" }
-    // Prefer the server's class-aware label ("5 eggs detected" in incubation
-    // mode, "3 chicks detected" in brooder mode), driven by the model's actual
-    // classes rather than a hardcoded word. Fall back to a neutral count when the
-    // latest frame had no detections (no class to name).
-    val count = latest.detectionCount ?: 0
-    val label = latest.detectionLabel
-        ?: "$count detection${if (count == 1) "" else "s"}"
+    // Per-class summary built from the observation's detections (grouped by class
+    // name), so it reflects whatever the model actually detected.
+    val label = detectionSummary(latest.detections)
     Text(
         label,
         style = MaterialTheme.typography.headlineSmall,
