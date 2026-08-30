@@ -13,9 +13,9 @@ pub use state::AppState;
 use axum::extract::State;
 use axum::http::{header, Request, StatusCode, Uri};
 use axum::middleware::{self, Next};
-use axum::response::{Html, IntoResponse};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
+use axum::{Json, Router};
 use metrics::counter;
 use rust_embed::Embed;
 
@@ -42,6 +42,35 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
             None => (StatusCode::NOT_FOUND, "not found").into_response(),
         },
     }
+}
+
+/// Router fallback: a JSON 404 for unmatched `/api/*`, the SPA shell for
+/// everything else.
+///
+/// Without the split, a renamed or deleted API route answers `200 OK` with
+/// `index.html` in the body, so the caller only finds out when JSON parsing
+/// blows up somewhere further in. That is exactly how the `/weights` and
+/// `/nfc` renames stayed invisible for so long (KAN-26).
+///
+/// Non-API paths keep the old behaviour so the dashboard's client-side routing
+/// (`/flock`, `/#/dashboard`, …) still resolves to the SPA.
+///
+/// This is a *fallback*, so it only runs when no route matched the **path** at
+/// all. A path that exists under a different method still gets Axum's 405 from
+/// the method router — this never turns a 405 into a 404.
+async fn fallback_handler(uri: Uri) -> Response {
+    if uri.path().starts_with("/api/") {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "not_found",
+                "message": "No such API endpoint.",
+                "path": uri.path(),
+            })),
+        )
+            .into_response();
+    }
+    static_handler(uri).await.into_response()
 }
 
 async fn request_counter(req: Request<axum::body::Body>, next: Next) -> impl IntoResponse {
@@ -427,7 +456,7 @@ pub fn build_app(state: AppState) -> Router {
     };
 
     router
-        .fallback(static_handler)
+        .fallback(fallback_handler)
         .layer(middleware::from_fn(request_counter))
         .with_state(state)
 }

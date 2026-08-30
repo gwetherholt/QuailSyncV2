@@ -4301,3 +4301,90 @@ async fn graduated_bird_inherits_clutch_snapshot_genetics() {
         .unwrap();
     assert!((refetched.confidence - 0.8).abs() < 1e-9);
 }
+
+// ---------------------------------------------------------------------------
+// SPA fallback split (KAN-26)
+//
+// Unmatched `/api/*` must 404 as JSON rather than silently returning the SPA
+// shell with a 200; everything else must still serve index.html so the
+// dashboard's client-side routing keeps working.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn unmatched_api_path_returns_json_404() {
+    let base = spawn_test_server().await;
+
+    let resp = reqwest::get(format!("{base}/api/does-not-exist"))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 404);
+    let ctype = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        ctype.starts_with("application/json"),
+        "expected application/json, got {ctype}"
+    );
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "not_found");
+    assert_eq!(body["path"], "/api/does-not-exist");
+}
+
+#[tokio::test]
+async fn known_api_route_still_returns_normal_response() {
+    let base = spawn_test_server().await;
+
+    let resp = reqwest::get(format!("{base}/api/lineages")).await.unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let lineages: Vec<Lineage> = resp.json().await.unwrap();
+    assert!(lineages.is_empty(), "fresh DB should have no lineages");
+}
+
+#[tokio::test]
+async fn non_api_path_still_serves_the_spa() {
+    let base = spawn_test_server().await;
+
+    let resp = reqwest::get(format!("{base}/flock")).await.unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let ctype = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        ctype.starts_with("text/html"),
+        "expected text/html, got {ctype}"
+    );
+
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("<html") || body.contains("<!DOCTYPE"),
+        "expected the SPA shell, got {} bytes",
+        body.len()
+    );
+}
+
+/// Guards the boundary of the split: the fallback must not swallow a
+/// method mismatch on a path that *is* registered. `/api/chick-groups/{id}/mortality`
+/// exists as POST only, so a PUT has to stay a 405 rather than becoming a 404.
+#[tokio::test]
+async fn method_mismatch_on_known_api_path_still_returns_405() {
+    let base = spawn_test_server().await;
+
+    let resp = reqwest::Client::new()
+        .put(format!("{base}/api/chick-groups/1/mortality"))
+        .json(&serde_json::json!({ "count": 1, "reason": "test" }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 405);
+}
