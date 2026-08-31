@@ -19,7 +19,7 @@
     "chick": {
       "weights": "/home/gwetherholt/QuailSyncV2/indoor-cam/models/chick-best.pt",
       "confidence": 0.5,
-      "roboflow_project": "find-chicks-5",
+      "roboflow_project": "find-chicks-5-jnoe5",
       "log_events": false
     }
   },
