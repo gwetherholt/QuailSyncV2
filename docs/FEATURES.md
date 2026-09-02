@@ -4,7 +4,7 @@
 
 A feature is listed here only if it has a Maestro flow. Status and screenshots come from a real run against a real device talking to the real backend — nothing on this page is written by hand.
 
-- **Last run:** 2026-09-02T23:23:55Z
+- **Last run:** 2026-09-02T23:40:52Z
 - **Maestro:** 2.6.1
 - **Device:** emulator-5554
 
@@ -26,8 +26,8 @@ Opens the Dashboard tab and shows the quick-stats row (Birds, Eggs, Groups, Next
 
 - **Flow:** [`maestro/flows/dashboard-overview.yaml`](../maestro/flows/dashboard-overview.yaml)
 - **App:** `com.quailsync.app`
-- **Last run:** 2026-09-02T23:23:01Z
-- **Duration:** 17.8s
+- **Last run:** 2026-09-02T23:39:55Z
+- **Duration:** 19s
 
 ![Dashboard overview — dashboard-overview](../maestro/screenshots/dashboard-overview/dashboard-overview.png)
 
@@ -41,8 +41,8 @@ Opens the Flock tab and shows the list of birds loaded from the server.
 
 - **Flow:** [`maestro/flows/flock-list.yaml`](../maestro/flows/flock-list.yaml)
 - **App:** `com.quailsync.app`
-- **Last run:** 2026-09-02T23:23:19Z
-- **Duration:** 18.9s
+- **Last run:** 2026-09-02T23:40:14Z
+- **Duration:** 19.9s
 
 ![Flock list — flock-list](../maestro/screenshots/flock-list/flock-list.png)
 
@@ -56,8 +56,8 @@ Opens the Hatchery tab and shows the clutch and chick-group sections loaded from
 
 - **Flow:** [`maestro/flows/hatchery-list.yaml`](../maestro/flows/hatchery-list.yaml)
 - **App:** `com.quailsync.app`
-- **Last run:** 2026-09-02T23:23:38Z
-- **Duration:** 17.5s
+- **Last run:** 2026-09-02T23:40:34Z
+- **Duration:** 18.6s
 
 ![Hatchery list — hatchery-list](../maestro/screenshots/hatchery-list/hatchery-list.png)
 

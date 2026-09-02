@@ -4,7 +4,10 @@ appId: com.quailsync.app
 name: dashboard-overview
 ---
 - launchApp
-- tapOn: "Dashboard"
+- tapOn:
+    id: "nav_dashboard"
+# The quick-stats pills carry no testTag, so these stay text assertions. They
+# are still discriminating: no other screen shows all four labels together.
 - assertVisible: "Birds"
 - assertVisible: "Eggs"
 - assertVisible: "Groups"

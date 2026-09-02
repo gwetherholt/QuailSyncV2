@@ -56,10 +56,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -284,6 +287,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun QuailSyncApp(
     nfcService: NfcService,
@@ -296,7 +300,14 @@ fun QuailSyncApp(
     val currentDestination = navBackStackEntry?.destination
 
     Scaffold(
-        modifier = Modifier.fillMaxSize(),
+        // testTagsAsResourceId exposes every Modifier.testTag(...) in the tree
+        // below as a UiAutomator resource-id, which is how Maestro selects with
+        // `id:`. It propagates to descendants, and this Scaffold is the only node
+        // wrapping both the bottom nav (nav_* tags) and the NavHost (screen tags),
+        // so setting it here covers the whole app. See maestro/README.md.
+        modifier = Modifier
+            .fillMaxSize()
+            .semantics { testTagsAsResourceId = true },
         floatingActionButton = {
             if (currentDestination?.route == Screen.Dashboard.route) {
                 FloatingActionButton(

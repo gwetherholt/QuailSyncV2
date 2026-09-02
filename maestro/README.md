@@ -57,11 +57,11 @@ never lands. Watch for near-misses too: the Flock header reads "19 birds", but t
 Dashboard's hutch cards read "7 birds", so a bare `[0-9]+ birds` doesn't discriminate
 either. Pick an element that exists on one screen only:
 
-| Screen | Discriminating selector |
-| --- | --- |
-| Dashboard | `Birds` / `Eggs` / `Groups` / `Next Hatch` (stat pills) |
-| Flock | `Records` (filter chip) |
-| Hatchery | `Clutches` / `Chick Groups` / the empty-state placeholder |
+| Screen | Discriminating selector | Kind |
+| --- | --- | --- |
+| Dashboard | `Birds` / `Eggs` / `Groups` / `Next Hatch` (stat pills) | text -- the pills carry no tag |
+| Flock | `id: flock_bird_list` (the bird LazyColumn) | id |
+| Hatchery | `id: hatchery_list` (the clutch/chick-group LazyColumn) | id |
 
 The check: would this assertion still pass if the app were sitting on the Dashboard? If
 yes, it isn't testing anything. Worth confirming for real — point a throwaway flow at the
@@ -70,22 +70,49 @@ wrong screen and watch the assertion fail before you trust it.
 **Flows run against real data.** The app talks to the live backend — the Rust server on
 the Pi. Nothing is mocked. So assert on chrome that is always present rather than on
 specific birds or counts, which change between runs. Where an assertion has to cover both
-a populated and an empty screen, alternate in a regex, as `hatchery-list.yaml` does.
+a populated and an empty screen, alternate in a regex -- but note that a list's `id:` is
+on the populated composable only, so `id: hatchery_list` deliberately fails on an empty
+hatchery rather than passing it.
 
 **Read-only for now.** No flow may create, edit, or delete records: they run against
 production data, and those paths are known-broken pending KAN-27 / KAN-28 / KAN-29.
 
-## Selectors: text only
+## Selectors: prefer `id`, fall back to text
 
-The app sets Compose `Modifier.testTag(...)` in several places (`nav_dashboard`,
-`flock_bird_list`, `hatchery_list`, …), **but those tags are not visible to Maestro.**
-Compose only exposes `testTag` as a UiAutomator resource-id when the app opts in with
-`Modifier.semantics { testTagsAsResourceId = true }` on a root composable, and QuailSync
-does not set it anywhere. Maestro therefore sees only text and content descriptions.
+`MainActivity.kt` sets `Modifier.semantics { testTagsAsResourceId = true }` on the root
+`Scaffold`, so every `Modifier.testTag(...)` in the app surfaces as a UiAutomator
+resource-id. Maestro selects those with `id:`:
 
-So: select by visible text. If a screen has an element you cannot reach by text, don't
-work around it with brittle coordinates — note the element and stop. Exposing the existing
-tags is a one-line app change, but an app change all the same (out of scope for KAN-1).
+```yaml
+- tapOn:
+    id: "nav_flock"
+- assertVisible:
+    id: "flock_bird_list"
+```
+
+**Use `id:` wherever a tag exists.** Tags are stable by construction: they survive a label
+rename, and they are namespaced per screen (`nav_*`, `dashboard_*`, `flock_*`,
+`hatchery_*`, `camera_*`, `nfc_*`, `settings_*`), so they do not collide the way screen
+titles do.
+
+**Fall back to text only where no tag covers the element** -- the Dashboard quick-stats
+pills, for instance. Say so in a comment, so the next reader knows it is a gap and not a
+preference.
+
+**Don't add a `testTag` just to write a flow.** That is an app change; raise it as its own
+ticket rather than smuggling it in with the flow.
+
+Two things `id:` does not reach:
+
+- **Dialogs.** Compose renders `Dialog`/`AlertDialog` into a separate window with its own
+  composition, which the root `Scaffold`'s semantics do not propagate into. Tags such as
+  `graduation_dialog` stay invisible to Maestro; select dialog content by text.
+- **Data-dependent tags.** `flock_bird_row_{id}`, `dashboard_housing_card_{id}` and
+  `hatchery_clutch_card_{id}` embed a record id, which changes between runs. Don't assert
+  on a specific one; flows run against live data.
+
+`maestro hierarchy` dumps what Maestro can actually see, and is the fastest way to check
+whether a tag made it through.
 
 ## Running locally
 
