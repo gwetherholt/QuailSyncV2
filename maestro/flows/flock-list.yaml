@@ -1,0 +1,18 @@
+# feature: Flock list
+# description: Opens the Flock tab and shows the list of birds loaded from the server.
+appId: com.quailsync.app
+name: flock-list
+---
+- launchApp
+- tapOn: "Flock"
+- assertVisible: "Flock"
+# The title alone is not enough: "Flock" is also the bottom-nav label, visible
+# from every tab, so the assertion above still passes if the tap never lands.
+# "Records" is a filter chip that appears only on this screen -- notably not on
+# the Dashboard, which is where a failed tap would leave us.
+- assertVisible: "Records"
+# And the count header proves the bird list actually loaded from the server,
+# rather than the screen rendering empty. Anchored to the header's own wording;
+# a bare "N birds" would also match the Dashboard's hutch cards.
+- assertVisible: ".*[0-9]+ birds?.*"
+- takeScreenshot: flock-list

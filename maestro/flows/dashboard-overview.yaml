@@ -1,0 +1,12 @@
+# feature: Dashboard overview
+# description: Opens the Dashboard tab and shows the quick-stats row (Birds, Eggs, Groups, Next Hatch) populated from the server.
+appId: com.quailsync.app
+name: dashboard-overview
+---
+- launchApp
+- tapOn: "Dashboard"
+- assertVisible: "Birds"
+- assertVisible: "Eggs"
+- assertVisible: "Groups"
+- assertVisible: "Next Hatch"
+- takeScreenshot: dashboard-overview

@@ -1,0 +1,14 @@
+# feature: Hatchery list
+# description: Opens the Hatchery tab and shows the clutch and chick-group sections loaded from the server.
+appId: com.quailsync.app
+name: hatchery-list
+---
+- launchApp
+- tapOn: "Hatchery"
+- assertVisible: "Hatchery"
+# The bare title is not enough on its own — "Hatchery" is also the bottom-nav
+# label, visible from every tab. This second assertion matches the list body in
+# either state (populated: Clutches / Chick Groups / Completed Clutches (n);
+# empty: the placeholder) so it proves the screen actually rendered.
+- assertVisible: ".*(Clutches|Chick Groups|No clutches or chick groups yet).*"
+- takeScreenshot: hatchery-list
