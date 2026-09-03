@@ -144,7 +144,19 @@ pub(crate) async fn update_brooder(
         )
         .ok();
     }
-    StatusCode::OK.into_response()
+    // Re-read and return the updated row (KAN-29): every other updater --
+    // update_bird, update_clutch, update_processing -- answers with the entity,
+    // and a bare 200 with no body forced clients to guess whether the write
+    // landed. Columns and order must match `row_to_brooder`.
+    match conn.query_row(
+        "SELECT id, name, lineage_id, life_stage, qr_code, notes, camera_url, housing_type
+         FROM brooders WHERE id = ?1",
+        params![id],
+        row_to_brooder,
+    ) {
+        Ok(b) => (StatusCode::OK, Json(b)).into_response(),
+        Err(e) => db_error(e),
+    }
 }
 
 pub(crate) async fn delete_brooder(

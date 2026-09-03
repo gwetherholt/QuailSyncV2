@@ -138,7 +138,21 @@ pub(crate) async fn update_chick_group(
         )
         .ok();
     }
-    StatusCode::OK
+    // Re-read and return the updated group (KAN-29), matching get_chick_group.
+    // This used to be a bare 200 with no body, which left callers unable to
+    // tell a successful write from a failed one -- see the dashboard's
+    // "Failed to unassign group" false alarm.
+    match conn.query_row(
+        &format!("{GROUP_SELECT} WHERE id = ?1"),
+        params![id],
+        row_to_chick_group,
+    ) {
+        Ok(mut g) => {
+            g.lineages = fetch_chick_group_lineages(&conn, g.id);
+            (StatusCode::OK, Json(g)).into_response()
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "chick group not found").into_response(),
+    }
 }
 
 /// PUT /api/chick-groups/{id}/lineages — replace the group's lineage set atomically.

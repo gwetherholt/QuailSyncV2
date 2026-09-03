@@ -773,9 +773,17 @@
     put: async function(path, body){
       try{
         var r=await fetch(path,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-        if(!r.ok) return null;
-        return r.json();
-      }catch(e){ return null; }
+        if(!r.ok){ var err=await r.text(); console.error('PUT '+path+' failed:',r.status,err); return null; }
+        // Not every PUT answers with JSON: update_brooder and update_chick_group
+        // return a bare 200 with content-length 0. r.json() throws on those, and
+        // the throw used to land in the catch below and return null -- making a
+        // success indistinguishable from a failure. Read the body as text and
+        // return `true` when there is nothing to parse, so success is always
+        // truthy and callers can test `if(resp)` the way API.post callers do.
+        var text = await r.text();
+        if(!text) return true;
+        try{ return JSON.parse(text); }catch(e){ return true; }
+      }catch(e){ console.error('PUT '+path+' exception:',e); return null; }
     }
   };
 
@@ -2955,8 +2963,9 @@
       this._load();
     },
     updateStatus: async function(status){
-      await API.put('/api/birds/'+this._birdId, {status: status});
-      toast('Bird #'+this._birdId+' marked as '+status);
+      var resp = await API.put('/api/birds/'+this._birdId, {status: status});
+      if(resp) toast('Bird #'+this._birdId+' marked as '+status);
+      else toast('Failed to mark bird as '+status,'error');
       this._load();
     },
     scheduleProcessing: async function(){
@@ -3810,7 +3819,7 @@
       var payload = {camera_url: val || null};
       var resp = await API.put('/api/brooders/'+brooderId, payload);
       this.closeModal();
-      if(resp !== false) toast('Camera URL updated');
+      if(resp) toast('Camera URL updated');
       else toast('Failed to update','error');
       this._load();
     },

@@ -22,6 +22,8 @@ use chrono::Utc;
 use rusqlite::params;
 use serde_json::json;
 
+use quailsync_common::PhotoUploadResponse;
+
 use crate::state::{acquire_db, internal_error_response, AppState, PhotoConfig};
 
 /// Hard cap on an accepted photo. Larger uploads are rejected with 413 — the
@@ -178,13 +180,22 @@ pub(crate) async fn upload_bird_photo(
         }
     }
 
+    // Return the *fetchable* URL, not the on-disk path: same form as the
+    // entries from GET /api/birds/{id}/photos, so the caller can render the
+    // photo it just uploaded without a second round trip. `stored_path` is
+    // inside the photos dir, so file_name() is always present.
+    let filename = stored_path
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_default();
+
     (
         StatusCode::OK,
-        Json(json!({
-            "id": id,
-            "photo_path": stored_str,
-            "photo_uploaded_at": uploaded_at,
-        })),
+        Json(PhotoUploadResponse {
+            id,
+            url: format!("/api/birds/{id}/photos/{filename}"),
+            uploaded_at,
+        }),
     )
         .into_response()
 }

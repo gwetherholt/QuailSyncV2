@@ -394,6 +394,24 @@ pub struct BirdAssignmentResponse {
     pub updated: i64,
 }
 
+/// Response body for `POST /api/birds/{id}/photo`.
+///
+/// `url` is server-relative and identical in form to `PhotoHistoryEntry.url`
+/// from `GET /api/birds/{id}/photos` (`/api/birds/{id}/photos/{filename}`), so a
+/// client can render the photo it just uploaded without a second round trip.
+/// This deliberately replaces the older `photo_path`, which leaked the on-disk
+/// path and could not be fetched.
+///
+/// `uploaded_at` is the RFC-3339 timestamp written to `birds.photo_uploaded_at`.
+/// Note it is *more* precise than `PhotoHistoryEntry.uploaded_at`, which is
+/// reconstructed from the filename and therefore carries no timezone.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhotoUploadResponse {
+    pub id: i64,
+    pub url: String,
+    pub uploaded_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateClutch {
     pub eggs_fertile: Option<u32>,
