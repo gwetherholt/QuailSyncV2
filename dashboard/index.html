@@ -2640,7 +2640,10 @@
       if(!lineage_id || !hatch_date){ toast('Lineage and hatch date are required','error'); return; }
 
       var result = await API.post('/api/birds', {
-        band_color: band, sex: sex, lineage_id: lineage_id,
+        // lineage_ids, not lineage_id: CreateBird takes Vec<i64> with no serde
+        // default (quailsync-common:293). The picker is single-select, so wrap
+        // the one id -- same shape Android sends (FlockScreen.kt:1463).
+        band_color: band, sex: sex, lineage_ids: [lineage_id],
         hatch_date: hatch_date,
         mother_id: mother ? parseInt(mother) : null,
         father_id: father ? parseInt(father) : null,
@@ -3286,7 +3289,9 @@
 
       var body = {
         clutch_id: clutchId,
-        lineage_id: lineage,
+        // Single inherited lineage (the hidden mcg-lineage input carries the
+        // clutch's own lineage_id), wrapped for CreateChickGroup.lineage_ids.
+        lineage_ids: [lineage],
         brooder_id: brooder ? parseInt(brooder) : null,
         initial_count: count,
         hatch_date: today,
@@ -3961,7 +3966,7 @@
       var notes = document.getElementById('mn-notes').value.trim() || null;
       if(!lineage || !count || !hatch){ toast('Lineage, count, and hatch date required','error'); return; }
       var result = await API.post('/api/chick-groups', {
-        lineage_id: lineage, initial_count: count, hatch_date: hatch,
+        lineage_ids: [lineage], initial_count: count, hatch_date: hatch,
         brooder_id: brooder ? parseInt(brooder) : null, clutch_id: null, notes: notes
       });
       this.closeModal();
@@ -4411,7 +4416,7 @@
     _buildBirdBody: function(v){
       return {
         nfc_tag_id:v.tagId, sex:v.sex, band_color:v.band_color,
-        lineage_id:v.lineage_id, hatch_date:v.hatch_date,
+        lineage_ids:[v.lineage_id], hatch_date:v.hatch_date,
         mother_id:null, father_id:null,
         generation:v.generation, status:'Active', notes:v.notes
       };
