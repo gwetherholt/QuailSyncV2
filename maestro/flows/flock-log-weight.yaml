@@ -1,0 +1,39 @@
+# feature: Log a bird weight
+# description: Opens a bird from the Flock list, logs a weight, and shows the new entry in that bird's weight history.
+appId: com.quailsync.app
+name: flock-log-weight
+---
+# Selectors: the Flock list itself is tagged, but everything from the bird detail
+# onward lives in a Compose Dialog, which renders in its own window that the root
+# Scaffold's testTagsAsResourceId does not reach (KAN-37). A `maestro hierarchy`
+# taken with the detail open lists zero app resource-ids, so every step past the
+# list row below is a text selector by necessity, not by preference.
+#
+# Test data: bird 40 (band MAESTRO-TEST) exists solely for this flow, so the
+# weight this writes never lands on a real bird. It is a real write to the real
+# DB -- there is no mock -- and the records accumulate on bird 40 across runs.
+- launchApp
+- tapOn:
+    id: "nav_flock"
+# Bird 40 sorts to the end of the list, past the fold.
+- scrollUntilVisible:
+    element:
+      id: "flock_bird_row_40"
+    direction: DOWN
+- tapOn:
+    id: "flock_bird_row_40"
+# Proves the detail dialog opened on the test bird and not some other row.
+- assertVisible: "MAESTRO-TEST"
+- tapOn: "Log Weight"
+# A fresh random weight per run. A fixed value would still be on screen from the
+# previous run's record, so the assertion below would pass even if this run's
+# POST failed. Randomising it means only this run's write can satisfy it.
+- evalScript: ${output.grams = (100 + Math.floor(Math.random() * 800)) + '.' + Math.floor(Math.random() * 10)}
+- tapOn: "Weight (grams)"
+- inputText: ${output.grams}
+- hideKeyboard
+- tapOn: "Save"
+# The entry only renders after POST /api/birds/40/weights returns 201 and the
+# list reloads -- this is the assertion that fails on the stale singular path.
+- assertVisible: "${output.grams} g"
+- takeScreenshot: flock-log-weight

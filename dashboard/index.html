@@ -2941,7 +2941,7 @@
       var date = document.getElementById('mw-date').value;
       var notes = document.getElementById('mw-notes').value.trim() || null;
       if(isNaN(weight) || !date){ toast('Weight and date are required','error'); return; }
-      var result = await API.post('/api/birds/'+this._birdId+'/weight', {
+      var result = await API.post('/api/birds/'+this._birdId+'/weights', {
         weight_grams: weight,
         date: date,
         notes: notes
@@ -3986,7 +3986,9 @@
       var count = parseInt(document.getElementById('mm-count').value);
       var reason = document.getElementById('mm-reason').value.trim();
       if(!count || !reason){ toast('Count and reason required','error'); return; }
-      var result = await API.put('/api/chick-groups/'+id+'/mortality', {count: count, reason: reason});
+      // POST, not PUT: the route is registered under post() (lib.rs:430-431).
+      // PUT here returned 405 and API.put swallowed it as "Failed to log mortality".
+      var result = await API.post('/api/chick-groups/'+id+'/mortality', {count: count, reason: reason});
       this.closeMortalityModal();
       if(result) toast(count+' mortality logged');
       else toast('Failed to log mortality','error');

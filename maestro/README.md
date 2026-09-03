@@ -74,8 +74,19 @@ a populated and an empty screen, alternate in a regex -- but note that a list's 
 on the populated composable only, so `id: hatchery_list` deliberately fails on an empty
 hatchery rather than passing it.
 
-**Read-only for now.** No flow may create, edit, or delete records: they run against
-production data, and those paths are known-broken pending KAN-27 / KAN-28 / KAN-29.
+**Read-only by default; writes go to a dedicated test record.** Flows run against
+production data, so no flow may create, edit, or delete a *real* record. The remaining
+broken write paths are KAN-27 / KAN-29.
+
+Where a flow has to write in order to prove the feature -- `flock-log-weight.yaml` exists
+precisely to prove `POST /api/birds/{id}/weights` reaches the server -- it writes only to a
+record that exists for that purpose. Today that is **bird 40, band `MAESTRO-TEST`**, created
+by hand via the API and not part of the real flock. Point new write flows at it rather than
+at a real bird, and say so in the flow's header comment.
+
+Randomise the written value. A fixed one is still on screen from the previous run, so the
+assertion would pass even when this run's write failed; `flock-log-weight.yaml` derives its
+weight with `evalScript` and asserts on that same value.
 
 ## Selectors: prefer `id`, fall back to text
 

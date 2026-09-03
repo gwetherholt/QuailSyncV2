@@ -838,13 +838,13 @@ interface QuailSyncApi {
     @GET("api/birds/{id}/weights")
     suspend fun getBirdWeights(@Path("id") id: Int): List<BirdWeight>
 
-    @POST("api/birds/{id}/weight")
+    @POST("api/birds/{id}/weights")
     suspend fun createBirdWeight(@Path("id") id: Int, @Body request: CreateWeightRequest): BirdWeight
 
     @DELETE("api/birds/{id}/weights/{wid}")
     suspend fun deleteBirdWeight(@Path("id") birdId: Int, @Path("wid") weightId: Int): retrofit2.Response<Unit>
 
-    @GET("api/birds/nfc/{tag_id}")
+    @GET("api/nfc/{tag_id}")
     suspend fun getBirdByNfcTag(@Path("tag_id") tagId: String): Bird
 
     @Multipart

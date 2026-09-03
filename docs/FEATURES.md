@@ -4,17 +4,18 @@
 
 A feature is listed here only if it has a Maestro flow. Status and screenshots come from a real run against a real device talking to the real backend — nothing on this page is written by hand.
 
-- **Last run:** 2026-09-02T23:40:52Z
+- **Last run:** 2026-09-03T00:03:38Z
 - **Maestro:** 2.6.1
 - **Device:** emulator-5554
 
-**3 passing · 0 failing · 0 not run**
+**4 passing · 0 failing · 0 not run**
 
 | Feature | Status | Flow |
 | --- | --- | --- |
 | [Dashboard overview](#dashboard-overview) | ✅ **PASSING** | `dashboard-overview` |
 | [Flock list](#flock-list) | ✅ **PASSING** | `flock-list` |
 | [Hatchery list](#hatchery-list) | ✅ **PASSING** | `hatchery-list` |
+| [Log a bird weight](#log-a-bird-weight) | ✅ **PASSING** | `flock-log-weight` |
 
 ---
 
@@ -26,8 +27,8 @@ Opens the Dashboard tab and shows the quick-stats row (Birds, Eggs, Groups, Next
 
 - **Flow:** [`maestro/flows/dashboard-overview.yaml`](../maestro/flows/dashboard-overview.yaml)
 - **App:** `com.quailsync.app`
-- **Last run:** 2026-09-02T23:39:55Z
-- **Duration:** 19s
+- **Last run:** 2026-09-03T00:01:55Z
+- **Duration:** 18.9s
 
 ![Dashboard overview — dashboard-overview](../maestro/screenshots/dashboard-overview/dashboard-overview.png)
 
@@ -41,8 +42,8 @@ Opens the Flock tab and shows the list of birds loaded from the server.
 
 - **Flow:** [`maestro/flows/flock-list.yaml`](../maestro/flows/flock-list.yaml)
 - **App:** `com.quailsync.app`
-- **Last run:** 2026-09-02T23:40:14Z
-- **Duration:** 19.9s
+- **Last run:** 2026-09-03T00:02:14Z
+- **Duration:** 20.3s
 
 ![Flock list — flock-list](../maestro/screenshots/flock-list/flock-list.png)
 
@@ -56,9 +57,24 @@ Opens the Hatchery tab and shows the clutch and chick-group sections loaded from
 
 - **Flow:** [`maestro/flows/hatchery-list.yaml`](../maestro/flows/hatchery-list.yaml)
 - **App:** `com.quailsync.app`
-- **Last run:** 2026-09-02T23:40:34Z
-- **Duration:** 18.6s
+- **Last run:** 2026-09-03T00:03:18Z
+- **Duration:** 19.3s
 
 ![Hatchery list — hatchery-list](../maestro/screenshots/hatchery-list/hatchery-list.png)
+
+---
+
+## Log a bird weight
+
+✅ **PASSING**
+
+Opens a bird from the Flock list, logs a weight, and shows the new entry in that bird's weight history.
+
+- **Flow:** [`maestro/flows/flock-log-weight.yaml`](../maestro/flows/flock-log-weight.yaml)
+- **App:** `com.quailsync.app`
+- **Last run:** 2026-09-03T00:02:34Z
+- **Duration:** 44.3s
+
+![Log a bird weight — flock-log-weight](../maestro/screenshots/flock-log-weight/flock-log-weight.png)
 
 ---
