@@ -766,20 +766,28 @@
     post: async function(path, body){
       try{
         var r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-        if(!r.ok){ var err=await r.text(); console.error('POST '+path+' failed:',err); return null; }
-        return r.json();
-      }catch(e){ return null; }
+        if(!r.ok){ var err=await r.text(); console.error('POST '+path+' failed:',r.status,err); return null; }
+        // Same treatment as put(): not every 2xx carries JSON. POST /api/restore
+        // answers `text/plain` ("Database restored..."), and r.json() threw on
+        // it, landed in the catch below and returned null -- so a successful
+        // restore reported "Restore failed". Parse when there is JSON, return
+        // `true` when the body is empty or not JSON, so success stays truthy
+        // and every caller that reads fields still gets the parsed object.
+        var text = await r.text();
+        if(!text) return true;
+        try{ return JSON.parse(text); }catch(e){ return true; }
+      }catch(e){ console.error('POST '+path+' exception:',e); return null; }
     },
     put: async function(path, body){
       try{
         var r=await fetch(path,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
         if(!r.ok){ var err=await r.text(); console.error('PUT '+path+' failed:',r.status,err); return null; }
-        // Not every PUT answers with JSON: update_brooder and update_chick_group
-        // return a bare 200 with content-length 0. r.json() throws on those, and
-        // the throw used to land in the catch below and return null -- making a
-        // success indistinguishable from a failure. Read the body as text and
-        // return `true` when there is nothing to parse, so success is always
-        // truthy and callers can test `if(resp)` the way API.post callers do.
+        // Any endpoint may legitimately answer with an empty 2xx. r.json()
+        // throws on those, and the throw used to land in the catch below and
+        // return null -- making a success indistinguishable from a failure.
+        // Read the body as text and return `true` when there is nothing to
+        // parse, so success is always truthy and callers can test `if(resp)`
+        // the way API.post callers do.
         var text = await r.text();
         if(!text) return true;
         try{ return JSON.parse(text); }catch(e){ return true; }

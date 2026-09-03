@@ -192,6 +192,16 @@ async fn upload(base: &str, id: i64, bytes: Vec<u8>, mime: &str) -> reqwest::Res
         .unwrap()
 }
 
+/// Last path segment of an upload response's `url`, i.e. the stored filename.
+fn filename_from_url(url: &serde_json::Value) -> String {
+    url.as_str()
+        .expect("upload response should carry a url")
+        .rsplit('/')
+        .next()
+        .expect("url should have a final segment")
+        .to_string()
+}
+
 fn count_files(dir: &PathBuf) -> usize {
     std::fs::read_dir(dir)
         .map(|rd| {
@@ -215,25 +225,32 @@ async fn valid_jpeg_under_cap_is_stored() {
     let resp = upload(&base, id, jpeg_bytes(2048), "image/jpeg").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body: serde_json::Value = resp.json().await.unwrap();
-    let stored = body["photo_path"].as_str().unwrap().to_string();
-    assert!(body["photo_uploaded_at"].as_str().is_some());
+    // KAN-29: the response carries a fetchable `url`, not the server-side disk
+    // path it used to leak as `photo_path`. The filename is the last segment.
+    let url = body["url"].as_str().unwrap().to_string();
+    assert!(body["uploaded_at"].as_str().is_some());
 
-    // File actually on disk under a timestamped, id-keyed name.
-    assert!(PathBuf::from(&stored).exists(), "stored file should exist");
-    let fname = PathBuf::from(&stored)
-        .file_name()
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
+    let fname = url.rsplit('/').next().unwrap().to_string();
+    assert_eq!(url, format!("/api/birds/{id}/photos/{fname}"));
     assert!(
         fname.starts_with(&format!("bird_{id}_")) && fname.ends_with(".jpg"),
         "unexpected filename: {fname}"
     );
+
+    // File actually on disk under that timestamped, id-keyed name.
+    let stored = dir.join(&fname);
+    assert!(stored.exists(), "stored file should exist at {stored:?}");
     assert_eq!(count_files(&dir), 1);
 
-    // DB now points at it, with an upload timestamp.
+    // DB now points at it, with an upload timestamp. The column still stores a
+    // disk path -- only the API response changed -- so match on the filename
+    // rather than comparing the column to the response verbatim.
     let bird = get_bird(&base, id).await;
-    assert_eq!(bird.photo_path.as_deref(), Some(stored.as_str()));
+    let db_path = bird.photo_path.expect("photo_path set");
+    assert!(
+        db_path.ends_with(&fname),
+        "db photo_path {db_path} should end with {fname}"
+    );
     assert!(bird.photo_uploaded_at.is_some());
 }
 
@@ -248,24 +265,30 @@ async fn second_upload_keeps_history_and_advances_pointer() {
         .json()
         .await
         .unwrap();
-    let first_path = first["photo_path"].as_str().unwrap().to_string();
+    // KAN-29: responses carry a `url`; take the filename off the end of it.
+    let first_name = filename_from_url(&first["url"]);
 
     let second: serde_json::Value = upload(&base, id, jpeg_bytes(1024), "image/jpeg")
         .await
         .json()
         .await
         .unwrap();
-    let second_path = second["photo_path"].as_str().unwrap().to_string();
+    let second_name = filename_from_url(&second["url"]);
 
     // History kept: two distinct files, old one still present.
-    assert_ne!(first_path, second_path, "second upload must not reuse name");
-    assert!(PathBuf::from(&first_path).exists(), "old file kept");
-    assert!(PathBuf::from(&second_path).exists(), "new file written");
+    assert_ne!(first_name, second_name, "second upload must not reuse name");
+    assert!(dir.join(&first_name).exists(), "old file kept");
+    assert!(dir.join(&second_name).exists(), "new file written");
     assert_eq!(count_files(&dir), 2);
 
-    // Pointer now references the newer upload.
+    // Pointer now references the newer upload. Compare by filename: the DB
+    // column is still a disk path, only the API response changed.
     let bird = get_bird(&base, id).await;
-    assert_eq!(bird.photo_path.as_deref(), Some(second_path.as_str()));
+    let db_path = bird.photo_path.expect("photo_path set");
+    assert!(
+        db_path.ends_with(&second_name),
+        "pointer should reference {second_name}, got {db_path}"
+    );
 }
 
 #[tokio::test]

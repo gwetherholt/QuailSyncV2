@@ -299,10 +299,15 @@ data class CreateBirdRequest(
     @SerializedName("chick_group_id") val chickGroupId: Int? = null,
 )
 
+/** Response from POST /api/birds/{id}/photo. `url` is server-relative and in
+ *  the same form as [BirdPhoto.url] ("/api/birds/{id}/photos/{filename}"), so
+ *  the freshly uploaded photo can be loaded without a second round trip --
+ *  it replaces the old `photo_path`, which leaked a server disk path (KAN-29).
+ *  Kept tolerant (all nullable): nothing reads these yet. */
 data class PhotoUploadResponse(
     @SerializedName("id") val id: Int? = null,
     @SerializedName("url") val url: String? = null,
-    @SerializedName("path") val path: String? = null,
+    @SerializedName("uploaded_at") val uploadedAt: String? = null,
 )
 
 /** One entry in a bird's photo history (GET /api/birds/{id}/photos). `url` is
@@ -727,6 +732,19 @@ data class MortalityRequest(
     @SerializedName("reason") val reason: String,
 )
 
+/** Response from POST /api/chick-groups/{id}/mortality: the audit-log entry the
+ *  call created, not the updated group (KAN-29). Mirrors `ChickMortalityLog` in
+ *  quailsync-common: no serde renames, and every field is non-Option on the Rust
+ *  side, so none of these are nullable here. `date` is a NaiveDate serialized as
+ *  "YYYY-MM-DD". */
+data class ChickMortalityLogDto(
+    @SerializedName("id") val id: Int,
+    @SerializedName("group_id") val groupId: Int,
+    @SerializedName("count") val count: Int,
+    @SerializedName("reason") val reason: String,
+    @SerializedName("date") val date: String,
+)
+
 data class CullBatchRequest(
     @SerializedName("bird_ids") val birdIds: List<Int>,
     @SerializedName("reason") val reason: String,
@@ -986,7 +1004,7 @@ interface QuailSyncApi {
     suspend fun getChickGroups(): List<ChickGroupDto>
 
     @POST("api/chick-groups/{id}/mortality")
-    suspend fun logMortality(@Path("id") groupId: Int, @Body request: MortalityRequest): ChickGroupDto
+    suspend fun logMortality(@Path("id") groupId: Int, @Body request: MortalityRequest): ChickMortalityLogDto
 
     /** Replace the chick group's lineage set atomically. Body must contain ≥1 ID. */
     @PUT("api/chick-groups/{id}/lineages")

@@ -4,7 +4,7 @@
 
 A feature is listed here only if it has a Maestro flow. Status and screenshots come from a real run against a real device talking to the real backend — nothing on this page is written by hand.
 
-- **Last run:** 2026-09-03T00:03:38Z
+- **Last run:** 2026-09-03T21:22:35Z
 - **Maestro:** 2.6.1
 - **Device:** emulator-5554
 
@@ -27,8 +27,8 @@ Opens the Dashboard tab and shows the quick-stats row (Birds, Eggs, Groups, Next
 
 - **Flow:** [`maestro/flows/dashboard-overview.yaml`](../maestro/flows/dashboard-overview.yaml)
 - **App:** `com.quailsync.app`
-- **Last run:** 2026-09-03T00:01:55Z
-- **Duration:** 18.9s
+- **Last run:** 2026-09-03T21:19:20Z
+- **Duration:** 39s
 
 ![Dashboard overview — dashboard-overview](../maestro/screenshots/dashboard-overview/dashboard-overview.png)
 
@@ -42,8 +42,8 @@ Opens the Flock tab and shows the list of birds loaded from the server.
 
 - **Flow:** [`maestro/flows/flock-list.yaml`](../maestro/flows/flock-list.yaml)
 - **App:** `com.quailsync.app`
-- **Last run:** 2026-09-03T00:02:14Z
-- **Duration:** 20.3s
+- **Last run:** 2026-09-03T21:19:59Z
+- **Duration:** 43.1s
 
 ![Flock list — flock-list](../maestro/screenshots/flock-list/flock-list.png)
 
@@ -57,8 +57,8 @@ Opens the Hatchery tab and shows the clutch and chick-group sections loaded from
 
 - **Flow:** [`maestro/flows/hatchery-list.yaml`](../maestro/flows/hatchery-list.yaml)
 - **App:** `com.quailsync.app`
-- **Last run:** 2026-09-03T00:03:18Z
-- **Duration:** 19.3s
+- **Last run:** 2026-09-03T21:21:55Z
+- **Duration:** 39.6s
 
 ![Hatchery list — hatchery-list](../maestro/screenshots/hatchery-list/hatchery-list.png)
 
@@ -72,8 +72,8 @@ Opens a bird from the Flock list, logs a weight, and shows the new entry in that
 
 - **Flow:** [`maestro/flows/flock-log-weight.yaml`](../maestro/flows/flock-log-weight.yaml)
 - **App:** `com.quailsync.app`
-- **Last run:** 2026-09-03T00:02:34Z
-- **Duration:** 44.3s
+- **Last run:** 2026-09-03T21:20:42Z
+- **Duration:** 73s
 
 ![Log a bird weight — flock-log-weight](../maestro/screenshots/flock-log-weight/flock-log-weight.png)
 

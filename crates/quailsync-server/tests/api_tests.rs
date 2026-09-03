@@ -4388,3 +4388,264 @@ async fn method_mismatch_on_known_api_path_still_returns_405() {
 
     assert_eq!(resp.status(), 405);
 }
+
+// ---------------------------------------------------------------------------
+// Contract tests: updaters answer with the updated entity (KAN-29)
+//
+// `update_brooder` and `update_chick_group` used to return a bare 200 with an
+// empty body, which left clients unable to tell a successful write from a
+// failed one. Every sibling updater (update_bird / update_clutch /
+// update_processing) returns the entity, and these two now match.
+//
+// The shape of each case is deliberately uniform -- status, content-type, then
+// an identity assertion on the body -- so KAN-2 can generalise it across the
+// whole route table.
+// ---------------------------------------------------------------------------
+
+mod update_returns_entity_tests {
+    use super::*;
+    use quailsync_common::{CreateBrooder, HousingType, LifeStage};
+    use serde_json::json;
+
+    /// `content-type` carries a charset for some responses, so compare the
+    /// media type only.
+    fn media_type(resp: &reqwest::Response) -> String {
+        resp.headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn put_brooder_returns_200_json_body_with_matching_id() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+
+        let created: serde_json::Value = client
+            .post(format!("{base}/api/brooders"))
+            .json(&CreateBrooder {
+                name: "Brooder A".into(),
+                lineage_id: None,
+                life_stage: LifeStage::Chick,
+                qr_code: "kan29-b1".into(),
+                notes: None,
+                camera_url: None,
+                housing_type: Some(HousingType::Brooder),
+            })
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let id = created["id"].as_i64().expect("created brooder id");
+
+        let resp = client
+            .put(format!("{base}/api/brooders/{id}"))
+            .json(&json!({ "camera_url": "http://cam.local/stream" }))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        assert_eq!(media_type(&resp), "application/json");
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["id"].as_i64(), Some(id));
+        // The body is the *updated* row, not a stale pre-write copy.
+        assert_eq!(body["camera_url"].as_str(), Some("http://cam.local/stream"));
+    }
+
+    #[tokio::test]
+    async fn put_brooder_missing_id_still_404s() {
+        let base = spawn_test_server().await;
+        let resp = reqwest::Client::new()
+            .put(format!("{base}/api/brooders/999999"))
+            .json(&json!({ "camera_url": serde_json::Value::Null }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+    }
+
+    #[tokio::test]
+    async fn put_chick_group_returns_200_json_body_with_matching_id() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+
+        client
+            .post(format!("{base}/api/lineages"))
+            .json(&CreateLineage {
+                name: "Coturnix".into(),
+                source: "Local".into(),
+                notes: None,
+            })
+            .send()
+            .await
+            .unwrap();
+
+        let created: ChickGroup = client
+            .post(format!("{base}/api/chick-groups"))
+            .json(&CreateChickGroup {
+                clutch_id: None,
+                lineage_ids: vec![1],
+                brooder_id: None,
+                initial_count: 10,
+                hatch_date: chrono::Local::now().date_naive(),
+                notes: None,
+            })
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        let resp = client
+            .put(format!("{base}/api/chick-groups/{}", created.id))
+            .json(&json!({ "current_count": 7 }))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        assert_eq!(media_type(&resp), "application/json");
+
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["id"].as_i64(), Some(created.id));
+        assert_eq!(body["current_count"].as_u64(), Some(7));
+
+        // Identical shape to GET /api/chick-groups/{id}: same select, same row
+        // mapper, same lineage hydration. If these ever diverge it is a new
+        // contract mismatch, so pin it here.
+        let fetched: serde_json::Value =
+            reqwest::get(format!("{base}/api/chick-groups/{}", created.id))
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+        assert_eq!(body, fetched);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Contract test: photo upload answers with a fetchable url (KAN-29)
+//
+// The upload response used to carry `photo_path`, a server-side disk path a
+// client could not load. It now carries `url`, in exactly the form
+// GET /api/birds/{id}/photos returns, so the caller can render what it just
+// uploaded. Pinning the two against each other is the point of the test.
+// ---------------------------------------------------------------------------
+
+mod photo_upload_contract_tests {
+    use super::*;
+    use reqwest::multipart;
+
+    /// Smallest thing the handler's sniffer accepts as a JPEG: SOI + APP0
+    /// marker up front, EOI at the end.
+    fn jpeg_bytes(len: usize) -> Vec<u8> {
+        let mut v = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        v.resize(len.max(6), 0x00);
+        let n = v.len();
+        v[n - 2] = 0xFF;
+        v[n - 1] = 0xD9;
+        v
+    }
+
+    #[tokio::test]
+    async fn post_photo_returns_url_matching_the_photos_list_form() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+
+        client
+            .post(format!("{base}/api/lineages"))
+            .json(&CreateLineage {
+                name: "Coturnix".into(),
+                source: "Local".into(),
+                notes: None,
+            })
+            .send()
+            .await
+            .unwrap();
+
+        let bird: Bird = client
+            .post(format!("{base}/api/birds"))
+            .json(&CreateBird {
+                band_color: Some("kan29".into()),
+                sex: Sex::Male,
+                lineage_ids: vec![1],
+                hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
+                mother_id: None,
+                father_id: None,
+                generation: 1,
+                status: BirdStatus::Active,
+                notes: None,
+                nfc_tag_id: None,
+                chick_group_id: None,
+            })
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let id = bird.id;
+
+        let part = multipart::Part::bytes(jpeg_bytes(2048))
+            .file_name(format!("bird_{id}.jpg"))
+            .mime_str("image/jpeg")
+            .unwrap();
+        let resp = client
+            .post(format!("{base}/api/birds/{id}/photo"))
+            .multipart(multipart::Form::new().part("photo", part))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+
+        assert_eq!(body["id"].as_i64(), Some(id));
+        assert!(
+            body["uploaded_at"].as_str().is_some(),
+            "uploaded_at missing: {body}"
+        );
+        // No disk path leaks out any more.
+        assert!(
+            body.get("photo_path").is_none(),
+            "photo_path should be gone"
+        );
+
+        let url = body["url"].as_str().expect("url present");
+        assert!(
+            url.starts_with(&format!("/api/birds/{id}/photos/")),
+            "url {url} should use the photos-list prefix"
+        );
+
+        // ...and it is a url the list endpoint actually serves. Assert
+        // membership rather than list length: api_tests shares one photos dir,
+        // so a previous run may have left entries for this bird behind.
+        let listed: serde_json::Value = reqwest::get(format!("{base}/api/birds/{id}/photos"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let urls: Vec<&str> = listed
+            .as_array()
+            .expect("photos list is an array")
+            .iter()
+            .filter_map(|e| e["url"].as_str())
+            .collect();
+        assert!(
+            urls.contains(&url),
+            "upload url {url} not found in photos list {urls:?}"
+        );
+    }
+}

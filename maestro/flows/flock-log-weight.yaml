@@ -35,5 +35,12 @@ name: flock-log-weight
 - tapOn: "Save"
 # The entry only renders after POST /api/birds/40/weights returns 201 and the
 # list reloads -- this is the assertion that fails on the stale singular path.
+# Scroll first: once bird 40 has 2+ records the dialog grows a chart and a stats
+# row above the list, so the newest entry starts below the fold. scrollUntilVisible
+# still fails the flow if the entry never appears, so this weakens nothing.
+- scrollUntilVisible:
+    element:
+      text: "${output.grams} g"
+    direction: DOWN
 - assertVisible: "${output.grams} g"
 - takeScreenshot: flock-log-weight
