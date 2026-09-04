@@ -9,19 +9,19 @@ name: flock-log-weight
 # taken with the detail open lists zero app resource-ids, so every step past the
 # list row below is a text selector by necessity, not by preference.
 #
-# Test data: bird 40 (band MAESTRO-TEST) exists solely for this flow, so the
+# Test data: bird 42 (band MAESTRO-TEST) exists solely for this flow, so the
 # weight this writes never lands on a real bird. It is a real write to the real
-# DB -- there is no mock -- and the records accumulate on bird 40 across runs.
+# DB -- there is no mock -- and the records accumulate on bird 42 across runs.
 - launchApp
 - tapOn:
     id: "nav_flock"
-# Bird 40 sorts to the end of the list, past the fold.
+# Bird 42 sorts to the end of the list, past the fold.
 - scrollUntilVisible:
     element:
-      id: "flock_bird_row_40"
+      id: "flock_bird_row_42"
     direction: DOWN
 - tapOn:
-    id: "flock_bird_row_40"
+    id: "flock_bird_row_42"
 # Proves the detail dialog opened on the test bird and not some other row.
 - assertVisible: "MAESTRO-TEST"
 - tapOn: "Log Weight"
@@ -33,9 +33,9 @@ name: flock-log-weight
 - inputText: ${output.grams}
 - hideKeyboard
 - tapOn: "Save"
-# The entry only renders after POST /api/birds/40/weights returns 201 and the
+# The entry only renders after POST /api/birds/42/weights returns 201 and the
 # list reloads -- this is the assertion that fails on the stale singular path.
-# Scroll first: once bird 40 has 2+ records the dialog grows a chart and a stats
+# Scroll first: once bird 42 has 2+ records the dialog grows a chart and a stats
 # row above the list, so the newest entry starts below the fold. scrollUntilVisible
 # still fails the flow if the entry never appears, so this weakens nothing.
 - scrollUntilVisible:

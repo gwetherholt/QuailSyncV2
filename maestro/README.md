@@ -80,9 +80,21 @@ broken write paths are KAN-27 / KAN-29.
 
 Where a flow has to write in order to prove the feature -- `flock-log-weight.yaml` exists
 precisely to prove `POST /api/birds/{id}/weights` reaches the server -- it writes only to a
-record that exists for that purpose. Today that is **bird 40, band `MAESTRO-TEST`**, created
+record that exists for that purpose. Today that is **bird 42, band `MAESTRO-TEST`**, created
 by hand via the API and not part of the real flock. Point new write flows at it rather than
 at a real bird, and say so in the flow's header comment.
+
+If that bird is ever deleted, recreate it and update the id here *and* in
+`flows/flock-log-weight.yaml` -- grep that file for the old id, which appears both in a
+`flock_bird_row_{id}` selector and in several comments. The id is not stable across a delete:
+SQLite hands out the next free rowid, not the old one, which is how bird 40 became bird 42.
+
+```bash
+curl -s -X POST http://192.168.0.114:3000/api/birds -H 'Content-Type: application/json' -d '{"band_color":"MAESTRO-TEST","sex":"Male","lineage_ids":[2],"hatch_date":"2026-09-03","mother_id":null,"father_id":null,"generation":0,"status":"Active","notes":"Automated Maestro e2e test bird (KAN-28 flock-log-weight). Do not cull."}'
+```
+
+(`localhost:3000` if you are on the Pi.) Lineage 2 is NWQuail; any lineage works, but
+`lineage_ids` must be non-empty or the handler returns 400.
 
 Randomise the written value. A fixed one is still on screen from the previous run, so the
 assertion would pass even when this run's write failed; `flock-log-weight.yaml` derives its
