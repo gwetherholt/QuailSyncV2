@@ -490,9 +490,22 @@ pub(crate) async fn replace_bird_lineages_handler(
     if !exists {
         return (StatusCode::NOT_FOUND, "bird not found").into_response();
     }
-    if let Err(e) = replace_bird_lineages(&conn, id, &body.lineage_ids) {
+    // The helper clears the whole set before re-inserting, so on a bare
+    // connection each statement autocommits and a bad lineage_id on the first
+    // INSERT strands the bird with *zero* lineages -- a state create_bird itself
+    // rejects with a 400, and one that leaves the genetic profile without a
+    // basis. One transaction makes the replace all-or-nothing.
+    let tx = match conn.unchecked_transaction() {
+        Ok(t) => t,
+        Err(e) => return db_error(e),
+    };
+    if let Err(e) = replace_bird_lineages(&tx, id, &body.lineage_ids) {
         return db_error(e);
     }
+    if let Err(e) = tx.commit() {
+        return db_error(e);
+    }
+    // Read back after commit, as update_breeding_group does.
     match conn.query_row(
         &format!("{BIRD_SELECT} WHERE id = ?1"),
         params![id],
