@@ -202,6 +202,24 @@ def _apply_clahe(cv2, bgr):
     return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
 
 
+def _normalized_names(raw) -> dict[int, str]:
+    """Coerce an ultralytics ``names`` map to ``{int: str}``.
+
+    Ultralytics hands this back keyed by ``int`` or by ``str`` depending on how
+    the weights were exported. An ``int`` lookup against a ``str``-keyed map
+    misses silently, and the old ``names.get(class_id, str(class_id))`` fallback
+    turned that miss into a class literally named ``"0"`` — which
+    ``roboflow_uploader`` then filed as a real class in the project (KAN-9).
+    Normalizing once removes the mismatch; the caller treats a genuine miss as
+    an error rather than papering over it.
+    """
+    try:
+        return {int(k): str(v) for k, v in dict(raw or {}).items()}
+    except (TypeError, ValueError, AttributeError):
+        logger.error("Model names map is not a usable mapping: %r", raw)
+        return {}
+
+
 def _inference_image(image_path: Path) -> tuple[Path, Path | None]:
     """Choose the image YOLO should run on, enhancing IR frames in place of a copy.
 
@@ -286,12 +304,24 @@ def detect(
         boxes = getattr(result, "boxes", None)
         if boxes is None:
             continue
-        names = getattr(result, "names", {})  # {class_id: class_name}
+        names = _normalized_names(getattr(result, "names", {}))
         for box in boxes:
             class_id = int(box.cls[0])
+            class_name = names.get(class_id)
+            if class_name is None:
+                # Never emit a digit as a class name: a numeric name propagates
+                # into the Roboflow labelmap and creates a junk class there.
+                logger.error(
+                    "Model %s returned class id %s with no entry in its names "
+                    "map (known ids: %s) — skipping this detection",
+                    resolved_model,
+                    class_id,
+                    sorted(names) or "none",
+                )
+                continue
             detections.append(
                 Detection(
-                    class_name=names.get(class_id, str(class_id)),
+                    class_name=class_name,
                     confidence=round(float(box.conf[0]), 4),
                     bbox=[round(float(v), 2) for v in box.xyxy[0].tolist()],
                 )

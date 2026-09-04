@@ -53,6 +53,22 @@ def _default_yolo_factory(weights_path: str):
     return YOLO(str(path))
 
 
+def _normalized_names(raw) -> dict[int, str]:
+    """Coerce an ultralytics ``names`` map to ``{int: str}``.
+
+    Ultralytics hands this back keyed by ``int`` or by ``str`` depending on how
+    the weights were exported, so an ``int`` lookup against a ``str``-keyed map
+    misses silently (KAN-9). ``class_names()`` already normalized for the
+    labelmap; ``detect()`` did not, and its ``str(class_id)`` fallback turned a
+    miss into a class literally named ``"0"``.
+    """
+    try:
+        return {int(k): str(v) for k, v in dict(raw or {}).items()}
+    except (TypeError, ValueError, AttributeError):
+        logger.error("Model names map is not a usable mapping: %r", raw)
+        return {}
+
+
 class Detector:
     """Loads a YOLO model and runs inference, with in-process hot-swap.
 
@@ -114,8 +130,7 @@ class Detector:
         """
         if self.model is None:
             return {}
-        names = getattr(self.model, "names", {}) or {}
-        return {int(k): str(v) for k, v in dict(names).items()}
+        return _normalized_names(getattr(self.model, "names", {}))
 
     def detect(self, frame) -> list[Detection]:
         """Run inference on one BGR numpy ``frame`` and return its detections.
@@ -132,12 +147,24 @@ class Detector:
             boxes = getattr(result, "boxes", None)
             if boxes is None:
                 continue
-            names = getattr(result, "names", {}) or {}
+            names = _normalized_names(getattr(result, "names", {}))
             for box in boxes:
                 class_id = int(box.cls[0])
+                class_name = names.get(class_id)
+                if class_name is None:
+                    # Never emit a digit as a class name: it propagates into the
+                    # Roboflow labelmap and creates a junk class there.
+                    logger.error(
+                        "Model %s returned class id %s with no entry in its "
+                        "names map (known ids: %s) — skipping this detection",
+                        self.weights,
+                        class_id,
+                        sorted(names) or "none",
+                    )
+                    continue
                 detections.append(
                     Detection(
-                        class_name=str(names.get(class_id, str(class_id))),
+                        class_name=class_name,
                         class_id=class_id,
                         confidence=round(float(box.conf[0]), 4),
                         bbox=[round(float(v), 2) for v in box.xyxy[0].tolist()],

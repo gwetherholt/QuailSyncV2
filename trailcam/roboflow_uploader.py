@@ -92,7 +92,20 @@ def labelmap_from_class_map(class_map: dict[str, int]) -> dict[int, str]:
     class named ``"0"``. This is the bridge between YOLO's index-only label file
     and the project's named classes.
     """
-    return {idx: name for name, idx in class_map.items()}
+    labelmap = {idx: name for name, idx in class_map.items()}
+    # Last line of defence for KAN-9. The *keys* here are always digits — they
+    # are the YOLO indices — so the thing worth checking is the names. An
+    # all-digit name means a detector fell back to str(class_id) somewhere
+    # upstream, and uploading it would create a junk class in the Roboflow
+    # project that then has to be cleaned up by hand. Better to refuse.
+    numeric = sorted(name for name in labelmap.values() if name.isdigit())
+    if numeric:
+        raise ValueError(
+            "Refusing to build a Roboflow labelmap with numeric class name(s) "
+            f"{numeric}: a detector emitted a class id as its name. Check the "
+            "model's names map (see _normalized_names in yolo_detector.py)."
+        )
+    return labelmap
 
 
 def _resolve_image_path(image_path_str: str) -> Path | None:

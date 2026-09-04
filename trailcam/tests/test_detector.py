@@ -280,3 +280,74 @@ def test_detect_with_real_yolov8n(tmp_path):
         assert isinstance(detection.confidence, float)
         assert len(detection.bbox) == 4
         assert all(isinstance(coord, float) for coord in detection.bbox)
+
+
+# ---------------------------------------------------------------------------
+# KAN-9: names maps keyed by str must still resolve to real class names
+# ---------------------------------------------------------------------------
+# Ultralytics returns `names` keyed by int or by str depending on how the
+# weights were exported. An int lookup against a str-keyed map used to miss and
+# fall back to `str(class_id)`, so the detection was filed under a class
+# literally named "0" — which then reached the Roboflow labelmap as a real
+# class. The shared `mock_yolo` fixture uses an int-keyed map, so it cannot see
+# this; these build str-keyed and unmapped variants explicitly.
+
+
+class _StrKeyedYOLO:
+    """FakeYOLO whose ``names`` is keyed by strings, as some exports are."""
+
+    def __init__(self, names, class_id=0):
+        self._names = names
+        self._class_id = class_id
+
+    def predict(self, source=None, conf=None, verbose=False, **kwargs):
+        from tests.conftest import _FakeBox, _FakeResult
+
+        box = _FakeBox(self._class_id, 0.85, [100.0, 100.0, 200.0, 200.0])
+        return [_FakeResult(boxes=[box], names=self._names)]
+
+
+def _patch_model(monkeypatch, model):
+    import yolo_detector
+
+    yolo_detector._MODEL_CACHE.clear()
+    monkeypatch.setattr(yolo_detector, "_load_model", lambda model_path: model)
+
+
+def test_detect_resolves_string_keyed_names(tmp_path, make_image_with_sidecar, monkeypatch):
+    """A str-keyed names map still yields the real class name, not "0"."""
+    _patch_model(monkeypatch, _StrKeyedYOLO({"0": "quail", "1": "predator"}, class_id=0))
+    camera_dir = tmp_path / "staging" / "test_camera"
+    image = make_image_with_sidecar(camera_dir, stem="20260101-120000_abc", camera_id="test_camera")
+
+    result = detect(image, model_path="stub.pt", confidence=0.5)
+
+    assert result.total_count == 1
+    assert result.detections[0].class_name == "quail"
+    assert not result.detections[0].class_name.isdigit()
+
+
+def test_detect_skips_unmapped_class_id_rather_than_naming_it_numerically(
+    tmp_path, make_image_with_sidecar, monkeypatch, caplog
+):
+    """A class id absent from names is dropped and logged, never named "7"."""
+    _patch_model(monkeypatch, _StrKeyedYOLO({"0": "quail"}, class_id=7))
+    camera_dir = tmp_path / "staging" / "test_camera"
+    image = make_image_with_sidecar(camera_dir, stem="20260101-120001_abc", camera_id="test_camera")
+
+    with caplog.at_level("ERROR"):
+        result = detect(image, model_path="stub.pt", confidence=0.5)
+
+    assert result.total_count == 0
+    assert result.detections == []
+    assert not any(d.class_name.isdigit() for d in result.detections)
+    assert "class id 7" in caplog.text
+
+
+def test_labelmap_refuses_numeric_class_names():
+    """The uploader's last line of defence: a digit name never reaches Roboflow."""
+    from roboflow_uploader import labelmap_from_class_map
+
+    assert labelmap_from_class_map({"quail": 0, "predator": 1}) == {0: "quail", 1: "predator"}
+    with pytest.raises(ValueError, match="numeric class name"):
+        labelmap_from_class_map({"0": 0})

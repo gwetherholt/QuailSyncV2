@@ -163,3 +163,43 @@ def test_unload_drops_the_model():
     det.unload()
     assert det.loaded is False
     assert det.class_names() == {}
+
+
+# --- KAN-9: str-keyed names maps -------------------------------------------
+# Ultralytics returns `names` keyed by int or by str depending on how the
+# weights were exported. `class_names()` always normalized; `detect()` did not,
+# and its `str(class_id)` fallback filed the box under a class literally named
+# "0". Both now share `_normalized_names`.
+
+
+def test_detect_resolves_string_keyed_names():
+    """A str-keyed names map still yields the real class name, not "0"."""
+    model = _FakeModel({"0": "egg", "1": "pipped"}, [_FakeBox(0, 0.91, [10, 10, 20, 20])])
+    det = Detector(yolo_factory=lambda w: model)
+    det.load("/w.pt", 0.5)
+
+    out = det.detect(_frame())
+
+    assert len(out) == 1
+    assert out[0].class_name == "egg"
+    assert not out[0].class_name.isdigit()
+
+
+def test_class_names_normalizes_string_keys():
+    model = _FakeModel({"0": "egg", "1": "pipped"}, [])
+    det = Detector(yolo_factory=lambda w: model)
+    det.load("/w.pt", 0.5)
+    assert det.class_names() == {0: "egg", 1: "pipped"}
+
+
+def test_detect_skips_unmapped_class_id_rather_than_naming_it_numerically(caplog):
+    """A class id absent from names is dropped and logged, never named "7"."""
+    model = _FakeModel({"0": "egg"}, [_FakeBox(7, 0.91, [10, 10, 20, 20])])
+    det = Detector(yolo_factory=lambda w: model)
+    det.load("/w.pt", 0.5)
+
+    with caplog.at_level("ERROR"):
+        out = det.detect(_frame())
+
+    assert out == []
+    assert "class id 7" in caplog.text
