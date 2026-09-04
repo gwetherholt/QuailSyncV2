@@ -33,6 +33,12 @@ Legend — **Consumed by:** `A` = Android, `D` = Dashboard, `both`, `none` (no c
 in this repo; some are consumed by out-of-repo pollers/agents — see §4).
 **Disc.** = discrepancy flagged in §3.
 
+> **These contracts are now tested.** `crates/quailsync-server/tests/contract_tests.rs`
+> walks a table of the client-consumed routes below and asserts reachability, content-type,
+> updater round-trips and creator responses. If you change a handler's response shape, update
+> that table in the same commit; if a client starts calling a new route, add a row. See
+> [`CONTRACT_TESTS.md`](CONTRACT_TESTS.md).
+
 | Method | Path | Consumed by | Handler | Disc. |
 |---|---|---|---|---|
 | GET | `/health` | none | `telemetry::health` | no |

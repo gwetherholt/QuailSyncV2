@@ -213,7 +213,7 @@ pub(crate) async fn update_clutch(
         .map(|c| c > 0)
         .unwrap_or(false);
     if !exists {
-        return (StatusCode::NOT_FOUND, Json(None::<Clutch>)).into_response();
+        return (StatusCode::NOT_FOUND, Json(None::<ClutchDetail>)).into_response();
     }
 
     macro_rules! update_field {
@@ -284,12 +284,23 @@ pub(crate) async fn update_clutch(
         }
     }
 
+    // Answer with ClutchDetail, exactly as create_clutch and get_clutch do
+    // (KAN-47). This used to return a bare Clutch, so a client that refreshed
+    // its view from the PUT response silently lost `snapshot` -- the only key
+    // separating the two shapes.
     match conn.query_row(
         &format!("{CLUTCH_SELECT} WHERE c.id = ?1"),
         params![id],
         row_to_clutch,
     ) {
-        Ok(clutch) => (StatusCode::OK, Json(Some(clutch))).into_response(),
+        Ok(clutch) => {
+            let snapshot = read_clutch_snapshot(&conn, id);
+            (
+                StatusCode::OK,
+                Json(Some(ClutchDetail { clutch, snapshot })),
+            )
+                .into_response()
+        }
         Err(e) => db_error(e),
     }
 }

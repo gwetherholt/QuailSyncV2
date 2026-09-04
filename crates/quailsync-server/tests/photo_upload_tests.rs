@@ -7,17 +7,18 @@
 //! → 404.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use axum::routing::post;
 use axum::Router;
-use quailsync_common::{Bird, BirdStatus, CreateBird, CreateLineage, Lineage, Sex};
+use quailsync_common::{Bird, Sex};
 use quailsync_server::state::PhotoConfig;
-use quailsync_server::{build_app, init_db, AppState};
 use reqwest::multipart;
 use reqwest::StatusCode;
-use rusqlite::Connection;
+
+mod common;
+use common::*;
 
 // ===========================================================================
 // Harness
@@ -31,47 +32,6 @@ fn unique_temp_dir() -> PathBuf {
     let dir = std::env::temp_dir().join(format!("qs-photo-test-{}-{}", std::process::id(), n));
     let _ = std::fs::remove_dir_all(&dir);
     dir
-}
-
-fn client() -> reqwest::Client {
-    reqwest::Client::new()
-}
-
-/// Spin up a server with the given photo config; return its base URL.
-async fn spawn_app(photos: PhotoConfig) -> String {
-    let conn = Connection::open_in_memory().expect("in-memory sqlite");
-    init_db(&conn);
-
-    let (live_tx, _) = tokio::sync::broadcast::channel::<String>(64);
-    let metrics_handle = metrics_exporter_prometheus::PrometheusBuilder::new()
-        .build_recorder()
-        .handle();
-
-    let state = AppState {
-        db: Arc::new(Mutex::new(conn)),
-        agent_connected: Arc::new(AtomicBool::new(false)),
-        settings: Arc::new(std::sync::RwLock::new(quailsync_common::Settings::default())),
-        live_tx,
-        last_seen: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
-        metrics_handle,
-        photos,
-        trailcam: quailsync_server::state::TrailcamConfig::for_dir(
-            std::env::temp_dir().join("quailsync-test-trailcam"),
-        ),
-        indoorcam: quailsync_server::state::IndoorcamConfig::for_dir(
-            std::env::temp_dir().join("quailsync-test-indoorcam"),
-        ),
-    };
-
-    let app = build_app(state);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind random port");
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-    format!("http://{addr}")
 }
 
 /// A mock ntfy server. Returns its base URL and the shared list of received
@@ -124,43 +84,13 @@ fn jpeg_bytes(len: usize) -> Vec<u8> {
     v
 }
 
-async fn seed_bird(base: &str) -> i64 {
-    let lineage: Lineage = client()
-        .post(format!("{base}/api/lineages"))
-        .json(&CreateLineage {
-            name: "PhotoLine".into(),
-            source: "Lab".into(),
-            notes: None,
-        })
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-
-    let bird: Bird = client()
-        .post(format!("{base}/api/birds"))
-        .json(&CreateBird {
-            band_color: None,
-            sex: Sex::Female,
-            lineage_ids: vec![lineage.id],
-            hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-            mother_id: None,
-            father_id: None,
-            generation: 1,
-            status: BirdStatus::Active,
-            notes: None,
-            nfc_tag_id: None,
-            chick_group_id: None,
-        })
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    bird.id
+/// This file's fixture bird: a female on a "PhotoLine" lineage. Wraps the
+/// shared seeds rather than re-rolling them, while keeping the exact values the
+/// photo tests were written against.
+async fn seed_photo_bird(base: &str) -> i64 {
+    let c = client();
+    let lineage = seed_lineage_with_source(base, &c, "PhotoLine", "Lab").await;
+    seed_bird(base, &c, vec![lineage], Sex::Female).await
 }
 
 async fn get_bird(base: &str, id: i64) -> Bird {
@@ -219,8 +149,8 @@ fn count_files(dir: &PathBuf) -> usize {
 #[tokio::test]
 async fn valid_jpeg_under_cap_is_stored() {
     let dir = unique_temp_dir();
-    let base = spawn_app(photos_no_alerts(&dir)).await;
-    let id = seed_bird(&base).await;
+    let base = spawn_test_server_with_photos(photos_no_alerts(&dir)).await;
+    let id = seed_photo_bird(&base).await;
 
     let resp = upload(&base, id, jpeg_bytes(2048), "image/jpeg").await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -257,8 +187,8 @@ async fn valid_jpeg_under_cap_is_stored() {
 #[tokio::test]
 async fn second_upload_keeps_history_and_advances_pointer() {
     let dir = unique_temp_dir();
-    let base = spawn_app(photos_no_alerts(&dir)).await;
-    let id = seed_bird(&base).await;
+    let base = spawn_test_server_with_photos(photos_no_alerts(&dir)).await;
+    let id = seed_photo_bird(&base).await;
 
     let first: serde_json::Value = upload(&base, id, jpeg_bytes(1024), "image/jpeg")
         .await
@@ -295,8 +225,8 @@ async fn second_upload_keeps_history_and_advances_pointer() {
 async fn oversized_upload_rejected_and_alerts() {
     let dir = unique_temp_dir();
     let (ntfy_url, received) = spawn_mock_ntfy().await;
-    let base = spawn_app(photos_with_ntfy(&dir, ntfy_url, "test-topic")).await;
-    let id = seed_bird(&base).await;
+    let base = spawn_test_server_with_photos(photos_with_ntfy(&dir, ntfy_url, "test-topic")).await;
+    let id = seed_photo_bird(&base).await;
 
     // 11 MB > 10 MB cap, but < the route body limit so it reaches the handler.
     let resp = upload(&base, id, jpeg_bytes(11 * 1024 * 1024), "image/jpeg").await;
@@ -321,8 +251,8 @@ async fn oversized_upload_rejected_and_alerts() {
 #[tokio::test]
 async fn png_rejected_as_unsupported_media() {
     let dir = unique_temp_dir();
-    let base = spawn_app(photos_no_alerts(&dir)).await;
-    let id = seed_bird(&base).await;
+    let base = spawn_test_server_with_photos(photos_no_alerts(&dir)).await;
+    let id = seed_photo_bird(&base).await;
 
     // PNG signature + declared image/png.
     let png = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00];
@@ -336,8 +266,8 @@ async fn png_rejected_as_unsupported_media() {
 #[tokio::test]
 async fn jpeg_mime_but_non_jpeg_bytes_rejected() {
     let dir = unique_temp_dir();
-    let base = spawn_app(photos_no_alerts(&dir)).await;
-    let id = seed_bird(&base).await;
+    let base = spawn_test_server_with_photos(photos_no_alerts(&dir)).await;
+    let id = seed_photo_bird(&base).await;
 
     // A renamed .mp4: declared image/jpeg, but the bytes are an MP4 ftyp box —
     // content-type alone is spoofable, so the magic-byte check must catch it.
@@ -359,8 +289,8 @@ async fn write_failure_leaves_db_untouched() {
     let blocking_file = parent.join("not-a-dir");
     std::fs::write(&blocking_file, b"x").unwrap();
 
-    let base = spawn_app(photos_no_alerts(&blocking_file)).await;
-    let id = seed_bird(&base).await;
+    let base = spawn_test_server_with_photos(photos_no_alerts(&blocking_file)).await;
+    let id = seed_photo_bird(&base).await;
 
     let resp = upload(&base, id, jpeg_bytes(1024), "image/jpeg").await;
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -374,8 +304,8 @@ async fn write_failure_leaves_db_untouched() {
 #[tokio::test]
 async fn unknown_bird_is_404_and_writes_nothing() {
     let dir = unique_temp_dir();
-    let base = spawn_app(photos_no_alerts(&dir)).await;
-    let id = seed_bird(&base).await;
+    let base = spawn_test_server_with_photos(photos_no_alerts(&dir)).await;
+    let id = seed_photo_bird(&base).await;
 
     // Upload to an id guaranteed not to exist (one past the only seeded bird).
     let resp = upload(&base, id + 1, jpeg_bytes(1024), "image/jpeg").await;
@@ -398,8 +328,8 @@ async fn get_photo(base: &str, id: i64) -> reqwest::Response {
 #[tokio::test]
 async fn get_serves_uploaded_photo_with_jpeg_content_type() {
     let dir = unique_temp_dir();
-    let base = spawn_app(photos_no_alerts(&dir)).await;
-    let id = seed_bird(&base).await;
+    let base = spawn_test_server_with_photos(photos_no_alerts(&dir)).await;
+    let id = seed_photo_bird(&base).await;
 
     let bytes = jpeg_bytes(2048);
     assert_eq!(
@@ -429,8 +359,8 @@ async fn get_serves_uploaded_photo_with_jpeg_content_type() {
 #[tokio::test]
 async fn get_serves_latest_photo_after_reupload() {
     let dir = unique_temp_dir();
-    let base = spawn_app(photos_no_alerts(&dir)).await;
-    let id = seed_bird(&base).await;
+    let base = spawn_test_server_with_photos(photos_no_alerts(&dir)).await;
+    let id = seed_photo_bird(&base).await;
 
     upload(&base, id, jpeg_bytes(2048), "image/jpeg").await;
     let newest = jpeg_bytes(4096);
@@ -445,8 +375,8 @@ async fn get_serves_latest_photo_after_reupload() {
 #[tokio::test]
 async fn get_photo_404_when_bird_has_no_photo() {
     let dir = unique_temp_dir();
-    let base = spawn_app(photos_no_alerts(&dir)).await;
-    let id = seed_bird(&base).await; // seeded but never uploaded
+    let base = spawn_test_server_with_photos(photos_no_alerts(&dir)).await;
+    let id = seed_photo_bird(&base).await; // seeded but never uploaded
 
     assert_eq!(get_photo(&base, id).await.status(), StatusCode::NOT_FOUND);
 }
@@ -454,8 +384,8 @@ async fn get_photo_404_when_bird_has_no_photo() {
 #[tokio::test]
 async fn get_photo_404_for_unknown_bird() {
     let dir = unique_temp_dir();
-    let base = spawn_app(photos_no_alerts(&dir)).await;
-    let id = seed_bird(&base).await;
+    let base = spawn_test_server_with_photos(photos_no_alerts(&dir)).await;
+    let id = seed_photo_bird(&base).await;
 
     // An id guaranteed not to exist (one past the only seeded bird).
     assert_eq!(
@@ -481,8 +411,8 @@ async fn list_photos(base: &str, id: i64) -> Vec<serde_json::Value> {
 #[tokio::test]
 async fn list_photos_empty_when_none() {
     let dir = unique_temp_dir();
-    let base = spawn_app(photos_no_alerts(&dir)).await;
-    let id = seed_bird(&base).await;
+    let base = spawn_test_server_with_photos(photos_no_alerts(&dir)).await;
+    let id = seed_photo_bird(&base).await;
 
     assert!(list_photos(&base, id).await.is_empty());
 }
@@ -490,8 +420,8 @@ async fn list_photos_empty_when_none() {
 #[tokio::test]
 async fn list_photos_returns_history_newest_first() {
     let dir = unique_temp_dir();
-    let base = spawn_app(photos_no_alerts(&dir)).await;
-    let id = seed_bird(&base).await;
+    let base = spawn_test_server_with_photos(photos_no_alerts(&dir)).await;
+    let id = seed_photo_bird(&base).await;
 
     // Two uploads → two timestamped files (history kept).
     upload(&base, id, jpeg_bytes(1024), "image/jpeg").await;
@@ -522,8 +452,8 @@ async fn list_photos_returns_history_newest_first() {
 #[tokio::test]
 async fn serve_specific_history_file() {
     let dir = unique_temp_dir();
-    let base = spawn_app(photos_no_alerts(&dir)).await;
-    let id = seed_bird(&base).await;
+    let base = spawn_test_server_with_photos(photos_no_alerts(&dir)).await;
+    let id = seed_photo_bird(&base).await;
 
     let bytes = jpeg_bytes(3072);
     upload(&base, id, bytes.clone(), "image/jpeg").await;
@@ -546,8 +476,8 @@ async fn serve_specific_history_file() {
 #[tokio::test]
 async fn serve_history_file_rejects_foreign_or_bad_names() {
     let dir = unique_temp_dir();
-    let base = spawn_app(photos_no_alerts(&dir)).await;
-    let id = seed_bird(&base).await;
+    let base = spawn_test_server_with_photos(photos_no_alerts(&dir)).await;
+    let id = seed_photo_bird(&base).await;
     upload(&base, id, jpeg_bytes(1024), "image/jpeg").await;
 
     // Not this bird's prefix, an arbitrary name, and a well-formed-but-absent

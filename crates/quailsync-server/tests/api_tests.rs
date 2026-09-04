@@ -1,55 +1,11 @@
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
-
 use quailsync_common::{
     Bird, BirdStatus, ChickGroup, CreateBird, CreateChickGroup, CreateLineage, FlockDiversity,
     GraduateBird, GraduateRequest, Lineage, PairingSuggestion, Sex,
 };
-use quailsync_server::{build_app, init_db, AppState};
 use rusqlite::Connection;
 
-/// Spin up a test server on a random port with a fresh in-memory DB.
-/// Returns the base URL (e.g. "http://127.0.0.1:12345").
-async fn spawn_test_server() -> String {
-    let conn = Connection::open_in_memory().expect("in-memory sqlite");
-    init_db(&conn);
-
-    let (live_tx, _) = tokio::sync::broadcast::channel::<String>(64);
-
-    let metrics_handle = metrics_exporter_prometheus::PrometheusBuilder::new()
-        .build_recorder()
-        .handle();
-
-    let state = AppState {
-        db: Arc::new(Mutex::new(conn)),
-        agent_connected: Arc::new(AtomicBool::new(false)),
-        settings: Arc::new(std::sync::RwLock::new(quailsync_common::Settings::default())),
-        live_tx,
-        last_seen: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
-        metrics_handle,
-        photos: quailsync_server::state::PhotoConfig::for_dir(
-            std::env::temp_dir().join("quailsync-test-photos"),
-        ),
-        trailcam: quailsync_server::state::TrailcamConfig::for_dir(
-            std::env::temp_dir().join("quailsync-test-trailcam"),
-        ),
-        indoorcam: quailsync_server::state::IndoorcamConfig::for_dir(
-            std::env::temp_dir().join("quailsync-test-indoorcam"),
-        ),
-    };
-
-    let app = build_app(state);
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind to random port");
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-
-    format!("http://{addr}")
-}
+mod common;
+use common::*;
 
 // ---------------------------------------------------------------------------
 // Health
@@ -2568,23 +2524,6 @@ mod nfc_tag_reassignment_tests {
     use super::*;
     use serde_json::json;
 
-    async fn seed_lineage(base: &str, client: &reqwest::Client) -> i64 {
-        let bl: Lineage = client
-            .post(format!("{base}/api/lineages"))
-            .json(&CreateLineage {
-                name: "L".into(),
-                source: "S".into(),
-                notes: None,
-            })
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        bl.id
-    }
-
     fn create_bird_with_tag(lineage_id: i64, tag: Option<&str>) -> CreateBird {
         CreateBird {
             band_color: None,
@@ -2605,7 +2544,7 @@ mod nfc_tag_reassignment_tests {
     async fn create_bird_reuses_tag_by_clearing_prior_owner() {
         let base = spawn_test_server().await;
         let client = reqwest::Client::new();
-        let lineage_id = seed_lineage(&base, &client).await;
+        let lineage_id = seed_lineage(&base, &client, "L").await;
 
         // Bird 1 takes the tag.
         let first: Bird = client
@@ -2647,7 +2586,7 @@ mod nfc_tag_reassignment_tests {
     async fn update_bird_reassigns_tag_from_another_bird() {
         let base = spawn_test_server().await;
         let client = reqwest::Client::new();
-        let lineage_id = seed_lineage(&base, &client).await;
+        let lineage_id = seed_lineage(&base, &client, "L").await;
 
         let owner: Bird = client
             .post(format!("{base}/api/birds"))
@@ -2695,7 +2634,7 @@ mod nfc_tag_reassignment_tests {
         // clear it (the `except_id` guard).
         let base = spawn_test_server().await;
         let client = reqwest::Client::new();
-        let lineage_id = seed_lineage(&base, &client).await;
+        let lineage_id = seed_lineage(&base, &client, "L").await;
 
         let bird: Bird = client
             .post(format!("{base}/api/birds"))
@@ -2732,7 +2671,7 @@ mod nfc_tag_reassignment_tests {
         // can re-program the same physical tags.
         let base = spawn_test_server().await;
         let client = reqwest::Client::new();
-        let lineage_id = seed_lineage(&base, &client).await;
+        let lineage_id = seed_lineage(&base, &client, "L").await;
 
         // Owner of TAG-G claims it first via direct create.
         client
@@ -2801,23 +2740,6 @@ mod nfc_tag_reassignment_tests {
 mod reconcile_tests {
     use super::*;
     use serde_json::{json, Value};
-
-    async fn seed_lineage(base: &str, client: &reqwest::Client, name: &str) -> i64 {
-        let bl: Lineage = client
-            .post(format!("{base}/api/lineages"))
-            .json(&CreateLineage {
-                name: name.into(),
-                source: "S".into(),
-                notes: None,
-            })
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        bl.id
-    }
 
     async fn make_bird(
         base: &str,
@@ -4404,46 +4326,22 @@ async fn method_mismatch_on_known_api_path_still_returns_405() {
 
 mod update_returns_entity_tests {
     use super::*;
-    use quailsync_common::{CreateBrooder, HousingType, LifeStage};
+    use quailsync_common::HousingType;
     use serde_json::json;
-
-    /// `content-type` carries a charset for some responses, so compare the
-    /// media type only.
-    fn media_type(resp: &reqwest::Response) -> String {
-        resp.headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default()
-            .split(';')
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .to_string()
-    }
 
     #[tokio::test]
     async fn put_brooder_returns_200_json_body_with_matching_id() {
         let base = spawn_test_server().await;
         let client = reqwest::Client::new();
 
-        let created: serde_json::Value = client
-            .post(format!("{base}/api/brooders"))
-            .json(&CreateBrooder {
-                name: "Brooder A".into(),
-                lineage_id: None,
-                life_stage: LifeStage::Chick,
-                qr_code: "kan29-b1".into(),
-                notes: None,
-                camera_url: None,
-                housing_type: Some(HousingType::Brooder),
-            })
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        let id = created["id"].as_i64().expect("created brooder id");
+        let id = seed_brooder(
+            &base,
+            &client,
+            "Brooder A",
+            "kan29-b1",
+            HousingType::Brooder,
+        )
+        .await;
 
         let resp = client
             .put(format!("{base}/api/brooders/{id}"))
@@ -4478,36 +4376,11 @@ mod update_returns_entity_tests {
         let base = spawn_test_server().await;
         let client = reqwest::Client::new();
 
-        client
-            .post(format!("{base}/api/lineages"))
-            .json(&CreateLineage {
-                name: "Coturnix".into(),
-                source: "Local".into(),
-                notes: None,
-            })
-            .send()
-            .await
-            .unwrap();
-
-        let created: ChickGroup = client
-            .post(format!("{base}/api/chick-groups"))
-            .json(&CreateChickGroup {
-                clutch_id: None,
-                lineage_ids: vec![1],
-                brooder_id: None,
-                initial_count: 10,
-                hatch_date: chrono::Local::now().date_naive(),
-                notes: None,
-            })
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
+        let lineage = seed_lineage_with_source(&base, &client, "Coturnix", "Local").await;
+        let group_id = seed_chick_group(&base, &client, vec![lineage]).await;
 
         let resp = client
-            .put(format!("{base}/api/chick-groups/{}", created.id))
+            .put(format!("{base}/api/chick-groups/{group_id}"))
             .json(&json!({ "current_count": 7 }))
             .send()
             .await
@@ -4517,14 +4390,14 @@ mod update_returns_entity_tests {
         assert_eq!(media_type(&resp), "application/json");
 
         let body: serde_json::Value = resp.json().await.unwrap();
-        assert_eq!(body["id"].as_i64(), Some(created.id));
+        assert_eq!(body["id"].as_i64(), Some(group_id));
         assert_eq!(body["current_count"].as_u64(), Some(7));
 
         // Identical shape to GET /api/chick-groups/{id}: same select, same row
         // mapper, same lineage hydration. If these ever diverge it is a new
         // contract mismatch, so pin it here.
         let fetched: serde_json::Value =
-            reqwest::get(format!("{base}/api/chick-groups/{}", created.id))
+            reqwest::get(format!("{base}/api/chick-groups/{group_id}"))
                 .await
                 .unwrap()
                 .json()
@@ -4563,39 +4436,8 @@ mod photo_upload_contract_tests {
         let base = spawn_test_server().await;
         let client = reqwest::Client::new();
 
-        client
-            .post(format!("{base}/api/lineages"))
-            .json(&CreateLineage {
-                name: "Coturnix".into(),
-                source: "Local".into(),
-                notes: None,
-            })
-            .send()
-            .await
-            .unwrap();
-
-        let bird: Bird = client
-            .post(format!("{base}/api/birds"))
-            .json(&CreateBird {
-                band_color: Some("kan29".into()),
-                sex: Sex::Male,
-                lineage_ids: vec![1],
-                hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
-                mother_id: None,
-                father_id: None,
-                generation: 1,
-                status: BirdStatus::Active,
-                notes: None,
-                nfc_tag_id: None,
-                chick_group_id: None,
-            })
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        let id = bird.id;
+        let lineage = seed_lineage_with_source(&base, &client, "Coturnix", "Local").await;
+        let id = seed_bird(&base, &client, vec![lineage], Sex::Male).await;
 
         let part = multipart::Part::bytes(jpeg_bytes(2048))
             .file_name(format!("bird_{id}.jpg"))
