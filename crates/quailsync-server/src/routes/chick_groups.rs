@@ -20,17 +20,28 @@ pub(crate) async fn create_chick_group(
             .into_response();
     }
     let conn = acquire_db(&state);
-    if let Err(e) = conn.execute(
+    // One transaction over both writes (KAN-50). On a bare connection the group
+    // row autocommits, so a failure on the lineage INSERT left a group with zero
+    // lineages -- a state this same handler rejects with 400 on input.
+    let tx = match conn.unchecked_transaction() {
+        Ok(t) => t,
+        Err(e) => return db_error(e),
+    };
+    if let Err(e) = tx.execute(
         "INSERT INTO chick_groups (clutch_id, brooder_id, initial_count, current_count, hatch_date, status, notes)
          VALUES (?1, ?2, ?3, ?4, ?5, 'Active', ?6)",
         params![body.clutch_id, body.brooder_id, body.initial_count, body.initial_count, body.hatch_date.to_string(), body.notes],
     ) {
         return db_error(e);
     }
-    let id = conn.last_insert_rowid();
-    if let Err(e) = replace_chick_group_lineages(&conn, id, &body.lineage_ids) {
+    let id = tx.last_insert_rowid();
+    if let Err(e) = replace_chick_group_lineages(&tx, id, &body.lineage_ids) {
         return db_error(e);
     }
+    if let Err(e) = tx.commit() {
+        return db_error(e);
+    }
+    // Read back after commit, as the other handlers do.
     let lineages = fetch_chick_group_lineages(&conn, id);
     let mut group = ChickGroup {
         id,
@@ -213,23 +224,40 @@ pub(crate) async fn delete_chick_group(
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
     let conn = acquire_db(&state);
-    conn.execute(
+    // Cascade-delete the children then the group in one transaction (KAN-50),
+    // the same shape delete_bird uses. The swallowed `.ok()` / `unwrap_or(0)`
+    // had to go with it: a failure that is discarded cannot roll anything back,
+    // and the last DELETE genuinely can fail -- birds.chick_group_id references
+    // chick_groups(id) with no ON DELETE, so a group with banded birds still
+    // pointing at it is refused. That used to leave the mortality log and
+    // lineage rows deleted while the group survived.
+    let tx = match conn.unchecked_transaction() {
+        Ok(t) => t,
+        Err(e) => return db_error(e),
+    };
+    if let Err(e) = tx.execute(
         "DELETE FROM chick_mortality_log WHERE group_id = ?1",
         params![id],
-    )
-    .ok();
-    conn.execute(
+    ) {
+        return db_error(e);
+    }
+    if let Err(e) = tx.execute(
         "DELETE FROM chick_group_lineages WHERE chick_group_id = ?1",
         params![id],
-    )
-    .ok();
-    let affected = conn
-        .execute("DELETE FROM chick_groups WHERE id = ?1", params![id])
-        .unwrap_or(0);
+    ) {
+        return db_error(e);
+    }
+    let affected = match tx.execute("DELETE FROM chick_groups WHERE id = ?1", params![id]) {
+        Ok(n) => n,
+        Err(e) => return db_error(e),
+    };
+    if let Err(e) = tx.commit() {
+        return db_error(e);
+    }
     if affected > 0 {
-        StatusCode::NO_CONTENT
+        StatusCode::NO_CONTENT.into_response()
     } else {
-        StatusCode::NOT_FOUND
+        StatusCode::NOT_FOUND.into_response()
     }
 }
 

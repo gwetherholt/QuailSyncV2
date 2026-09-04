@@ -1366,6 +1366,274 @@ mod lineage_tests {
         assert_eq!(updated.lineages[0].id, b.id);
     }
 
+    /// KAN-50, `cull_batch`. Two writes per bird: the status UPDATE, then the
+    /// `processing_records` audit INSERT. Both used to swallow their errors, so
+    /// a failed INSERT left the bird off Active with no record of why -- and the
+    /// caller was still told the cull succeeded. The batch is now
+    /// all-or-nothing.
+    ///
+    /// Forcing mechanism: `processing_records.bird_id NOT NULL REFERENCES
+    /// birds(id)` (`db/mod.rs:162`). Culling a real bird together with a
+    /// nonexistent one makes the second bird's audit INSERT fail the FK, after
+    /// the first bird's status has already been updated.
+    #[tokio::test]
+    async fn cull_batch_rolls_back_when_an_audit_insert_fails() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let lineage = seed_lineage(&base, &client, "L").await;
+        let bird = seed_bird(&base, &client, vec![lineage], Sex::Male).await;
+
+        let resp = client
+            .post(format!("{base}/api/cull-batch"))
+            .json(&serde_json::json!({
+                "bird_ids": [bird, 999_999],
+                "reason": "ExcessMale",
+                "method": "Culled",
+                "notes": null,
+                "processed_date": "2026-01-01",
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            500,
+            "an audit insert for a nonexistent bird should fail the batch"
+        );
+
+        // The real bird must still be Active: no half-applied cull.
+        let birds: Vec<Bird> = reqwest::get(format!("{base}/api/birds"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let b = birds.iter().find(|b| b.id == bird).expect("bird exists");
+        assert_eq!(
+            b.status,
+            BirdStatus::Active,
+            "bird must not be left culled by a batch that failed"
+        );
+
+        // ...and no orphan audit row for it either.
+        let records: Vec<serde_json::Value> = reqwest::get(format!("{base}/api/processing"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(
+            records.is_empty(),
+            "no processing record should survive a failed batch, got {records:?}"
+        );
+    }
+
+    /// KAN-50, `delete_chick_group`. Cascade delete: mortality log, then
+    /// lineages, then the group. Without a transaction a failure on the last
+    /// step left the first two committed -- the group survived with its lineage
+    /// tags silently gone.
+    ///
+    /// Forcing mechanism (a real FK, not a contrivance):
+    /// `birds.chick_group_id REFERENCES chick_groups(id)` is declared with no
+    /// `ON DELETE` clause (`db/mod.rs:457`), so under `PRAGMA foreign_keys = ON`
+    /// deleting a group a banded bird still points at is refused -- and it is
+    /// refused on exactly the last of the three deletes.
+    #[tokio::test]
+    async fn delete_chick_group_rolls_back_when_a_bird_still_references_it() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let lineage = seed_lineage(&base, &client, "L").await;
+        let group_id = seed_chick_group(&base, &client, vec![lineage]).await;
+
+        // A bird banded out of the group still references it.
+        client
+            .post(format!("{base}/api/birds"))
+            .json(&CreateBird {
+                band_color: Some("banded".into()),
+                sex: Sex::Male,
+                lineage_ids: vec![lineage],
+                hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                mother_id: None,
+                father_id: None,
+                generation: 1,
+                status: BirdStatus::Active,
+                notes: None,
+                nfc_tag_id: None,
+                chick_group_id: Some(group_id),
+            })
+            .send()
+            .await
+            .unwrap();
+
+        let resp = client
+            .delete(format!("{base}/api/chick-groups/{group_id}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            500,
+            "deleting a group a bird still references should fail"
+        );
+
+        // The group survives *with its lineage tags intact* -- the earlier
+        // deletes in the cascade must have rolled back too.
+        let after: ChickGroup = reqwest::get(format!("{base}/api/chick-groups/{group_id}"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(after.id, group_id, "group should still exist");
+        assert_eq!(
+            after.lineages.len(),
+            1,
+            "lineage rows must not be deleted by a delete that failed"
+        );
+    }
+
+    /// KAN-50, `create_chick_group`. Mirror of the bird case without the tag
+    /// hazard: the group row used to autocommit before the lineage INSERT, so a
+    /// failure left a group with zero lineages.
+    #[tokio::test]
+    async fn create_chick_group_rolls_back_on_bad_lineage_id() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        seed_lineage(&base, &client, "L").await;
+
+        let before: Vec<ChickGroup> = reqwest::get(format!("{base}/api/chick-groups"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(before.is_empty());
+
+        let resp = client
+            .post(format!("{base}/api/chick-groups"))
+            .json(&serde_json::json!({
+                "clutch_id": null,
+                "lineage_ids": [999_999],
+                "brooder_id": null,
+                "initial_count": 5,
+                "hatch_date": "2026-01-01",
+                "notes": null,
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            500,
+            "a bad lineage id should fail the create"
+        );
+
+        let after: Vec<ChickGroup> = reqwest::get(format!("{base}/api/chick-groups"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(
+            after.is_empty(),
+            "the failed create must not leave a chick group behind, got {after:?}"
+        );
+    }
+
+    /// KAN-50, `create_bird`. Two partial states are possible when the writes
+    /// are not wrapped:
+    ///
+    /// * (b) `clear_nfc_tag_from_others` autocommits before the INSERT, so a
+    ///   later failure leaves an *existing* bird stripped of its NFC tag with no
+    ///   new bird to take it. This is the nastier one: data loss on a record the
+    ///   caller was not even editing.
+    /// * (a) the bird row commits and the lineage INSERT then fails, leaving a
+    ///   bird with zero lineages -- a state this same handler rejects with 400.
+    ///
+    /// Forcing mechanism: a nonexistent lineage id, which fails
+    /// `bird_lineages.lineage_id REFERENCES lineages(id)` under
+    /// `PRAGMA foreign_keys = ON` after both earlier writes have run.
+    #[tokio::test]
+    async fn create_bird_rolls_back_tag_clear_and_bird_row() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let lineage = seed_lineage(&base, &client, "L").await;
+
+        // Bird A owns tag T.
+        let a: Bird = client
+            .post(format!("{base}/api/birds"))
+            .json(&CreateBird {
+                band_color: Some("A".into()),
+                sex: Sex::Male,
+                lineage_ids: vec![lineage],
+                hatch_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                mother_id: None,
+                father_id: None,
+                generation: 1,
+                status: BirdStatus::Active,
+                notes: None,
+                nfc_tag_id: Some("TAG-T".into()),
+                chick_group_id: None,
+            })
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(a.nfc_tag_id.as_deref(), Some("TAG-T"));
+
+        // Bird B reuses tag T but names a lineage that does not exist, so the
+        // lineage INSERT fails *after* the tag clear and the bird INSERT.
+        let resp = client
+            .post(format!("{base}/api/birds"))
+            .json(&serde_json::json!({
+                "band_color": "B",
+                "sex": "Male",
+                "lineage_ids": [999_999],
+                "hatch_date": "2026-01-01",
+                "mother_id": null,
+                "father_id": null,
+                "generation": 1,
+                "status": "Active",
+                "notes": null,
+                "nfc_tag_id": "TAG-T",
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            500,
+            "a bad lineage id should fail the create"
+        );
+
+        let birds: Vec<Bird> = reqwest::get(format!("{base}/api/birds"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        // (b) Bird A must still hold its tag.
+        let a_after = birds
+            .iter()
+            .find(|b| b.id == a.id)
+            .expect("bird A should still exist");
+        assert_eq!(
+            a_after.nfc_tag_id.as_deref(),
+            Some("TAG-T"),
+            "bird A must not lose its NFC tag to a create that failed"
+        );
+
+        // (a) No orphan bird B, with or without lineages.
+        assert!(
+            birds.iter().all(|b| b.band_color.as_deref() != Some("B")),
+            "the failed create must not leave a bird row behind"
+        );
+        assert_eq!(birds.len(), 1, "only bird A should exist");
+    }
+
     /// KAN-8, mirroring `put_chick_group_lineages_rolls_back_on_bad_id` for the
     /// bird endpoint. Same failure window: the helper clears the set before
     /// re-inserting, so on a bare connection a failed re-INSERT left the bird

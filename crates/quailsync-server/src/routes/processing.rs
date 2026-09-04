@@ -163,20 +163,29 @@ pub(crate) async fn cull_batch(
     };
 
     let conn = acquire_db(&state);
+    // The whole batch is one transaction (KAN-50): all birds move, or none do.
+    // Both writes previously swallowed their errors, so a failed audit INSERT
+    // left the bird off Active with no processing record -- the reason, notes
+    // and date lost, and the caller still told the cull succeeded. Neither
+    // write is best-effort any more; any failure returns 500 and rolls the
+    // whole batch back.
+    let tx = match conn.unchecked_transaction() {
+        Ok(t) => t,
+        Err(e) => return db_error(e),
+    };
     let mut count = 0i64;
     for bird_id in &body.bird_ids {
-        let rows = conn
-            .execute(
-                "UPDATE birds SET status = ?1 WHERE id = ?2 AND status = 'Active'",
-                params![status, bird_id],
-            )
-            .unwrap_or(0);
+        let rows = match tx.execute(
+            "UPDATE birds SET status = ?1 WHERE id = ?2 AND status = 'Active'",
+            params![status, bird_id],
+        ) {
+            Ok(n) => n,
+            Err(e) => return db_error(e),
+        };
         count += rows as i64;
 
-        // Record an audit trail so the cull reason/notes/date aren't lost.
-        // Best-effort: if this insert fails we still report the status update
-        // as successful (the bird is correctly off Active).
-        let _ = conn.execute(
+        // Audit trail so the cull reason/notes/date aren't lost.
+        if let Err(e) = tx.execute(
             "INSERT INTO processing_records (bird_id, reason, scheduled_date, processed_date, status, notes)
              VALUES (?1, ?2, ?3, ?3, 'Completed', ?4)",
             params![
@@ -185,7 +194,12 @@ pub(crate) async fn cull_batch(
                 body.processed_date,
                 body.notes,
             ],
-        );
+        ) {
+            return db_error(e);
+        }
+    }
+    if let Err(e) = tx.commit() {
+        return db_error(e);
     }
     Json(serde_json::json!({"updated": count})).into_response()
 }

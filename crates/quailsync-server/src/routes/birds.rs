@@ -44,10 +44,20 @@ pub(crate) async fn create_bird(
     // doesn't trip the UNIQUE(nfc_tag_id) constraint and surface as a 500.
     // The cleared bird's tag goes to NULL — they'll get a fresh tag the
     // next time someone bands them.
+    // One transaction for the whole create. It must open *before* the tag clear
+    // below, not merely before the lineage write: on a bare connection that
+    // UPDATE autocommits, so an INSERT failure afterwards left an existing bird
+    // stripped of its NFC tag with no new bird to take it (KAN-50 partial state
+    // b). Wrapping from here also covers the lineage and profile writes, so a
+    // failure can no longer leave a bird row with zero lineages (state a).
+    let tx = match conn.unchecked_transaction() {
+        Ok(t) => t,
+        Err(e) => return db_error(e),
+    };
     if let Some(ref tag) = body.nfc_tag_id {
-        clear_nfc_tag_from_others(&conn, tag, None);
+        clear_nfc_tag_from_others(&tx, tag, None);
     }
-    if let Err(e) = conn.execute(
+    if let Err(e) = tx.execute(
         "INSERT INTO birds (band_color, sex, hatch_date, mother_id, father_id, generation, status, notes, nfc_tag_id, chick_group_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
@@ -62,8 +72,8 @@ pub(crate) async fn create_bird(
     ) {
         return db_error(e);
     }
-    let id = conn.last_insert_rowid();
-    if let Err(e) = replace_bird_lineages(&conn, id, &body.lineage_ids) {
+    let id = tx.last_insert_rowid();
+    if let Err(e) = replace_bird_lineages(&tx, id, &body.lineage_ids) {
         return db_error(e);
     }
     // Phase 3: seed the probabilistic genetic profile. A bird banded out of a
@@ -72,7 +82,10 @@ pub(crate) async fn create_bird(
     let clutch_id = body
         .chick_group_id
         .and_then(|gid| crate::genetics::clutch_id_for_group(&conn, gid));
-    crate::genetics::populate_bird_profile(&conn, id, clutch_id, &body.lineage_ids);
+    crate::genetics::populate_bird_profile(&tx, id, clutch_id, &body.lineage_ids);
+    if let Err(e) = tx.commit() {
+        return db_error(e);
+    }
 
     let mut bird = Bird {
         id,
