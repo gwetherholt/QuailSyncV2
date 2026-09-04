@@ -1316,7 +1316,7 @@ mod lineage_tests {
     }
 
     #[tokio::test]
-    async fn put_lineages_replaces_set_atomically() {
+    async fn put_lineages_replaces_whole_set() {
         let base = spawn_test_server().await;
         let client = reqwest::Client::new();
         let (a, b) = seed_two_lineages(&base, &client).await;
@@ -1364,6 +1364,54 @@ mod lineage_tests {
         let updated: ChickGroup = resp.json().await.unwrap();
         assert_eq!(updated.lineages.len(), 1);
         assert_eq!(updated.lineages[0].id, b.id);
+    }
+
+    /// KAN-8. The replace helper clears the set before re-inserting, so a
+    /// failure part-way through the re-INSERT used to leave the group with a
+    /// truncated -- here, empty -- lineage set, because each statement
+    /// autocommitted on a bare connection.
+    ///
+    /// Forcing mechanism: `chick_group_lineages.lineage_id REFERENCES
+    /// lineages(id)` with `PRAGMA foreign_keys = ON`, so a nonexistent id fails
+    /// the INSERT after the DELETE has already run.
+    #[tokio::test]
+    async fn put_chick_group_lineages_rolls_back_on_bad_id() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let (a, b) = seed_two_lineages(&base, &client).await;
+        let group_id = seed_chick_group(&base, &client, vec![a.id, b.id]).await;
+
+        // Second id does not exist -> the INSERT fails after the DELETE.
+        let resp = client
+            .put(format!("{base}/api/chick-groups/{group_id}/lineages"))
+            .json(&ReplaceLineagesRequest {
+                lineage_ids: vec![a.id, 999_999],
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            500,
+            "a bad lineage id should fail the request"
+        );
+
+        // The original set must survive intact: not truncated to [a], and above
+        // all not emptied.
+        let after: ChickGroup = reqwest::get(format!("{base}/api/chick-groups/{group_id}"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let mut ids: Vec<i64> = after.lineages.iter().map(|l| l.id).collect();
+        ids.sort_unstable();
+        let mut expected = vec![a.id, b.id];
+        expected.sort_unstable();
+        assert_eq!(
+            ids, expected,
+            "lineage set should be unchanged after a failed replace"
+        );
     }
 
     #[tokio::test]
