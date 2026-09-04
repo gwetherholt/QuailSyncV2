@@ -632,6 +632,8 @@
   .qr-status-badge{font-size:.7rem;font-weight:600;padding:3px 10px;border-radius:10px;display:inline-block;margin-top:.3rem}
   .qr-status-badge.detected{background:var(--safe);color:#fff}
   .qr-status-badge.none{background:#ccc;color:#666}
+  .qr-status-badge.offline{background:var(--danger);color:#fff}
+  .qr-status-badge.checking{background:#eee;color:#999;font-style:italic}
   .camera-feed:-webkit-full-screen{background:#000;display:flex;align-items:center;justify-content:center}
   .camera-feed:fullscreen{background:#000;display:flex;align-items:center;justify-content:center}
   .camera-feed:-webkit-full-screen img{max-width:100vw;max-height:100vh;width:auto;height:auto}
@@ -3733,10 +3735,9 @@
         var snapUrl = streamUrl.replace(/\/stream\/?$/, '/snapshot');
         html+='<div class="camera-card" data-brooder-cam="'+b.id+'">';
         html+='<div class="camera-card-header"><h4>'+escapeHtml(b.name)+' Camera</h4><div style="display:flex;align-items:center;gap:.4rem"><span class="camera-status-badge active" id="cam-status-'+b.id+'">Live</span><button class="camera-settings-btn" onclick="Page.Cameras.editUrl('+b.id+')" title="Camera settings">&#x2699;</button></div></div>';
-        var qrUrl = streamUrl.replace(/\/stream\/?$/, '/qr-status');
         html+='<div class="camera-feed" id="cam-feed-'+b.id+'"><img src="'+escapeHtml(streamUrl)+'" alt="'+escapeHtml(b.name)+' feed" style="width:100%;max-height:400px;object-fit:contain;min-height:200px"></div>';
         html+='<div class="camera-actions"><button onclick="window.open(\''+escapeHtml(snapUrl)+'\',\'_blank\')">&#x1F4F8; Snapshot</button><button onclick="Page.Cameras.fullscreen(\'cam-feed-'+b.id+'\')">&#x26F6; Full Screen</button></div>';
-        html+='<div id="qr-badge-'+b.id+'" style="margin-top:.3rem"><span class="qr-status-badge none">No QR</span></div>';
+        html+='<div id="qr-badge-'+b.id+'" style="margin-top:.3rem"><span class="qr-status-badge checking">Checking&hellip;</span></div>';
         // Housing-type-aware headcount (eggs / chicks / birds), matching the
         // Dashboard page so `_pollHeadcount` reads consistent data-attrs.
         var camHousing = (b.housing_type || 'brooder').toLowerCase();
@@ -3756,8 +3757,7 @@
         html+='<div class="camera-feed" id="'+camFeedId+'"><img src="'+escapeHtml(cam.feed_url)+'" alt="'+escapeHtml(cam.name)+'" style="width:100%;max-height:400px;object-fit:contain;min-height:200px"></div>';
         var camSnapUrl = cam.feed_url.replace(/\/stream\/?$/, '/snapshot');
         html+='<div class="camera-actions"><button onclick="window.open(\''+escapeHtml(camSnapUrl)+'\',\'_blank\')">&#x1F4F8; Snapshot</button><button onclick="Page.Cameras.fullscreen(\''+camFeedId+'\')">&#x26F6; Full Screen</button></div>';
-        var camQrUrl = cam.feed_url.replace(/\/stream\/?$/, '/qr-status');
-        html+='<div id="qr-badge-s'+cam.id+'" style="margin-top:.3rem"><span class="qr-status-badge none">No QR</span></div>';
+        html+='<div id="qr-badge-s'+cam.id+'" style="margin-top:.3rem"><span class="qr-status-badge checking">Checking&hellip;</span></div>';
         html+='<div class="camera-meta"><span>'+escapeHtml(cam.location)+'</span><span>'+escapeHtml(cam.feed_url)+'</span></div>';
         html+='</div>';
       });
@@ -3774,6 +3774,34 @@
       }
     },
 
+    /* Fetch one camera's /qr-status and render its badge.
+
+       Deliberately NOT routed through API.*: this is cross-origin to the camera
+       itself, not to the Pi, so those helpers' same-origin JSON assumptions do
+       not hold.
+
+       Three outcomes, and they must look different (KAN-43). "camera answered,
+       sees no QR" and "camera could not be reached" both rendered "No QR"
+       before, so an offline camera was indistinguishable from a working one
+       with nothing in frame. A .catch() was already here; what was missing was
+       the r.ok check, a distinct state, and any logging at all. */
+    _renderQrBadge: function(qrUrl, badgeEl){
+      return fetch(qrUrl, {mode:'cors'}).then(function(r){
+        if(!r.ok){ throw new Error('HTTP '+r.status); }
+        return r.json();
+      }).then(function(d){
+        if(d.brooder_id || d.last_raw){
+          var text = d.last_raw || ('Brooder '+d.brooder_id);
+          badgeEl.innerHTML = '<span class="qr-status-badge detected">QR: '+escapeHtml(text)+'</span>';
+        } else {
+          badgeEl.innerHTML = '<span class="qr-status-badge none">No QR</span>';
+        }
+      }).catch(function(e){
+        console.error('QR status fetch failed:', qrUrl, e && e.message ? e.message : e);
+        badgeEl.innerHTML = '<span class="qr-status-badge offline">Camera offline</span>';
+      });
+    },
+
     // Poll /qr-status from each camera's base URL every 5 seconds
     _qrPollTimer: null,
     _pollQrStatus: function(){
@@ -3784,16 +3812,7 @@
         var qrUrl = b.camera_url.replace(/\/stream\/?$/, '/qr-status');
         var badgeEl = document.getElementById('qr-badge-'+b.id);
         if(!badgeEl) return;
-        fetch(qrUrl, {mode:'cors'}).then(function(r){return r.json()}).then(function(d){
-          if(d.brooder_id || d.last_raw){
-            var text = d.last_raw || ('Brooder '+d.brooder_id);
-            badgeEl.innerHTML = '<span class="qr-status-badge detected">QR: '+escapeHtml(text)+'</span>';
-          } else {
-            badgeEl.innerHTML = '<span class="qr-status-badge none">No QR</span>';
-          }
-        }).catch(function(){
-          badgeEl.innerHTML = '<span class="qr-status-badge none">No QR</span>';
-        });
+        self._renderQrBadge(qrUrl, badgeEl);
       });
       // Standalone cameras
       self._cameras.forEach(function(cam){
@@ -3801,16 +3820,7 @@
         var qrUrl = cam.feed_url.replace(/\/stream\/?$/, '/qr-status');
         var badgeEl = document.getElementById('qr-badge-s'+cam.id);
         if(!badgeEl) return;
-        fetch(qrUrl, {mode:'cors'}).then(function(r){return r.json()}).then(function(d){
-          if(d.brooder_id || d.last_raw){
-            var text = d.last_raw || ('Brooder '+d.brooder_id);
-            badgeEl.innerHTML = '<span class="qr-status-badge detected">QR: '+escapeHtml(text)+'</span>';
-          } else {
-            badgeEl.innerHTML = '<span class="qr-status-badge none">No QR</span>';
-          }
-        }).catch(function(){
-          badgeEl.innerHTML = '<span class="qr-status-badge none">No QR</span>';
-        });
+        self._renderQrBadge(qrUrl, badgeEl);
       });
     },
 

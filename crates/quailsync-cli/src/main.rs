@@ -1951,8 +1951,11 @@ async fn cmd_chick_group_mortality(
     reason: String,
 ) -> anyhow::Result<()> {
     let body = MortalityRequest { count, reason };
+    // POST, not PUT: the route is registered under post() (lib.rs:430-431), so
+    // a PUT here got a 405 -- and a 405 has an empty body, so the CLI printed
+    // "mortality log failed:" with no explanation at all (KAN-42).
     let resp = reqwest::Client::new()
-        .put(format!("{base}/api/chick-groups/{id}/mortality"))
+        .post(format!("{base}/api/chick-groups/{id}/mortality"))
         .json(&body)
         .send()
         .await?;
