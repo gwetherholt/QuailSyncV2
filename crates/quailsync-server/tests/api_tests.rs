@@ -1366,6 +1366,143 @@ mod lineage_tests {
         assert_eq!(updated.lineages[0].id, b.id);
     }
 
+    /// KAN-44. Completing a processing record now also moves the bird out of the
+    /// active flock, in the same transaction. Two things to pin:
+    ///
+    /// 1. The happy path really does write both.
+    /// 2. An invalid `method` is refused *before* anything is written, so the
+    ///    record is not left Completed with the bird still Active -- the exact
+    ///    split the dashboard used to hide behind its "processing completed"
+    ///    toast.
+    #[tokio::test]
+    async fn completing_processing_culls_the_bird_atomically() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let lineage = seed_lineage(&base, &client, "L").await;
+        let bird = seed_bird(&base, &client, vec![lineage], Sex::Male).await;
+
+        let rec: serde_json::Value = client
+            .post(format!("{base}/api/processing"))
+            .json(&serde_json::json!({
+                "bird_id": bird, "reason": "ExcessMale",
+                "scheduled_date": "2026-01-01", "notes": null,
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let rec_id = rec["id"].as_i64().unwrap();
+
+        // --- an invalid method must change nothing -------------------------
+        let resp = client
+            .put(format!("{base}/api/processing/{rec_id}"))
+            .json(&serde_json::json!({
+                "processed_date": "2026-01-02", "final_weight_grams": null,
+                "status": "Completed", "notes": null, "method": "Vaporised",
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400, "an unknown method should be refused");
+
+        let birds: Vec<Bird> = reqwest::get(format!("{base}/api/birds"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            birds.iter().find(|b| b.id == bird).unwrap().status,
+            BirdStatus::Active,
+            "a refused completion must not cull the bird"
+        );
+        let recs: Vec<serde_json::Value> = reqwest::get(format!("{base}/api/processing"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            recs[0]["status"].as_str(),
+            Some("Scheduled"),
+            "a refused completion must not complete the record either"
+        );
+
+        // --- the happy path writes both ------------------------------------
+        let resp = client
+            .put(format!("{base}/api/processing/{rec_id}"))
+            .json(&serde_json::json!({
+                "processed_date": "2026-01-02", "final_weight_grams": null,
+                "status": "Completed", "notes": null, "method": "Butchered",
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let birds: Vec<Bird> = reqwest::get(format!("{base}/api/birds"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            birds.iter().find(|b| b.id == bird).unwrap().status,
+            BirdStatus::Culled,
+            "Butchered maps to Culled, in the same request"
+        );
+    }
+
+    /// KAN-44. `method` is optional and defaults to Culled, so the pre-KAN-44
+    /// body (no `method` at all) keeps working unchanged.
+    #[tokio::test]
+    async fn completing_processing_without_method_defaults_to_culled() {
+        let base = spawn_test_server().await;
+        let client = reqwest::Client::new();
+        let lineage = seed_lineage(&base, &client, "L").await;
+        let bird = seed_bird(&base, &client, vec![lineage], Sex::Male).await;
+
+        let rec: serde_json::Value = client
+            .post(format!("{base}/api/processing"))
+            .json(&serde_json::json!({
+                "bird_id": bird, "reason": "Age",
+                "scheduled_date": "2026-01-01", "notes": null,
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        let resp = client
+            .put(format!(
+                "{base}/api/processing/{}",
+                rec["id"].as_i64().unwrap()
+            ))
+            .json(&serde_json::json!({
+                "processed_date": "2026-01-02", "final_weight_grams": null,
+                "status": "Completed", "notes": null,
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let birds: Vec<Bird> = reqwest::get(format!("{base}/api/birds"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            birds.iter().find(|b| b.id == bird).unwrap().status,
+            BirdStatus::Culled
+        );
+    }
+
     /// KAN-50, `cull_batch`. Two writes per bird: the status UPDATE, then the
     /// `processing_records` audit INSERT. Both used to swallow their errors, so
     /// a failed INSERT left the bird off Active with no record of why -- and the

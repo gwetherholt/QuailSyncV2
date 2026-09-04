@@ -503,6 +503,21 @@ pub struct UpdateProcessingRecord {
     pub final_weight_grams: Option<f64>,
     pub status: Option<ProcessingStatus>,
     pub notes: Option<String>,
+    /// What happened to the bird, when `status` is set to `Completed`.
+    ///
+    /// Completing a processing record means the bird was processed, so the
+    /// handler also moves the bird out of the active flock — record and bird
+    /// status move together in one transaction (KAN-44). This field says which
+    /// way: `Butchered` and `Culled` both map to `BirdStatus::Culled`,
+    /// `Deceased` and `Sold` to themselves. Same vocabulary as the `method`
+    /// field on `POST /api/cull-batch`.
+    ///
+    /// Omitted defaults to `Culled`, which is what every caller did by hand
+    /// before the two writes were merged. Ignored unless `status` is
+    /// `Completed`. The record itself has no `method` column — the caller
+    /// states the outcome at completion time.
+    #[serde(default)]
+    pub method: Option<String>,
 }
 
 // =========================================================================

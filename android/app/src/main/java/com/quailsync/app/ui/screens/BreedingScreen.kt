@@ -76,7 +76,6 @@ import com.quailsync.app.data.AppSettings
 import com.quailsync.app.data.Bird
 import com.quailsync.app.data.BreedingGroupDto
 import com.quailsync.app.data.CreateBreedingGroupRequest
-import com.quailsync.app.data.CullBatchRequest
 import com.quailsync.app.data.FlockDiversity
 import com.quailsync.app.data.InbreedingCheckResult
 import com.quailsync.app.data.PairingSuggestion
@@ -149,12 +148,6 @@ class BreedingViewModel(application: Application) : AndroidViewModel(application
             _avoidThreshold.value = try { fetchAvoidThreshold(api) } catch (_: Exception) { 0.35 }
             _isLoading.value = false
         }
-    }
-
-    suspend fun cullBatch(birdIds: List<Int>, reason: String, method: String, notes: String?, date: String): Int {
-        val resp = api.cullBatch(CullBatchRequest(birdIds, reason, method, notes, date))
-        loadAll()
-        return resp.updated
     }
 
     suspend fun createGroup(name: String, maleIds: List<Int>, femaleIds: List<Int>, notes: String?): BreedingGroupDto {

@@ -37,6 +37,51 @@ pub(crate) async fn create_processing(
         .into_response()
 }
 
+/// Map a cull *method* to the persistent `birds.status` it implies.
+///
+/// "Butchered" is a UI affordance -- the bird was processed for meat -- but it
+/// maps to the same `BirdStatus::Culled`, since the bird is no longer in the
+/// active flock. Keeping the synonym here lets the Android cull dialog default
+/// to "Butchered" without tripping validation.
+///
+/// Shared by `POST /api/cull-batch` and by `PUT /api/processing/{id}` when it
+/// completes a record (KAN-44), so the two paths cannot drift apart.
+fn bird_status_for_method(method: &str) -> Option<&'static str> {
+    match method {
+        "Butchered" | "Culled" => Some("Culled"),
+        "Deceased" => Some("Deceased"),
+        "Sold" => Some("Sold"),
+        _ => None,
+    }
+}
+
+fn invalid_method_response(method: &str) -> axum::response::Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({
+            "error": "invalid_status",
+            "message": format!(
+                "Invalid method '{method}'. Must be: Butchered, Culled, Deceased, or Sold"
+            ),
+        })),
+    )
+        .into_response()
+}
+
+/// `PUT /api/processing/{id}` — update a processing record.
+///
+/// **Completing a record also moves the bird out of the active flock** (KAN-44).
+/// A completed processing record means the bird was processed, so the record
+/// and `birds.status` are written together in one transaction. Which status is
+/// taken from the request's `method` field (`Butchered`/`Culled`/`Deceased`/
+/// `Sold`, defaulting to `Culled`); the record itself has no `method` column, so
+/// the caller states the outcome at completion time.
+///
+/// Before this, callers issued a second `PUT /api/birds/{id}` themselves, and
+/// both the dashboard and the CLI discarded its result — so a failed cull hid
+/// behind an accurate "processing completed" message while the bird stayed
+/// Active. There is no longer a window in which one can succeed without the
+/// other.
 pub(crate) async fn update_processing(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -55,8 +100,25 @@ pub(crate) async fn update_processing(
         return (StatusCode::NOT_FOUND, Json(None::<ProcessingRecord>)).into_response();
     }
 
+    // Reject a bad method before opening the transaction, so an invalid request
+    // is a clean 400 rather than a rolled-back write.
+    let bird_status = if matches!(body.status, Some(ProcessingStatus::Completed)) {
+        let method = body.method.as_deref().unwrap_or("Culled");
+        match bird_status_for_method(method) {
+            Some(st) => Some(st),
+            None => return invalid_method_response(method),
+        }
+    } else {
+        None
+    };
+
+    let tx = match conn.unchecked_transaction() {
+        Ok(t) => t,
+        Err(e) => return db_error(e),
+    };
+
     if let Some(ref d) = body.processed_date {
-        if let Err(e) = conn.execute(
+        if let Err(e) = tx.execute(
             "UPDATE processing_records SET processed_date = ?1 WHERE id = ?2",
             params![d.to_string(), id],
         ) {
@@ -64,7 +126,7 @@ pub(crate) async fn update_processing(
         }
     }
     if let Some(w) = body.final_weight_grams {
-        if let Err(e) = conn.execute(
+        if let Err(e) = tx.execute(
             "UPDATE processing_records SET final_weight_grams = ?1 WHERE id = ?2",
             params![w, id],
         ) {
@@ -72,7 +134,7 @@ pub(crate) async fn update_processing(
         }
     }
     if let Some(ref s) = body.status {
-        if let Err(e) = conn.execute(
+        if let Err(e) = tx.execute(
             "UPDATE processing_records SET status = ?1 WHERE id = ?2",
             params![processing_status_to_str(s), id],
         ) {
@@ -80,7 +142,7 @@ pub(crate) async fn update_processing(
         }
     }
     if let Some(ref n) = body.notes {
-        if let Err(e) = conn.execute(
+        if let Err(e) = tx.execute(
             "UPDATE processing_records SET notes = ?1 WHERE id = ?2",
             params![n, id],
         ) {
@@ -88,6 +150,20 @@ pub(crate) async fn update_processing(
         }
     }
 
+    // Same transaction: completing the record moves the bird too.
+    if let Some(st) = bird_status {
+        if let Err(e) = tx.execute(
+            "UPDATE birds SET status = ?1 WHERE id = (SELECT bird_id FROM processing_records WHERE id = ?2)",
+            params![st, id],
+        ) {
+            return db_error(e);
+        }
+    }
+    if let Err(e) = tx.commit() {
+        return db_error(e);
+    }
+
+    // Read back after commit, as the other updaters do.
     match conn.query_row(
         "SELECT id, bird_id, reason, scheduled_date, processed_date, final_weight_grams, status, notes FROM processing_records WHERE id = ?1",
         params![id], row_to_processing_record,
@@ -140,26 +216,9 @@ pub(crate) async fn cull_batch(
     State(state): State<AppState>,
     Json(body): Json<CullBatchRequest>,
 ) -> impl IntoResponse {
-    // "Butchered" is a UI affordance — the bird was processed for meat — but
-    // it maps to the same persistent BirdStatus::Culled, since the bird is no
-    // longer in the active flock. Keeping the synonym here lets the Android
-    // cull dialog default to "Butchered" without tripping the validation.
-    let status = match body.method.as_str() {
-        "Butchered" | "Culled" => "Culled",
-        "Deceased" => "Deceased",
-        "Sold" => "Sold",
-        other => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": "invalid_status",
-                    "message": format!(
-                        "Invalid method '{other}'. Must be: Butchered, Culled, Deceased, or Sold"
-                    ),
-                })),
-            )
-                .into_response();
-        }
+    let status = match bird_status_for_method(&body.method) {
+        Some(s) => s,
+        None => return invalid_method_response(&body.method),
     };
 
     let conn = acquire_db(&state);

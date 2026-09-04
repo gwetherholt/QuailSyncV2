@@ -3664,16 +3664,21 @@
 
     markCompleted: async function(procId, birdId){
       var today = new Date().toISOString().split('T')[0];
+      // One request, one outcome (KAN-44). The server completes the record and
+      // moves the bird out of the active flock in the same transaction, so
+      // there is no longer a case where the record completes and the cull
+      // silently doesn't. This used to be two PUTs with the second's result
+      // discarded, which meant a failed cull hid behind an accurate
+      // "processing completed" toast.
       var result = await API.put('/api/processing/'+procId, {
         status: 'Completed',
-        processed_date: today
+        processed_date: today,
+        method: 'Culled'
       });
       if(result){
-        toast('Bird #'+birdId+' processing completed');
-        // Also mark bird as Culled
-        await API.put('/api/birds/'+birdId, {status: 'Culled'});
+        toast('Bird #'+birdId+' processed and marked Culled');
       } else {
-        toast('Failed to complete','error');
+        toast('Could not complete Bird #'+birdId+' — nothing was changed','error');
       }
       this._load();
     }

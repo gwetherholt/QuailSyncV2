@@ -1298,11 +1298,16 @@ async fn cmd_processing_complete(
     notes: Option<String>,
 ) -> anyhow::Result<()> {
     let today = Local::now().date_naive();
+    // KAN-44: completing the record now also moves the bird out of the active
+    // flock, server-side and in the same transaction. The CLI used to fire a
+    // second PUT /api/birds/{id} afterwards and discard its result, so a failed
+    // cull still printed "bird #N marked Culled".
     let body = UpdateProcessingRecord {
         processed_date: Some(today),
         final_weight_grams: weight,
         status: Some(ProcessingStatus::Completed),
         notes,
+        method: None, // defaults to Culled, matching the previous behaviour
     };
     let resp = reqwest::Client::new()
         .put(format!("{base}/api/processing/{id}"))
@@ -1315,21 +1320,6 @@ async fn cmd_processing_complete(
     }
 
     let rec: ProcessingRecord = resp.json().await?;
-
-    // Also mark the bird as Culled
-    let _ = reqwest::Client::new()
-        .put(format!("{base}/api/birds/{}", rec.bird_id))
-        .json(&quailsync_common::UpdateBird {
-            status: Some(BirdStatus::Culled),
-            notes: None,
-            nfc_tag_id: None,
-            band_color: None,
-            sex: None,
-            hatch_date: None,
-            housing_id: None,
-        })
-        .send()
-        .await;
 
     println!(
         "{} processing #{} — bird #{} marked Culled{}",
